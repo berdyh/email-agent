@@ -63,12 +63,15 @@ packages/
 ### Imports & Modules
 - Web resolves `@email-agent/core/*` subpaths via tsconfig `paths` to source files
 - CLI imports from `@email-agent/core` barrel export only (no subpath imports) due to rootDir constraint
+- `actions/built-in/index.ts` is a static barrel for webpack — new built-in actions must be added here too
 
 ### Database
 - LanceDB `createEmptyTable()` requires Apache Arrow `Schema`/`Field` objects, NOT plain JS objects
 - DB record interfaces need `[key: string]: unknown` index signatures for `table.add()`
 
 ### Web (Next.js)
+- `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`
+- Dynamic filesystem patterns (`readdir`, `import.meta.url` dirs, dynamic `import()`) in core don't work in webpack — use static imports in web routes (e.g. `ActionRegistry.loadStatic()`)
 - `packages/web/package-lock.json` is a **symlink** to `../../package-lock.json` — do NOT delete it. Next.js uses it to detect npm as the package manager; without it, it falls back to globally-installed pnpm and fails with `ENOWORKSPACES`
 - `packages/web/next.config.ts` has `outputFileTracingRoot` set to monorepo root — prevents Next.js from walking up to stray lockfiles in parent directories
 - `fetch().json()` needs explicit return type annotations with strict TS + TanStack Query generics
