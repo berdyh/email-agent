@@ -2,6 +2,8 @@
 
 Local AI-powered Gmail analysis tool. Monorepo with Turbo.
 
+> **Worktree:** This directory (`main/`) is a git worktree. The bare repo is at `../.bare/`. See global CLAUDE.md for git worktree SOPs.
+
 ## Commands
 
 ```bash
@@ -9,9 +11,19 @@ npm install              # Install all dependencies
 npm run build            # Build all packages (core must build first)
 npm run dev              # Start all dev servers
 npm run start            # Start web UI on port 3847
+npm run setup            # Interactive setup wizard (gcloud auth + DB init)
 npx tsc -p packages/core/tsconfig.json --noEmit   # Type-check core
 npx tsc -p packages/web/tsconfig.json --noEmit    # Type-check web
 npx tsc -p packages/cli/tsconfig.json --noEmit    # Type-check CLI
+```
+
+### CLI
+
+```bash
+npx gmail-reader fetch              # Fetch unread emails → LanceDB
+npx gmail-reader run-action <id>    # Run an action (priority, subscription, junk)
+npx gmail-reader list-actions       # List available actions
+npx gmail-reader serve              # Start web UI
 ```
 
 ## Architecture
@@ -28,6 +40,16 @@ packages/
 - **Agent system**: Strategy pattern executors (Claude/Codex/Gemini CLI + DirectAPI) with AgentRouter
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
 - **DB**: LanceDB vector database with Apache Arrow schemas
+
+## Key Files
+
+- `packages/core/src/agents/router.ts` — Agent selection logic
+- `packages/core/src/actions/runner.ts` — Action execution pipeline
+- `packages/core/src/db/connection.ts` — LanceDB init with Arrow schemas
+- `packages/core/src/config/defaults.ts` — All default config values and prompt templates
+- `packages/web/src/app/api/` — All Next.js API routes
+- `packages/core/src/actions/built-in/` — Built-in actions
+- `~/.gmail-reader/actions/` — User-created actions (auto-discovered)
 
 ## Gotchas
 
