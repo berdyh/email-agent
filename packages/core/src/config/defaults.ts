@@ -40,6 +40,8 @@ export const defaultConfig: AppConfig = {
     theme: "system",
     sidebarCollapsed: false,
     panelWidths: [20, 35, 45],
+    fetchInterval: 0,
+    fetchScope: "unread",
   },
   dataDir: DATA_DIR,
 };
