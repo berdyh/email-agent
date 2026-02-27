@@ -1,16 +1,16 @@
 # Email Agent
 
-A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, Codex, Gemini) to summarize, prioritize, cluster, and act on your emails — all from your machine.
+A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, Codex, Gemini, OpenRouter) to summarize, prioritize, cluster, and act on your emails — all from your machine.
 
 ## Features
 
-- **Multi-agent support** — Routes tasks to Claude Code, OpenAI Codex, or Google Gemini CLI (with direct API fallback)
+- **Multi-agent support** — Routes tasks to Claude Code, OpenAI Codex, Google Gemini CLI, or OpenRouter (with direct API fallback)
 - **Email actions** — Extensible plugin system for custom email analysis (priority detection, spam scoring, subscription detection, and more)
 - **AI summaries** — On-demand email and thread summarization with citation mapping back to source text
 - **Semantic clustering** — Groups similar emails using vector embeddings and k-means clustering
 - **Subscription digests** — Aggregates newsletter and marketing emails into a single AI-generated digest
 - **Desktop & webhook notifications** — Alerts via system notifications, Slack, Discord, or custom webhooks
-- **Vector search** — Find semantically similar emails using LanceDB + OpenAI embeddings
+- **Vector search** — Find semantically similar emails using LanceDB + OpenAI or OpenRouter embeddings
 - **Gmail push notifications** — Real-time email updates via Google Cloud Pub/Sub
 - **Web UI** — Three-panel mail interface with dark mode, resizable panels, and AI features built in
 - **CLI** — Fetch emails, run actions, and start the web server from the terminal
@@ -23,7 +23,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
   - [Google Gemini CLI](https://github.com/google/gemini-cli) (`npx @google/gemini-cli`)
-- **OpenAI API key** — for email embeddings (or use `EMBEDDING_PROVIDER=local` for zero-vector fallback)
+- **API key for embeddings** — OpenAI or [OpenRouter](https://openrouter.ai) (or use `EMBEDDING_PROVIDER=local` for zero-vector fallback)
 
 ## Setup
 
@@ -52,9 +52,11 @@ cp .env.example .env
 | Variable | Required | Description |
 |---|---|---|
 | `GCP_PROJECT_ID` | Yes | Google Cloud project with Gmail API enabled |
-| `OPENAI_API_KEY` | For embeddings | Powers semantic search and clustering |
+| `OPENAI_API_KEY` | For OpenAI embeddings | Powers semantic search and clustering |
+| `OPENROUTER_API_KEY` | For OpenRouter | Embeddings (Qwen3) + LLM access via openrouter.ai |
+| `OPENROUTER_MODEL` | No | OpenRouter LLM model (default: `qwen/qwen3-8b`) |
 | `AGENT_MODE` | No | `all-agents` (default), `hybrid`, or `direct-api` |
-| `PREFERRED_AGENT` | No | `claude` (default), `codex`, or `gemini` |
+| `PREFERRED_AGENT` | No | `claude` (default), `codex`, `gemini`, or `openrouter` |
 | `ANTHROPIC_API_KEY` | For direct-api mode | When using direct API instead of CLI agents |
 | `SLACK_WEBHOOK_URL` | No | Slack notification webhook |
 | `DISCORD_WEBHOOK_URL` | No | Discord notification webhook |
@@ -114,8 +116,8 @@ The agent router tries your preferred CLI agent first, then falls back through o
 
 | Mode | Behavior |
 |---|---|
-| `all-agents` | Try preferred CLI → other CLIs → error |
-| `hybrid` | Try preferred CLI → other CLIs → direct API |
+| `all-agents` | Try preferred CLI → other CLIs → OpenRouter → error |
+| `hybrid` | Try preferred CLI → other CLIs → OpenRouter → direct API |
 | `direct-api` | OpenAI-compatible API only |
 
 ### Action Plugin System
@@ -152,7 +154,7 @@ See [SKILLS.md](SKILLS.md) for the full action creation guide with examples.
 | Runtime | Node.js 20+, TypeScript 5.8 |
 | Build | Turbo monorepo, ESM |
 | Database | LanceDB (embedded vector DB) |
-| Embeddings | OpenAI text-embedding-3-small (768d) |
+| Embeddings | OpenAI text-embedding-3-small or OpenRouter Qwen3 (768d) |
 | Gmail | googleapis + Google Cloud Pub/Sub |
 | Web | Next.js 15, React 19, Tailwind CSS v4 |
 | State | Zustand + TanStack Query |

@@ -5,11 +5,13 @@ import { ClaudeExecutor } from "./claude-executor.js";
 import { CodexExecutor } from "./codex-executor.js";
 import { GeminiExecutor } from "./gemini-executor.js";
 import { DirectApiExecutor } from "./direct-api-executor.js";
+import { OpenRouterExecutor } from "./openrouter-executor.js";
 
 const executors: Record<AgentId, AgentExecutor> = {
   claude: new ClaudeExecutor(),
   codex: new CodexExecutor(),
   gemini: new GeminiExecutor(),
+  openrouter: new OpenRouterExecutor(),
 };
 
 const directApi = new DirectApiExecutor();
@@ -37,7 +39,7 @@ export class AgentRouter {
     }
 
     // Try other agents in order
-    const fallbackOrder: AgentId[] = ["claude", "codex", "gemini"];
+    const fallbackOrder: AgentId[] = ["claude", "codex", "gemini", "openrouter"];
     for (const id of fallbackOrder) {
       if (id === preferredAgent) continue;
       const executor = executors[id];

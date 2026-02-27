@@ -11,10 +11,10 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 step=0
-total_steps=9
+total_steps=10
 
 progress() {
-  ((step++))
+  ((++step))
   echo -e "\n${BOLD}[${step}/${total_steps}]${RESET} $1"
 }
 
@@ -85,37 +85,66 @@ set_env() {
 }
 
 # ── Embedding provider ──
-echo ""
-echo -e "  ${BOLD}Embedding provider:${RESET}"
-echo -e "    1) ${CYAN}openai${RESET}  — OpenAI text-embedding-3-small (best quality)"
-echo -e "    2) ${CYAN}local${RESET}   — Zero-vector fallback (no API key needed, no semantic search)"
-echo ""
-read -rp "  Choose [1/2] (default: 1): " embed_choice
-embed_choice=${embed_choice:-1}
+while true; do
+  echo ""
+  echo -e "  ${BOLD}Embedding provider:${RESET}"
+  echo -e "    1) ${CYAN}openai${RESET}      — OpenAI text-embedding-3-small (best quality)"
+  echo -e "    2) ${CYAN}openrouter${RESET}  — OpenRouter (default: Qwen3 Embedding 8B)"
+  echo -e "    3) ${CYAN}local${RESET}       — Zero-vector fallback (no API key needed, no semantic search)"
+  echo ""
+  read -rp "  Choose [1/2/3] (default: 1): " embed_choice
+  embed_choice=${embed_choice:-1}
 
-if [ "$embed_choice" = "2" ]; then
-  EMBEDDING_PROVIDER="local"
-  ok "Embedding provider: local (zero-vector fallback)"
-else
-  EMBEDDING_PROVIDER="openai"
-  ok "Embedding provider: openai"
+  if [ "$embed_choice" = "3" ]; then
+    EMBEDDING_PROVIDER="local"
+    ok "Embedding provider: local (zero-vector fallback)"
+    break
 
-  # Prompt for OpenAI key if not already set
-  EXISTING_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" .env 2>/dev/null | sed 's/^OPENAI_API_KEY=//' || true)
-  if [ -n "$EXISTING_OPENAI_KEY" ]; then
-    ok "OPENAI_API_KEY already set in .env"
-  else
-    echo ""
-    read -rsp "  Enter your OpenAI API key (for embeddings): " openai_key
-    echo ""
-    if [ -n "$openai_key" ]; then
-      set_env "OPENAI_API_KEY" "$openai_key"
-      ok "OPENAI_API_KEY saved to .env"
+  elif [ "$embed_choice" = "2" ]; then
+    EMBEDDING_PROVIDER="openrouter"
+    EMBEDDING_MODEL="qwen/qwen3-embedding-8b"
+    ok "Embedding provider: openrouter (${EMBEDDING_MODEL})"
+
+    # Prompt for OpenRouter key if not already set
+    EXISTING_OR_KEY=$(grep "^OPENROUTER_API_KEY=" .env 2>/dev/null | sed 's/^OPENROUTER_API_KEY=//' || true)
+    if [ -n "$EXISTING_OR_KEY" ]; then
+      ok "OPENROUTER_API_KEY already set in .env"
+      break
     else
-      warn "No key entered — set OPENAI_API_KEY in .env before using embeddings"
+      echo ""
+      read -rp "  Enter your OpenRouter API key: " openrouter_key
+      if [ -n "$openrouter_key" ]; then
+        set_env "OPENROUTER_API_KEY" "$openrouter_key"
+        ok "OPENROUTER_API_KEY saved to .env"
+        break
+      else
+        warn "No key entered — returning to provider selection"
+      fi
+    fi
+
+  else
+    EMBEDDING_PROVIDER="openai"
+    EMBEDDING_MODEL="text-embedding-3-small"
+    ok "Embedding provider: openai"
+
+    # Prompt for OpenAI key if not already set
+    EXISTING_OPENAI_KEY=$(grep "^OPENAI_API_KEY=" .env 2>/dev/null | sed 's/^OPENAI_API_KEY=//' || true)
+    if [ -n "$EXISTING_OPENAI_KEY" ]; then
+      ok "OPENAI_API_KEY already set in .env"
+      break
+    else
+      echo ""
+      read -rp "  Enter your OpenAI API key (for embeddings): " openai_key
+      if [ -n "$openai_key" ]; then
+        set_env "OPENAI_API_KEY" "$openai_key"
+        ok "OPENAI_API_KEY saved to .env"
+        break
+      else
+        warn "No key entered — returning to provider selection"
+      fi
     fi
   fi
-fi
+done
 set_env "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"
 
 # ── Agent mode ──
@@ -199,7 +228,17 @@ progress "Building core package..."
 npx tsc -p packages/core/tsconfig.json 2>&1
 ok "Core package built (dist/ generated)"
 
-# ─── 6. Authenticate with Google Cloud ───────────────────────────────
+# ─── 6. Build CLI package + re-link bins ──────────────────────────────
+progress "Building CLI package..."
+
+npx tsc -p packages/cli/tsconfig.json 2>&1
+ok "CLI package built"
+
+# Re-link workspace bins so npx email-agent resolves
+npm install --no-audit --no-fund --ignore-scripts 2>&1 | tail -1
+ok "Workspace bins linked"
+
+# ─── 7. Authenticate with Google Cloud ────────────────────────────────
 progress "Google Cloud authentication..."
 
 SCOPES="https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/pubsub"
@@ -222,7 +261,7 @@ else
   fi
 fi
 
-# ─── 7. Configure GCP project ────────────────────────────────────────
+# ─── 8. Configure GCP project ────────────────────────────────────────
 progress "Google Cloud project..."
 
 SETTINGS_DIR="$HOME/.email-agent"
@@ -270,6 +309,11 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "projectId": "${GCP_PROJECT}",
     "pubsubTopic": "email-agent-notifications",
     "pubsubSubscription": "email-agent-sub"
+  },
+  "embedding": {
+    "provider": "${EMBEDDING_PROVIDER}",
+    "model": "${EMBEDDING_MODEL:-text-embedding-3-small}",
+    "dimensions": 768
   }
 }
 SETTINGS_EOF
@@ -278,7 +322,7 @@ SETTINGS_EOF
   fi
 fi
 
-# ─── 8. Gmail API check ─────────────────────────────────────────────
+# ─── 9. Gmail API check ─────────────────────────────────────────────
 progress "Gmail API..."
 
 if [ -n "${GCP_PROJECT:-}" ]; then
@@ -311,7 +355,7 @@ else
   warn "No project configured — skipping Gmail API check"
 fi
 
-# ─── 9. Initialize database ──────────────────────────────────────────
+# ─── 10. Initialize database ─────────────────────────────────────────
 progress "Initializing LanceDB database..."
 
 node -e "
@@ -334,19 +378,19 @@ AGENTS_FOUND=0
 echo -e "${BOLD}AI agents:${RESET}"
 if command -v claude &>/dev/null; then
   ok "Claude CLI"
-  ((AGENTS_FOUND++))
+  ((++AGENTS_FOUND))
 else
   echo -e "  ${DIM}○ Claude CLI — install: ${CYAN}npm install -g @anthropic-ai/claude-code${RESET}"
 fi
 if command -v codex &>/dev/null; then
   ok "Codex CLI"
-  ((AGENTS_FOUND++))
+  ((++AGENTS_FOUND))
 else
   echo -e "  ${DIM}○ Codex CLI  — install: ${CYAN}npm install -g @openai/codex${RESET}"
 fi
 if npx @google/gemini-cli --version &>/dev/null 2>&1; then
   ok "Gemini CLI"
-  ((AGENTS_FOUND++))
+  ((++AGENTS_FOUND))
 else
   echo -e "  ${DIM}○ Gemini CLI — install: ${CYAN}npm install -g @google/gemini-cli${RESET}"
 fi

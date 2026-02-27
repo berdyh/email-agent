@@ -1,6 +1,6 @@
-export type AgentId = "claude" | "codex" | "gemini";
+export type AgentId = "claude" | "codex" | "gemini" | "openrouter";
 export type AgentMode = "all-agents" | "hybrid" | "direct-api";
-export type EmbeddingProvider = "openai" | "local";
+export type EmbeddingProvider = "openai" | "openrouter" | "local";
 
 export interface GcpConfig {
   projectId: string;
