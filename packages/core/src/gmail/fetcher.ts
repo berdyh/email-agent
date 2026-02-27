@@ -62,14 +62,19 @@ function parseGmailMessage(msg: any): GmailMessage {
   };
 }
 
-export async function fetchUnreadEmails(
-  maxResults = 50,
+export interface FetchOptions {
+  scope: "unread" | "all";
+  maxResults?: number;
+}
+
+export async function fetchEmails(
+  options: FetchOptions,
 ): Promise<GmailMessage[]> {
   const gmail = await createGmailClient();
   const response = await gmail.users.messages.list({
     userId: "me",
-    q: "is:unread",
-    maxResults,
+    q: options.scope === "unread" ? "is:unread" : undefined,
+    maxResults: options.maxResults ?? 50,
   });
 
   const messageIds = response.data.messages ?? [];
@@ -87,6 +92,12 @@ export async function fetchUnreadEmails(
   );
 
   return messages;
+}
+
+export async function fetchUnreadEmails(
+  maxResults = 50,
+): Promise<GmailMessage[]> {
+  return fetchEmails({ scope: "unread", maxResults });
 }
 
 export async function fetchEmail(id: string): Promise<GmailMessage> {
