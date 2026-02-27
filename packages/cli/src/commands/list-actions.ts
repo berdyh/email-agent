@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { ActionRegistry } from "@gmail-reader/core";
+import { ActionRegistry } from "@email-agent/core";
 
 export function registerListActions(program: Command) {
   program
@@ -28,7 +28,7 @@ export function registerListActions(program: Command) {
 
       console.log(
         chalk.dim(
-          `Run an action: ${chalk.cyan("gmail-reader run-action <id>")}\n`,
+          `Run an action: ${chalk.cyan("email-agent run-action <id>")}\n`,
         ),
       );
     });

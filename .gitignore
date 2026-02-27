@@ -7,7 +7,7 @@ dist/
 
 # User-created actions
 packages/core/src/actions/user/
-actions/
+/actions/
 
 # Data directory
 data/

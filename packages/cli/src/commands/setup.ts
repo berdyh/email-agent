@@ -7,15 +7,15 @@ import {
   initDb,
   saveSettings,
   loadSettings,
-} from "@gmail-reader/core";
+} from "@email-agent/core";
 
 export function registerSetup(program: Command) {
   program
     .command("setup")
-    .description("Set up Gmail Reader (authenticate, configure project, initialize database)")
+    .description("Set up Email Agent (authenticate, configure project, initialize database)")
     .option("--project <id>", "Google Cloud project ID")
     .action(async (options: { project?: string }) => {
-      console.log(chalk.bold("\nGmail Reader Setup\n"));
+      console.log(chalk.bold("\nEmail Agent Setup\n"));
 
       // Step 1: Check gcloud
       const spinner = ora("Checking gcloud CLI...").start();
@@ -55,7 +55,7 @@ export function registerSetup(program: Command) {
       dbSpinner.succeed("Database initialized");
 
       console.log(chalk.bold.green("\nSetup complete!"));
-      console.log(`  Run ${chalk.cyan("gmail-reader fetch")} to fetch emails`);
-      console.log(`  Run ${chalk.cyan("gmail-reader serve")} to start the web UI\n`);
+      console.log(`  Run ${chalk.cyan("email-agent fetch")} to fetch emails`);
+      console.log(`  Run ${chalk.cyan("email-agent serve")} to start the web UI\n`);
     });
 }

@@ -11,8 +11,8 @@
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./src/*"],
-      "@gmail-reader/core/*": ["../core/src/*/index.ts"],
-      "@gmail-reader/core": ["../core/src/index.ts"]
+      "@email-agent/core/*": ["../core/src/*/index.ts"],
+      "@email-agent/core": ["../core/src/index.ts"]
     }
   },
   "include": ["src", "next-env.d.ts", ".next/types/**/*.ts"],

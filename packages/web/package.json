@@ -1,5 +1,5 @@
 {
-  "name": "@gmail-reader/web",
+  "name": "@email-agent/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@gmail-reader/core": "*",
+    "@email-agent/core": "*",
     "@tanstack/react-query": "^5.67.0",
     "dompurify": "^3.2.0",
     "lucide-react": "^0.475.0",

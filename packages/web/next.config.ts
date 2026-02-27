@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@gmail-reader/core"],
+  transpilePackages: ["@email-agent/core"],
   serverExternalPackages: [
     "@lancedb/lancedb",
     "apache-arrow",

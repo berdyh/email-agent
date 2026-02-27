@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getEmails } from "@gmail-reader/core/db";
+import { getEmails } from "@email-agent/core/db";
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;

@@ -58,7 +58,7 @@ export default function SettingsPage() {
             <div>
               <h1 className="text-2xl font-semibold">Settings</h1>
               <p className="text-sm text-muted-foreground">
-                Configure Gmail Reader preferences
+                Configure Email Agent preferences
               </p>
             </div>
             <Button className="gap-2" onClick={save} disabled={updateSettings.isPending}>
@@ -185,7 +185,7 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-muted-foreground">
-                    Add webhook URLs in your settings.json file at ~/.gmail-reader/settings.json
+                    Add webhook URLs in your settings.json file at ~/.email-agent/settings.json
                   </p>
                 </CardContent>
               </Card>

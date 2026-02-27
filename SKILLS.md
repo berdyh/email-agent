@@ -1,10 +1,10 @@
-# Gmail Reader — Action Creation Guide
+# Email Agent — Action Creation Guide
 
-This document teaches coding agents how to create new email actions for Gmail Reader.
+This document teaches coding agents how to create new email actions for Email Agent.
 
 ## Project Overview
 
-Gmail Reader is a monorepo with three packages:
+Email Agent is a monorepo with three packages:
 - `packages/core` — Business logic, Gmail API, LanceDB, agents, actions
 - `packages/web` — Next.js 15 UI
 - `packages/cli` — Command-line interface
@@ -24,7 +24,7 @@ interface EmailAction {
 
 ## Creating an Action
 
-1. Create a file: `~/.gmail-reader/actions/my-action.action.ts` (user actions)
+1. Create a file: `~/.email-agent/actions/my-action.action.ts` (user actions)
    Or: `packages/core/src/actions/built-in/my-action.action.ts` (built-in)
 2. Default-export an object implementing `EmailAction`
 3. The registry auto-discovers all `*.action.ts` files
@@ -32,7 +32,7 @@ interface EmailAction {
 ## Template
 
 ```typescript
-import type { EmailAction } from "@gmail-reader/core";
+import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
   id: "my-action",
@@ -60,7 +60,7 @@ export default action;
 ## Example 1: Sentiment Analysis
 
 ```typescript
-import type { EmailAction } from "@gmail-reader/core";
+import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
   id: "sentiment",
@@ -87,7 +87,7 @@ export default action;
 ## Example 2: Meeting Detection
 
 ```typescript
-import type { EmailAction } from "@gmail-reader/core";
+import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
   id: "meetings",
@@ -115,7 +115,7 @@ export default action;
 ## Example 3: Invoice/Receipt Detection
 
 ```typescript
-import type { EmailAction } from "@gmail-reader/core";
+import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
   id: "invoices",
@@ -145,8 +145,8 @@ export default action;
 
 **CLI:**
 ```bash
-gmail-reader list-actions          # See all available actions
-gmail-reader run-action sentiment  # Run an action by ID
+email-agent list-actions          # See all available actions
+email-agent run-action sentiment  # Run an action by ID
 ```
 
 **Web UI:**
@@ -164,5 +164,5 @@ Navigate to the Actions page and click "Run" on any action.
 
 - Keep prompts specific and structured — bullet points work well
 - Always include `emailId` in your output schema
-- Test with a small batch first (`gmail-reader run-action <id> --limit 5`)
+- Test with a small batch first (`email-agent run-action <id> --limit 5`)
 - Use `outputSchema` to document the expected JSON shape for other developers

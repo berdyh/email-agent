@@ -1,5 +1,5 @@
 {
-  "name": "gmail-reader",
+  "name": "email-agent",
   "private": true,
   "version": "0.1.0",
   "description": "Local AI-powered Gmail analysis tool",
@@ -10,8 +10,8 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "setup": "npm run -w @gmail-reader/cli setup",
-    "start": "npm run -w @gmail-reader/web dev"
+    "setup": "npm run -w @email-agent/cli setup",
+    "start": "npm run -w @email-agent/web dev"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

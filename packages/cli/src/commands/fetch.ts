@@ -7,7 +7,7 @@ import {
   generateEmbeddings,
   fetchUnreadEmails,
   type GmailMessage,
-} from "@gmail-reader/core";
+} from "@email-agent/core";
 
 export function registerFetch(program: Command) {
   program
@@ -54,7 +54,7 @@ export function registerFetch(program: Command) {
           `Stored ${emails.length} emails with embeddings`,
         );
         console.log(
-          chalk.green(`\nRun ${chalk.cyan("gmail-reader serve")} to view them.\n`),
+          chalk.green(`\nRun ${chalk.cyan("email-agent serve")} to view them.\n`),
         );
       } catch (err) {
         spinner.fail("Failed to fetch emails");

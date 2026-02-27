@@ -6,7 +6,7 @@ import {
   getEmails,
   ActionRegistry,
   ActionRunner,
-} from "@gmail-reader/core";
+} from "@email-agent/core";
 
 export function registerRunAction(program: Command) {
   program

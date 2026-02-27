@@ -1,6 +1,6 @@
-# Gmail Reader
+# Email Agent
 
-A local, AI-powered Gmail analysis tool that uses multiple LLM agents (Claude, Codex, Gemini) to summarize, prioritize, cluster, and act on your emails — all from your machine.
+A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, Codex, Gemini) to summarize, prioritize, cluster, and act on your emails — all from your machine.
 
 ## Features
 
@@ -28,15 +28,17 @@ A local, AI-powered Gmail analysis tool that uses multiple LLM agents (Claude, C
 ## Setup
 
 ```bash
-# Install dependencies
-npm install
+# One-command setup (installs deps, authenticates, initializes DB)
+./setup.sh
+```
 
-# Authenticate with Google Cloud (Gmail read-only + Pub/Sub)
+Or step by step:
+
+```bash
+npm install
 gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/pubsub
-
-# Interactive setup (initializes database, sets GCP project)
-npx gmail-reader setup --project <your-gcp-project-id>
+npx email-agent setup --project <your-gcp-project-id>
 ```
 
 ### Environment Variables
@@ -63,21 +65,21 @@ cp .env.example .env
 
 ```bash
 # Fetch unread emails and generate embeddings
-npx gmail-reader fetch
+npx email-agent fetch
 
 # Fetch with a custom limit
-npx gmail-reader fetch --limit 50
+npx email-agent fetch --limit 50
 
 # List available actions
-npx gmail-reader list-actions
+npx email-agent list-actions
 
 # Run an action on unread emails
-npx gmail-reader run-action priority
-npx gmail-reader run-action subscription
-npx gmail-reader run-action junk
+npx email-agent run-action priority
+npx email-agent run-action subscription
+npx email-agent run-action junk
 
 # Start the web UI
-npx gmail-reader serve
+npx email-agent serve
 ```
 
 ### Web UI
@@ -101,9 +103,9 @@ Then open [http://localhost:3847](http://localhost:3847).
 
 ```
 packages/
-  core/   @gmail-reader/core   — Gmail API, LanceDB, agents, actions, analysis, notifications
-  web/    @gmail-reader/web    — Next.js 15 App Router UI
-  cli/    @gmail-reader/cli    — Commander.js CLI
+  core/   @email-agent/core   — Gmail API, LanceDB, agents, actions, analysis, notifications
+  web/    @email-agent/web    — Next.js 15 App Router UI
+  cli/    @email-agent/cli    — Commander.js CLI
 ```
 
 ### Agent System
@@ -118,10 +120,10 @@ The agent router tries your preferred CLI agent first, then falls back through o
 
 ### Action Plugin System
 
-Create custom email actions by dropping `*.action.ts` files in `~/.gmail-reader/actions/`:
+Create custom email actions by dropping `*.action.ts` files in `~/.email-agent/actions/`:
 
 ```typescript
-import type { EmailAction } from "@gmail-reader/core";
+import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
   id: "my-action",

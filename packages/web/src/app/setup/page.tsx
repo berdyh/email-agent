@@ -26,7 +26,7 @@ export default function SetupPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-lg">
         <CardHeader>
-          <CardTitle>Gmail Reader Setup</CardTitle>
+          <CardTitle>Email Agent Setup</CardTitle>
           <CardDescription>
             Configure Google Cloud access for Gmail integration
           </CardDescription>
@@ -95,7 +95,7 @@ export default function SetupPage() {
                       method: "PUT",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        gcp: { projectId, pubsubTopic: "gmail-reader-notifications", pubsubSubscription: "gmail-reader-sub" },
+                        gcp: { projectId, pubsubTopic: "email-agent-notifications", pubsubSubscription: "email-agent-sub" },
                       }),
                     });
                     setStep("done");
@@ -113,7 +113,7 @@ export default function SetupPage() {
           {step === "done" && (
             <div className="space-y-3">
               <p className="text-sm text-green-600">
-                Setup complete! You can now start using Gmail Reader.
+                Setup complete! You can now start using Email Agent.
               </p>
               <Button onClick={() => { globalThis.location.href = "/mail"; }}>
                 Go to Inbox

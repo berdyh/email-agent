@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { getEmails } from "@gmail-reader/core/db";
-import { generateDigest } from "@gmail-reader/core/analysis";
+import { getEmails } from "@email-agent/core/db";
+import { generateDigest } from "@email-agent/core/analysis";
 
 export async function POST() {
   try {

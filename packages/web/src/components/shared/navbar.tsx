@@ -11,7 +11,7 @@ export function Navbar() {
     <header className="sticky top-0 z-50 flex h-14 items-center border-b bg-background/95 px-4 backdrop-blur">
       <div className="flex items-center gap-2">
         <Mail className="h-5 w-5" />
-        <span className="text-lg font-semibold">Gmail Reader</span>
+        <span className="text-lg font-semibold">Email Agent</span>
       </div>
       <div className="ml-auto flex items-center gap-2">
         <Button

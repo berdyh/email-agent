@@ -5,12 +5,12 @@ import chalk from "chalk";
 export function registerServe(program: Command) {
   program
     .command("serve")
-    .description("Start the Gmail Reader web UI")
+    .description("Start the Email Agent web UI")
     .option("-p, --port <port>", "Port to run on", "3847")
     .action((options: { port: string }) => {
-      console.log(chalk.bold(`\nStarting Gmail Reader on port ${options.port}...\n`));
+      console.log(chalk.bold(`\nStarting Email Agent on port ${options.port}...\n`));
 
-      const child = spawn("npm", ["run", "-w", "@gmail-reader/web", "dev"], {
+      const child = spawn("npm", ["run", "-w", "@email-agent/web", "dev"], {
         stdio: "inherit",
         env: { ...process.env, PORT: options.port },
         cwd: process.cwd(),

@@ -88,7 +88,7 @@ export function createPubSubListener(
   const settings = loadSettings(); // Will be awaited in the caller's context
 
   // Use sync path for subscription name based on defaults
-  const subscription = pubsub.subscription("gmail-reader-sub");
+  const subscription = pubsub.subscription("email-agent-sub");
 
   subscription.on("message", (message) => {
     const data = JSON.parse(message.data.toString());

@@ -1,10 +1,10 @@
 {
-  "name": "@gmail-reader/cli",
+  "name": "@email-agent/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "gmail-reader": "./dist/index.js"
+    "email-agent": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -12,7 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@gmail-reader/core": "*",
+    "@email-agent/core": "*",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
     "ora": "^8.2.0"

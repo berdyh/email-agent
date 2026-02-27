@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getEmailById } from "@gmail-reader/core/db";
+import { getEmailById } from "@email-agent/core/db";
 
 export async function GET(
   _request: NextRequest,

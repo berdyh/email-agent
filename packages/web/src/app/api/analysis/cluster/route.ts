@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clusterEmails } from "@gmail-reader/core/analysis";
+import { clusterEmails } from "@email-agent/core/analysis";
 
 export async function POST() {
   try {

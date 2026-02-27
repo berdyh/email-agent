@@ -9,7 +9,7 @@ import { registerServe } from "./commands/serve.js";
 const program = new Command();
 
 program
-  .name("gmail-reader")
+  .name("email-agent")
   .description("AI-powered Gmail analysis tool")
   .version("0.1.0");
 

@@ -1,5 +1,5 @@
 {
-  "name": "@gmail-reader/core",
+  "name": "@email-agent/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -2,9 +2,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AppConfig } from "./types.js";
 
-export const DATA_DIR = join(homedir(), ".gmail-reader", "data");
-export const SETTINGS_PATH = join(homedir(), ".gmail-reader", "settings.json");
-export const ACTIONS_DIR = join(homedir(), ".gmail-reader", "actions");
+export const DATA_DIR = join(homedir(), ".email-agent", "data");
+export const SETTINGS_PATH = join(homedir(), ".email-agent", "settings.json");
+export const ACTIONS_DIR = join(homedir(), ".email-agent", "actions");
 export const LANCEDB_DIR = join(DATA_DIR, "lancedb");
 
 export const defaultConfig: AppConfig = {
@@ -12,8 +12,8 @@ export const defaultConfig: AppConfig = {
   preferredAgent: "claude",
   gcp: {
     projectId: "",
-    pubsubTopic: "gmail-reader-notifications",
-    pubsubSubscription: "gmail-reader-sub",
+    pubsubTopic: "email-agent-notifications",
+    pubsubSubscription: "email-agent-sub",
   },
   notifications: {
     desktop: {

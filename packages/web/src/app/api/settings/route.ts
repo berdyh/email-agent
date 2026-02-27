@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { loadSettings, saveSettings } from "@gmail-reader/core/config";
-import type { AppConfig } from "@gmail-reader/core/config";
+import { loadSettings, saveSettings } from "@email-agent/core/config";
+import type { AppConfig } from "@email-agent/core/config";
 
 export async function GET() {
   try {

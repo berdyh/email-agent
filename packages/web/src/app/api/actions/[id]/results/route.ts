@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getThreadById } from "@email-agent/core/db";
+import { getActionResults } from "@email-agent/core/db";
 
 export async function GET(
   _request: NextRequest,
@@ -8,11 +8,8 @@ export async function GET(
   const { id } = await params;
 
   try {
-    const thread = await getThreadById(id);
-    if (!thread) {
-      return NextResponse.json({ error: "Thread not found" }, { status: 404 });
-    }
-    return NextResponse.json(thread);
+    const results = await getActionResults({ actionId: id, limit: 50 });
+    return NextResponse.json(results);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
