@@ -15,6 +15,16 @@ export class ActionRegistry {
     await this.loadFromDirectory(pathToFileURL(ACTIONS_DIR + "/"), false);
   }
 
+  /** Load pre-imported actions without filesystem discovery (webpack-safe). */
+  loadStatic(actions: EmailAction[]): void {
+    this.actions.clear();
+    for (const action of actions) {
+      if (action.id && action.name && action.prompt) {
+        this.actions.set(action.id, action);
+      }
+    }
+  }
+
   private async loadFromDirectory(
     dirUrl: URL,
     builtIn: boolean,

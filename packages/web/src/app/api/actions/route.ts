@@ -1,21 +1,21 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ActionRegistry, ActionRunner } from "@email-agent/core/actions";
+import { ActionRegistry, ActionRunner, builtInActions } from "@email-agent/core/actions";
 import { getEmails } from "@email-agent/core/db";
 
 const registry = new ActionRegistry();
 const runner = new ActionRunner();
 let loaded = false;
 
-async function ensureLoaded() {
+function ensureLoaded() {
   if (!loaded) {
-    await registry.loadAll();
+    registry.loadStatic(builtInActions);
     loaded = true;
   }
 }
 
 export async function GET() {
   try {
-    await ensureLoaded();
+    ensureLoaded();
     const actions = registry.getAll();
     return NextResponse.json(actions);
   } catch (err) {
@@ -26,7 +26,7 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    await ensureLoaded();
+    ensureLoaded();
     const body = (await request.json()) as { actionId: string };
     const action = registry.get(body.actionId);
     if (!action) {

@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
     "@google-cloud/pubsub",
     "node-notifier",
   ],
+  webpack: (config) => {
+    config.resolve.extensionAlias = {
+      ".js": [".ts", ".tsx", ".js"],
+    };
+    return config;
+  },
 };
 
 export default nextConfig;
