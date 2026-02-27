@@ -1,0 +1,37 @@
+{
+  "name": "@gmail-reader/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3847",
+    "build": "next build",
+    "start": "next start --port 3847",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@gmail-reader/core": "*",
+    "@tanstack/react-query": "^5.67.0",
+    "dompurify": "^3.2.0",
+    "lucide-react": "^0.475.0",
+    "next": "^15.2.0",
+    "next-themes": "^0.4.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-resizable-panels": "^2.1.0",
+    "sonner": "^2.0.0",
+    "zustand": "^5.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.0",
+    "tailwind-merge": "^3.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/dompurify": "^3.2.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.8.0"
+  }
+}

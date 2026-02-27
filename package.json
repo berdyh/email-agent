@@ -1,0 +1,24 @@
+{
+  "name": "gmail-reader",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local AI-powered Gmail analysis tool",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "setup": "npm run -w @gmail-reader/cli setup",
+    "start": "npm run -w @gmail-reader/web dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "npm@10.9.0"
+}

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.next/
+.turbo/
+.env
+*.tsbuildinfo
+
+# User-created actions
+packages/core/src/actions/user/
+actions/
+
+# Data directory
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

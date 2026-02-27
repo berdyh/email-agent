@@ -1,0 +1,38 @@
+{
+  "name": "@gmail-reader/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./gmail": "./dist/gmail/index.js",
+    "./db": "./dist/db/index.js",
+    "./agents": "./dist/agents/index.js",
+    "./actions": "./dist/actions/index.js",
+    "./analysis": "./dist/analysis/index.js",
+    "./notifications": "./dist/notifications/index.js",
+    "./config": "./dist/config/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.11.0",
+    "@lancedb/lancedb": "^0.15.0",
+    "apache-arrow": "^18.1.0",
+    "googleapis": "^146.0.0",
+    "node-notifier": "^10.0.1",
+    "openai": "^4.90.0",
+    "tsx": "^4.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/node-notifier": "^8.0.5",
+    "typescript": "^5.8.0"
+  }
+}
