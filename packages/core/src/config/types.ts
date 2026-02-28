@@ -1,4 +1,4 @@
-export type AgentId = "claude" | "codex" | "gemini" | "openrouter";
+export type AgentId = "claude" | "codex" | "gemini" | "openrouter" | "claude-sdk";
 export type AgentMode = "all-agents" | "hybrid" | "direct-api";
 export type EmbeddingProvider = "openai" | "openrouter" | "local";
 
@@ -37,6 +37,10 @@ export interface EmbeddingConfig {
   dimensions: number;
 }
 
+export interface GmailSyncConfig {
+  syncActions: boolean;
+}
+
 export interface UiConfig {
   theme: "light" | "dark" | "system";
   sidebarCollapsed: boolean;
@@ -52,6 +56,7 @@ export interface AppConfig {
   notifications: NotificationConfig;
   prompts: PromptsConfig;
   embedding: EmbeddingConfig;
+  gmail: GmailSyncConfig;
   ui: UiConfig;
   dataDir: string;
 }

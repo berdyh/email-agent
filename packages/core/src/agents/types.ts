@@ -5,6 +5,8 @@ export interface AgentRequest {
   systemPrompt?: string;
   maxTokens?: number;
   temperature?: number;
+  /** Abort signal — kills the spawned process when the client disconnects. */
+  signal?: AbortSignal;
 }
 
 export interface AgentResult {
@@ -14,8 +16,14 @@ export interface AgentResult {
   durationMs: number;
 }
 
+export interface AgentStreamChunk {
+  text: string;
+  done: boolean;
+}
+
 export interface AgentExecutor {
   readonly id: AgentId;
   isAvailable(): Promise<boolean>;
   execute(request: AgentRequest): Promise<AgentResult>;
+  executeStream?(request: AgentRequest): AsyncGenerator<AgentStreamChunk>;
 }

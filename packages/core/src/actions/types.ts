@@ -27,6 +27,26 @@ export interface ActionEmailResult {
   [key: string]: unknown;
 }
 
+export type GmailOperationType =
+  | "trash"
+  | "spam"
+  | "markRead"
+  | "markUnread"
+  | "addLabels"
+  | "removeLabels";
+
+export interface GmailOperation {
+  emailId: string;
+  type: GmailOperationType;
+  labelIds?: string[];
+}
+
+export interface ActionApplyResult {
+  applied: number;
+  failed: number;
+  errors: Array<{ emailId: string; error: string }>;
+}
+
 export interface ActionRunResult {
   actionId: string;
   status: "success" | "error";
@@ -35,4 +55,6 @@ export interface ActionRunResult {
   agentUsed: string;
   tokensUsed: number;
   durationMs: number;
+  pendingOperations?: GmailOperation[];
+  applyResult?: ActionApplyResult;
 }

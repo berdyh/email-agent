@@ -1,10 +1,12 @@
 "use client";
 
 import { useEmailStore } from "@/store/email-store";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Mail, MailOpen } from "lucide-react";
 import { MailSummary } from "./mail-summary";
 import { MailContent } from "./mail-content";
 
@@ -24,6 +26,8 @@ interface EmailDetail {
 export function MailDisplay() {
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
 
+  const queryClient = useQueryClient();
+
   const { data: email, isLoading } = useQuery<EmailDetail>({
     queryKey: ["email", selectedEmailId],
     queryFn: async (): Promise<EmailDetail> => {
@@ -32,6 +36,26 @@ export function MailDisplay() {
       return res.json() as Promise<EmailDetail>;
     },
     enabled: Boolean(selectedEmailId),
+  });
+
+  const toggleRead = useMutation<
+    { id: string; isUnread: boolean },
+    Error,
+    boolean
+  >({
+    mutationFn: async (isUnread: boolean) => {
+      const res = await fetch(`/api/gmail/${selectedEmailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isUnread }),
+      });
+      if (!res.ok) throw new Error("Failed to update read status");
+      return res.json() as Promise<{ id: string; isUnread: boolean }>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["email", selectedEmailId] });
+      void queryClient.invalidateQueries({ queryKey: ["emails"] });
+    },
   });
 
   if (!selectedEmailId) {
@@ -73,6 +97,25 @@ export function MailDisplay() {
                 {label}
               </Badge>
             ))}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto gap-1 text-xs"
+              disabled={toggleRead.isPending}
+              onClick={() => toggleRead.mutate(!email.isUnread)}
+            >
+              {email.isUnread ? (
+                <>
+                  <MailOpen className="h-3.5 w-3.5" />
+                  Mark read
+                </>
+              ) : (
+                <>
+                  <Mail className="h-3.5 w-3.5" />
+                  Mark unread
+                </>
+              )}
+            </Button>
           </div>
         </div>
 

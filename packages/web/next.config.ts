@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
     "apache-arrow",
     "@google-cloud/pubsub",
     "node-notifier",
+    "@anthropic-ai/claude-agent-sdk",
   ],
   webpack: (config) => {
     config.resolve.extensionAlias = {

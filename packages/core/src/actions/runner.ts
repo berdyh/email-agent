@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentRouter } from "../agents/router.js";
 import { saveActionResult } from "../db/actions.js";
+import { loadSettings } from "../config/settings.js";
 import type { GmailMessage } from "../gmail/types.js";
 import type {
   EmailAction,
@@ -8,6 +9,7 @@ import type {
   ActionRunResult,
   ActionEmailResult,
 } from "./types.js";
+import { mapResultToOperations, applyOperations } from "./apply.js";
 
 const router = new AgentRouter();
 
@@ -78,6 +80,18 @@ export class ActionRunner {
         tokensUsed: agentResult.tokensUsed,
         durationMs: agentResult.durationMs,
       };
+
+      // Map action results to Gmail operations
+      const pendingOps = mapResultToOperations(action.id, output.results);
+
+      if (pendingOps.length > 0) {
+        const settings = await loadSettings();
+        if (settings.gmail.syncActions) {
+          result.applyResult = await applyOperations(pendingOps);
+        } else {
+          result.pendingOperations = pendingOps;
+        }
+      }
 
       // Persist to DB
       await saveActionResult({

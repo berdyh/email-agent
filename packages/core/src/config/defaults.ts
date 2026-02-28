@@ -36,6 +36,9 @@ export const defaultConfig: AppConfig = {
     model: "text-embedding-3-small",
     dimensions: 768,
   },
+  gmail: {
+    syncActions: false,
+  },
   ui: {
     theme: "system",
     sidebarCollapsed: false,

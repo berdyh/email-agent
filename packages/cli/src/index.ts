@@ -6,6 +6,7 @@ import { registerRunAction } from "./commands/run-action.js";
 import { registerListActions } from "./commands/list-actions.js";
 import { registerServe } from "./commands/serve.js";
 import { registerCron } from "./commands/cron.js";
+import { registerConfig } from "./commands/config.js";
 
 const program = new Command();
 
@@ -20,5 +21,6 @@ registerRunAction(program);
 registerListActions(program);
 registerServe(program);
 registerCron(program);
+registerConfig(program);
 
 program.parse();

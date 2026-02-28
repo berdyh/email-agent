@@ -47,6 +47,7 @@ export default function SettingsPage() {
   const notifications = (local["notifications"] ?? {}) as {
     desktop?: { enabled?: boolean; priorityOnly?: boolean };
   };
+  const gmail = (local["gmail"] ?? {}) as { syncActions?: boolean };
 
   return (
     <div className="flex h-screen flex-col">
@@ -76,6 +77,7 @@ export default function SettingsPage() {
               <TabsTrigger value="agents">Agents</TabsTrigger>
               <TabsTrigger value="prompts">Prompts</TabsTrigger>
               <TabsTrigger value="notifications">Notifications</TabsTrigger>
+              <TabsTrigger value="gmail">Gmail</TabsTrigger>
             </TabsList>
 
             <TabsContent value="agents" className="space-y-4">
@@ -187,6 +189,36 @@ export default function SettingsPage() {
                   <p className="text-sm text-muted-foreground">
                     Add webhook URLs in your settings.json file at ~/.email-agent/settings.json
                   </p>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="gmail" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Gmail Sync</CardTitle>
+                  <CardDescription>
+                    Control how action results are applied to Gmail
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-sm font-medium">Auto-apply actions</label>
+                      <p className="text-xs text-muted-foreground">
+                        Automatically apply action recommendations (trash, spam, labels) to Gmail without confirmation
+                      </p>
+                    </div>
+                    <Switch
+                      checked={gmail.syncActions ?? false}
+                      onCheckedChange={(v) =>
+                        setLocal({
+                          ...local,
+                          gmail: { ...gmail, syncActions: v },
+                        })
+                      }
+                    />
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>

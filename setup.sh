@@ -88,8 +88,8 @@ set_env() {
 while true; do
   echo ""
   echo -e "  ${BOLD}Embedding provider:${RESET}"
-  echo -e "    1) ${CYAN}openai${RESET}      — OpenAI text-embedding-3-small (best quality)"
-  echo -e "    2) ${CYAN}openrouter${RESET}  — OpenRouter (default: Qwen3 Embedding 8B)"
+  echo -e "    1) ${CYAN}openrouter${RESET}  — OpenRouter Qwen3 Embedding 8B (best quality, recommended)"
+  echo -e "    2) ${CYAN}openai${RESET}      — OpenAI text-embedding-3-small"
   echo -e "    3) ${CYAN}local${RESET}       — Zero-vector fallback (no API key needed, no semantic search)"
   echo ""
   read -rp "  Choose [1/2/3] (default: 1): " embed_choice
@@ -101,28 +101,6 @@ while true; do
     break
 
   elif [ "$embed_choice" = "2" ]; then
-    EMBEDDING_PROVIDER="openrouter"
-    EMBEDDING_MODEL="qwen/qwen3-embedding-8b"
-    ok "Embedding provider: openrouter (${EMBEDDING_MODEL})"
-
-    # Prompt for OpenRouter key if not already set
-    EXISTING_OR_KEY=$(grep "^OPENROUTER_API_KEY=" .env 2>/dev/null | sed 's/^OPENROUTER_API_KEY=//' || true)
-    if [ -n "$EXISTING_OR_KEY" ]; then
-      ok "OPENROUTER_API_KEY already set in .env"
-      break
-    else
-      echo ""
-      read -rp "  Enter your OpenRouter API key: " openrouter_key
-      if [ -n "$openrouter_key" ]; then
-        set_env "OPENROUTER_API_KEY" "$openrouter_key"
-        ok "OPENROUTER_API_KEY saved to .env"
-        break
-      else
-        warn "No key entered — returning to provider selection"
-      fi
-    fi
-
-  else
     EMBEDDING_PROVIDER="openai"
     EMBEDDING_MODEL="text-embedding-3-small"
     ok "Embedding provider: openai"
@@ -138,6 +116,28 @@ while true; do
       if [ -n "$openai_key" ]; then
         set_env "OPENAI_API_KEY" "$openai_key"
         ok "OPENAI_API_KEY saved to .env"
+        break
+      else
+        warn "No key entered — returning to provider selection"
+      fi
+    fi
+
+  else
+    EMBEDDING_PROVIDER="openrouter"
+    EMBEDDING_MODEL="qwen/qwen3-embedding-8b"
+    ok "Embedding provider: openrouter (${EMBEDDING_MODEL})"
+
+    # Prompt for OpenRouter key if not already set
+    EXISTING_OR_KEY=$(grep "^OPENROUTER_API_KEY=" .env 2>/dev/null | sed 's/^OPENROUTER_API_KEY=//' || true)
+    if [ -n "$EXISTING_OR_KEY" ]; then
+      ok "OPENROUTER_API_KEY already set in .env"
+      break
+    else
+      echo ""
+      read -rp "  Enter your OpenRouter API key: " openrouter_key
+      if [ -n "$openrouter_key" ]; then
+        set_env "OPENROUTER_API_KEY" "$openrouter_key"
+        ok "OPENROUTER_API_KEY saved to .env"
         break
       else
         warn "No key entered — returning to provider selection"
@@ -164,6 +164,23 @@ case "$agent_choice" in
 esac
 set_env "AGENT_MODE" "$AGENT_MODE"
 ok "Agent mode: ${AGENT_MODE}"
+
+# ── Gmail sync ──
+echo ""
+echo -e "  ${BOLD}Gmail sync:${RESET}"
+echo -e "  ${DIM}When enabled, action recommendations (trash, spam, etc.) are auto-applied to Gmail.${RESET}"
+echo -e "  ${DIM}When disabled, you'll be prompted before each change.${RESET}"
+echo ""
+read -rp "  Enable auto-sync of action results? [y/N] " sync_choice
+sync_choice=${sync_choice:-N}
+
+if [[ "$sync_choice" =~ ^[Yy]$ ]]; then
+  GMAIL_SYNC_ACTIONS="true"
+  ok "Gmail sync: enabled (auto-apply)"
+else
+  GMAIL_SYNC_ACTIONS="false"
+  ok "Gmail sync: disabled (prompt before applying)"
+fi
 
 # ── API keys for direct-api / hybrid ──
 if [ "$AGENT_MODE" = "direct-api" ] || [ "$AGENT_MODE" = "hybrid" ]; then
@@ -241,7 +258,7 @@ ok "Workspace bins linked"
 # ─── 7. Authenticate with Google Cloud ────────────────────────────────
 progress "Google Cloud authentication..."
 
-SCOPES="https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/pubsub"
+SCOPES="https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/pubsub"
 
 if gcloud auth application-default print-access-token &>/dev/null 2>&1; then
   ok "Already authenticated (ADC credentials found)"
@@ -314,6 +331,9 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "provider": "${EMBEDDING_PROVIDER}",
     "model": "${EMBEDDING_MODEL:-text-embedding-3-small}",
     "dimensions": 768
+  },
+  "gmail": {
+    "syncActions": ${GMAIL_SYNC_ACTIONS:-false}
   }
 }
 SETTINGS_EOF

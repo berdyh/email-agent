@@ -39,6 +39,17 @@ export async function getEmailById(id: string): Promise<EmailRecord | null> {
   return (results[0] as unknown as EmailRecord) ?? null;
 }
 
+export async function updateEmailReadStatus(
+  id: string,
+  isUnread: boolean,
+): Promise<void> {
+  const email = await getEmailById(id);
+  if (!email) return;
+  const db = await getDb();
+  const table = await db.openTable(emailsTable);
+  await table.add([{ ...email, isUnread }], { mode: "overwrite" });
+}
+
 export async function searchEmails(
   queryVector: number[],
   limit = 10,

@@ -20,10 +20,15 @@ npx tsc -p packages/cli/tsconfig.json --noEmit    # Type-check CLI
 ### CLI
 
 ```bash
-npx email-agent fetch              # Fetch unread emails → LanceDB
+npx email-agent fetch              # Fetch unread emails → LanceDB (--scope all|unread, --limit N)
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
 npx email-agent serve              # Start web UI
+npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope)
+npx email-agent cron status        # Show current crontab entry
+npx email-agent cron remove        # Remove crontab entry
+npx email-agent config get <key>   # Read config value (dotted path, e.g. gmail.syncActions)
+npx email-agent config set <key> <value>  # Set config value
 ```
 
 ## Architecture
@@ -37,7 +42,7 @@ packages/
 
 ## Key Patterns
 
-- **Agent system**: Strategy pattern executors (Claude/Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter
+- **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
 - **DB**: LanceDB vector database with Apache Arrow schemas
 
@@ -47,6 +52,9 @@ packages/
 - `packages/core/src/actions/runner.ts` — Action execution pipeline
 - `packages/core/src/db/connection.ts` — LanceDB init with Arrow schemas
 - `packages/core/src/config/defaults.ts` — All default config values and prompt templates
+- `packages/core/src/gmail/sync.ts` — Shared fetch→embed→store pipeline (used by CLI + web)
+- `packages/core/src/gmail/operations.ts` — Gmail write operations (trash, spam, labels, read/unread)
+- `packages/core/src/actions/apply.ts` — Maps action results → Gmail operations, applies them
 - `packages/web/src/app/api/` — All Next.js API routes
 - `packages/core/src/actions/built-in/` — Built-in actions
 - `~/.email-agent/actions/` — User-created actions (auto-discovered)
@@ -78,9 +86,18 @@ packages/
 
 ### CLI
 - CLI `dev` script uses `tsc --watch` (not `tsx src/index.ts`) because Commander.js CLIs exit immediately without args, which turbo's `persistent: true` treats as failure
+- Use `execFileSync`/`execFile` (NOT `execSync`/`exec`) in CLI commands — security hook blocks shell injection patterns
 
 ### Other
 - `node-notifier` types are strict — only `title`, `message`, `wait` are valid notification props
+- `setup.sh` hardcodes a `settings.json` template — new config fields must be added there too, or they won't appear for fresh installs running setup
+
+### Agent Executors (Spawning CLIs)
+- Claude CLI: `--system-prompt` (NOT `--system`), `--output-format stream-json` for streaming, NO `--max-tokens` flag (use `--max-budget-usd` instead)
+- **Large `--system-prompt` args hang the CLI** — combine system prompt into the user prompt instead (see `claude-executor.ts`)
+- **Use `spawn` not `execFile`** for Claude CLI — `execFile` can get killed (exit 143/SIGTERM) by Node.js for long-running processes
+- When spawning `claude` CLI from a process inside Claude Code, strip `CLAUDECODE` env var or it refuses as "nested session" — use `cleanEnv()` in `claude-executor.ts`
+- Core module changes (via tsconfig `paths`) may not hot-reload in Next.js — restart `npm run dev` after modifying `packages/core/` source
 
 ## Adding a New Agent or Embedding Provider
 
@@ -91,6 +108,14 @@ packages/
 5. Add env vars to `.env.example` + `.env`
 6. Add option to `setup.sh` embedding/agent prompts
 7. OpenAI-compatible APIs: reuse `openai` SDK with `baseURL` override — no new deps
+
+## Adding a New Config Section
+
+1. `config/types.ts` — Add interface + field to `AppConfig`
+2. `config/defaults.ts` — Add default value to `defaultConfig` (existing installs get this via shallow merge in `loadSettings()`)
+3. `config/index.ts` — Export the new type
+4. `setup.sh` — Add prompt + include in generated `settings.json` template
+5. `packages/web/src/app/settings/page.tsx` — Add tab/controls (extract from `local` state with `as` cast)
 
 ## Code Style
 
@@ -105,4 +130,5 @@ See `.env.example` for all variables. Key ones:
 - `OPENROUTER_API_KEY` — For OpenRouter embeddings (Qwen3) + LLM access
 - `GCP_PROJECT_ID` — Required for Gmail API access
 - `AGENT_MODE` — "all-agents" | "hybrid" | "direct-api"
-- `PREFERRED_AGENT` — "claude" | "codex" | "gemini" | "openrouter"
+- `PREFERRED_AGENT` — "claude-sdk" | "claude" | "codex" | "gemini" | "openrouter"
+- `ANTHROPIC_API_KEY` — Optional, enables `claude-sdk` agent (Agent SDK direct API calls)

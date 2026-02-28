@@ -4,3 +4,12 @@ export { fetchUnreadEmails, fetchEmails, fetchEmail, fetchThread, type FetchOpti
 export { setupPubSub, startWatch, createPubSubListener } from "./pubsub.js";
 export type { GmailMessage, GmailThread, GmailLabel } from "./types.js";
 export { syncEmails, type SyncResult } from "./sync.js";
+export {
+  markAsRead,
+  markAsUnread,
+  trashMessage,
+  markAsSpam,
+  addLabels,
+  removeLabels,
+  batchModify,
+} from "./operations.js";

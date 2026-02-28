@@ -5,6 +5,19 @@ export interface ActionItem {
   name: string;
   description: string;
   builtIn?: boolean;
+  filename?: string;
+}
+
+export interface GmailOperationItem {
+  emailId: string;
+  type: string;
+  labelIds?: string[];
+}
+
+export interface ActionApplyResultData {
+  applied: number;
+  failed: number;
+  errors: Array<{ emailId: string; error: string }>;
 }
 
 export interface ActionResult {
@@ -12,6 +25,8 @@ export interface ActionResult {
   status: string;
   output?: unknown;
   error?: string;
+  pendingOperations?: GmailOperationItem[];
+  applyResult?: ActionApplyResultData;
 }
 
 export function useActions() {
@@ -40,6 +55,44 @@ export function useRunAction() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
+    },
+  });
+}
+
+export function useDeleteAction() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ success: boolean }, Error, { filename: string }>({
+    mutationFn: async ({ filename }) => {
+      const res = await fetch("/api/actions/user", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename }),
+      });
+      if (!res.ok) throw new Error("Failed to delete action");
+      return res.json() as Promise<{ success: boolean }>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["actions"] });
+    },
+  });
+}
+
+export function useApplyOperations() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ActionApplyResultData, Error, GmailOperationItem[]>({
+    mutationFn: async (operations) => {
+      const res = await fetch("/api/gmail/apply-actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operations }),
+      });
+      if (!res.ok) throw new Error("Failed to apply operations");
+      return res.json() as Promise<ActionApplyResultData>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["emails"] });
     },
   });
 }

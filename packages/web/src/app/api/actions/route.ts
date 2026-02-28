@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ActionRegistry, ActionRunner, builtInActions } from "@email-agent/core/actions";
+import { ActionRegistry, ActionRunner, builtInActions, listUserActions, loadUserAction } from "@email-agent/core/actions";
 import { getEmails } from "@email-agent/core/db";
 
 const registry = new ActionRegistry();
@@ -16,8 +16,19 @@ function ensureLoaded() {
 export async function GET() {
   try {
     ensureLoaded();
-    const actions = registry.getAll();
-    return NextResponse.json(actions);
+    const builtIns = registry.getAll().map((a) => ({ ...a, builtIn: true }));
+
+    // Merge user actions (with filename for edit/delete)
+    const userActions = await listUserActions();
+    const userItems = userActions.map((u) => ({
+      id: u.id,
+      name: u.name,
+      description: u.description,
+      builtIn: false,
+      filename: u.filename,
+    }));
+
+    return NextResponse.json([...builtIns, ...userItems]);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -28,7 +39,13 @@ export async function POST(request: NextRequest) {
   try {
     ensureLoaded();
     const body = (await request.json()) as { actionId: string };
-    const action = registry.get(body.actionId);
+    let action = registry.get(body.actionId);
+
+    // Fall back to user actions if not found in built-ins
+    if (!action) {
+      action = await loadUserAction(body.actionId);
+    }
+
     if (!action) {
       return NextResponse.json({ error: "Action not found" }, { status: 404 });
     }
