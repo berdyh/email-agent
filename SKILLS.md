@@ -55,7 +55,39 @@ export default action;
 2. It builds a combined prompt: your `prompt` + email data as JSON
 3. Sends it to the configured AI agent (Claude, Codex, Gemini, or OpenAI API)
 4. Parses the JSON array response — each item must have an `emailId` field
-5. Saves results to LanceDB for later retrieval
+5. If the action has Gmail operation mapping in `apply.ts`, results are mapped to operations
+6. Saves results to LanceDB for later retrieval
+
+### Prompt Wrapping
+
+The runner automatically wraps `action.prompt` — never include email data in the prompt itself:
+
+```
+[your action.prompt]
+
+Emails to analyze:
+```json
+[{ id, from, subject, date, snippet, body (truncated to 2000 chars) }]
+```
+
+Respond with a JSON array of objects, each with an "emailId" field...
+```
+
+### Gmail Operation Mapping (built-in only)
+
+Actions that produce Gmail side-effects need a mapping case in `packages/core/src/actions/apply.ts`:
+
+```typescript
+// In mapSingleResult():
+case "my-action":
+  return mapMyActionResult(result);
+```
+
+Available operation types: `trash`, `spam`, `markRead`, `markUnread`, `addLabels`, `removeLabels`
+
+Current mappings: `junk` (trash/spam/archive), `subscription` (archive marketing). `priority` is analysis-only — no mapping needed.
+
+Prefer user actions unless Gmail operation mapping is required.
 
 ## Example 1: Sentiment Analysis
 
@@ -159,6 +191,23 @@ Navigate to the Actions page and click "Run" on any action.
 | `priority` | Priority Detection | Classifies emails by urgency (high/medium/low) |
 | `subscription` | Subscription Detection | Identifies newsletters and marketing emails |
 | `junk` | Junk/Spam Scoring | Scores emails for spam likelihood |
+
+## Adding a Built-in Action (extra steps)
+
+1. Create `packages/core/src/actions/built-in/<id>.action.ts`
+2. Import type from `../types.js` (not `@email-agent/core`)
+3. Add import + entry to `packages/core/src/actions/built-in/index.ts` barrel (static list required for webpack)
+4. If the action produces Gmail operations: add mapping case in `packages/core/src/actions/apply.ts`
+
+## Checklist
+
+- [ ] `id` is kebab-case and unique across all actions
+- [ ] `prompt` does NOT include email data (appended automatically by runner)
+- [ ] `prompt` specifies return fields with clear types
+- [ ] `outputSchema` documents the expected JSON shape
+- [ ] File uses `export default action` pattern
+- [ ] If built-in: added to `built-in/index.ts` barrel
+- [ ] If built-in with Gmail ops: added mapping in `apply.ts`
 
 ## Tips
 

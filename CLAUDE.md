@@ -99,36 +99,8 @@ packages/
 - When spawning `claude` CLI from a process inside Claude Code, strip `CLAUDECODE` env var or it refuses as "nested session" — use `cleanEnv()` in `claude-executor.ts`
 - Core module changes (via tsconfig `paths`) may not hot-reload in Next.js — restart `npm run dev` after modifying `packages/core/` source
 
-## Adding a New Agent or Embedding Provider
-
-1. `config/types.ts` — Add to `AgentId` or `EmbeddingProvider` union
-2. Create executor (`agents/<name>-executor.ts`) or add branch in `db/embeddings.ts`
-3. Register in `agents/router.ts` executors record + `fallbackOrder`
-4. Export from `agents/index.ts`
-5. Add env vars to `.env.example` + `.env`
-6. Add option to `setup.sh` embedding/agent prompts
-7. OpenAI-compatible APIs: reuse `openai` SDK with `baseURL` override — no new deps
-
-## Adding a New Config Section
-
-1. `config/types.ts` — Add interface + field to `AppConfig`
-2. `config/defaults.ts` — Add default value to `defaultConfig` (existing installs get this via shallow merge in `loadSettings()`)
-3. `config/index.ts` — Export the new type
-4. `setup.sh` — Add prompt + include in generated `settings.json` template
-5. `packages/web/src/app/settings/page.tsx` — Add tab/controls (extract from `local` state with `as` cast)
-
 ## Code Style
 
 - ESM throughout (`"type": "module"`, `.js` extensions in imports)
 - Strict TypeScript with `noUncheckedIndexedAccess`
 - No default exports except action plugin files (`*.action.ts`)
-
-## Environment
-
-See `.env.example` for all variables. Key ones:
-- `OPENAI_API_KEY` — Required for OpenAI embeddings (text-embedding-3-small)
-- `OPENROUTER_API_KEY` — For OpenRouter embeddings (Qwen3) + LLM access
-- `GCP_PROJECT_ID` — Required for Gmail API access
-- `AGENT_MODE` — "all-agents" | "hybrid" | "direct-api"
-- `PREFERRED_AGENT` — "claude-sdk" | "claude" | "codex" | "gemini" | "openrouter"
-- `ANTHROPIC_API_KEY` — Optional, enables `claude-sdk` agent (Agent SDK direct API calls)
