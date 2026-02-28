@@ -5,6 +5,7 @@ import { registerFetch } from "./commands/fetch.js";
 import { registerRunAction } from "./commands/run-action.js";
 import { registerListActions } from "./commands/list-actions.js";
 import { registerServe } from "./commands/serve.js";
+import { registerCron } from "./commands/cron.js";
 
 const program = new Command();
 
@@ -18,5 +19,6 @@ registerFetch(program);
 registerRunAction(program);
 registerListActions(program);
 registerServe(program);
+registerCron(program);
 
 program.parse();
