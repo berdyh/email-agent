@@ -60,10 +60,10 @@ export async function setupPubSub(): Promise<{
   return { topicName, subscriptionName };
 }
 
-export async function startWatch(): Promise<WatchResponse> {
+export async function startWatch(accountEmail?: string): Promise<WatchResponse> {
   const settings = await loadSettings();
   const { projectId, pubsubTopic } = settings.gcp;
-  const gmail = await createGmailClient();
+  const gmail = await createGmailClient(accountEmail);
 
   const topicName = `projects/${projectId}/topics/${pubsubTopic}`;
   const response = await gmail.users.watch({

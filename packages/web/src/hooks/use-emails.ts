@@ -11,7 +11,7 @@ export interface EmailListItem {
   labels: string;
 }
 
-export function useEmails(options?: { unreadOnly?: boolean; limit?: number; offset?: number }) {
+export function useEmails(options?: { unreadOnly?: boolean; limit?: number; offset?: number; accountId?: string }) {
   return useQuery<EmailListItem[]>({
     queryKey: ["emails", options],
     queryFn: async (): Promise<EmailListItem[]> => {
@@ -19,6 +19,7 @@ export function useEmails(options?: { unreadOnly?: boolean; limit?: number; offs
       if (options?.unreadOnly) params.set("unreadOnly", "true");
       if (options?.limit) params.set("limit", String(options.limit));
       if (options?.offset) params.set("offset", String(options.offset));
+      if (options?.accountId) params.set("accountId", options.accountId);
       const res = await fetch(`/api/gmail?${params}`);
       if (!res.ok) throw new Error("Failed to fetch emails");
       return res.json() as Promise<EmailListItem[]>;

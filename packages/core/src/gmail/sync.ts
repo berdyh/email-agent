@@ -25,6 +25,7 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
 
   const records = emails.map((e, i) => ({
     id: e.id,
+    accountId: options.accountEmail ?? "",
     threadId: e.threadId,
     from: e.from,
     to: e.to,

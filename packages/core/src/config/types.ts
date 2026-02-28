@@ -49,6 +49,17 @@ export interface UiConfig {
   fetchScope: "unread" | "all";
 }
 
+export interface AccountConfig {
+  email: string;
+  name?: string;
+  isDefault?: boolean;
+}
+
+export interface OAuthConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface AppConfig {
   agentMode: AgentMode;
   preferredAgent: AgentId;
@@ -59,4 +70,6 @@ export interface AppConfig {
   gmail: GmailSyncConfig;
   ui: UiConfig;
   dataDir: string;
+  accounts: AccountConfig[];
+  oauth?: OAuthConfig;
 }

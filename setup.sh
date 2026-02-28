@@ -334,7 +334,8 @@ if [ -z "${GCP_PROJECT:-}" ]; then
   },
   "gmail": {
     "syncActions": ${GMAIL_SYNC_ACTIONS:-false}
-  }
+  },
+  "accounts": []
 }
 SETTINGS_EOF
     ok "Project set: ${GCP_PROJECT}"

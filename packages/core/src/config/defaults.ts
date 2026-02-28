@@ -47,4 +47,5 @@ export const defaultConfig: AppConfig = {
     fetchScope: "unread",
   },
   dataDir: DATA_DIR,
+  accounts: [],
 };

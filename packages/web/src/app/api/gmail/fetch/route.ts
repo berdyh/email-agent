@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
     const options: FetchOptions = {
       scope: body.scope === "all" ? "all" : "unread",
       maxResults: body.maxResults ?? 50,
+      accountEmail: body.accountEmail,
     };
 
     const result = await syncEmails(options);

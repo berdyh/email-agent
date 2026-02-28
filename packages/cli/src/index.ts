@@ -7,6 +7,7 @@ import { registerListActions } from "./commands/list-actions.js";
 import { registerServe } from "./commands/serve.js";
 import { registerCron } from "./commands/cron.js";
 import { registerConfig } from "./commands/config.js";
+import { registerAccounts } from "./commands/accounts.js";
 
 const program = new Command();
 
@@ -22,5 +23,6 @@ registerListActions(program);
 registerServe(program);
 registerCron(program);
 registerConfig(program);
+registerAccounts(program);
 
 program.parse();

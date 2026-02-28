@@ -31,6 +31,7 @@ function vectorField(name: string): Field {
 
 const emailSchema = new Schema([
   new Field("id", new Utf8()),
+  new Field("accountId", new Utf8()),
   new Field("threadId", new Utf8()),
   new Field("from", new Utf8()),
   new Field("to", new Utf8()),
@@ -90,6 +91,20 @@ export async function initDb(): Promise<void> {
 
   if (!tableNames.includes("emails")) {
     await conn.createEmptyTable("emails", emailSchema);
+  } else {
+    // Migration: ensure accountId column exists
+    const emailsTable = await conn.openTable("emails");
+    const existingSchema = await emailsTable.schema();
+    const hasAccountId = existingSchema.fields.some(
+      (f: { name: string }) => f.name === "accountId",
+    );
+    if (!hasAccountId) {
+      console.warn(
+        "Migrating emails table: adding accountId column. Existing emails will need to be re-fetched.",
+      );
+      await conn.dropTable("emails");
+      await conn.createEmptyTable("emails", emailSchema);
+    }
   }
 
   if (!tableNames.includes("threads")) {

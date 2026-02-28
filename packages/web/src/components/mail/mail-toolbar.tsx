@@ -8,6 +8,7 @@ import {
   useAutoFetch,
   useFetchSettings,
 } from "@/hooks/use-fetch-emails";
+import { useEmailStore } from "@/store/email-store";
 import { useState, useEffect } from "react";
 
 const INTERVAL_OPTIONS = [
@@ -22,6 +23,7 @@ export function MailToolbar() {
   const { mutate: fetchEmails, isPending, isSuccess, data } = useFetchEmails();
   const { fetchInterval, fetchScope, setFetchInterval, setFetchScope } =
     useFetchSettings();
+  const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [timeAgo, setTimeAgo] = useState("");
 
@@ -86,7 +88,7 @@ export function MailToolbar() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => fetchEmails({ scope: fetchScope })}
+          onClick={() => fetchEmails({ scope: fetchScope, accountEmail: activeAccountEmail ?? undefined })}
           disabled={isPending}
         >
           {isPending ? (
