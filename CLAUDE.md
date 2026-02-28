@@ -21,6 +21,11 @@ npx tsc -p packages/cli/tsconfig.json --noEmit    # Type-check CLI
 
 ```bash
 npx email-agent fetch              # Fetch unread emails → LanceDB (--scope all|unread, --limit N)
+npx email-agent fetch --account <email>  # Fetch for a specific account
+npx email-agent accounts list      # List configured Gmail accounts
+npx email-agent accounts add <email>     # Add account via OAuth2
+npx email-agent accounts remove <email>  # Remove account
+npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
 npx email-agent serve              # Start web UI
@@ -42,6 +47,7 @@ packages/
 
 ## Key Patterns
 
+- **Multi-account Gmail**: OAuth2 per-account auth in `gmail/account-manager.ts`, tokens at `~/.email-agent/accounts/{email}/token.json`, OAuth creds at `~/.email-agent/oauth.json`. `client.ts` routing: explicit account → default account → gcloud ADC fallback. `accountEmail?: string` threaded through all Gmail operations.
 - **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
@@ -54,6 +60,8 @@ packages/
 
 ## Key Files
 
+- `packages/core/src/gmail/account-manager.ts` — OAuth2 flow, token storage, account CRUD
+- `packages/core/src/config/types.ts` — `AccountConfig`, `OAuthConfig`, `AppConfig`
 - `CREATE_ACTION_SKILLS.md` — CREATE skill doc (system prompt for generating new actions)
 - `EDIT_ACTION_SKILLS.md` — EDIT skill doc (system prompt for modifying existing actions)
 - `packages/core/src/agents/router.ts` — Agent selection logic
@@ -80,11 +88,14 @@ packages/
 ### Imports & Modules
 - Web resolves `@email-agent/core/*` subpaths via tsconfig `paths` to source files
 - CLI imports from `@email-agent/core` barrel export only (no subpath imports) due to rootDir constraint
+- `AccountConfig` is in `config/types.ts` (not `gmail/account-types.ts`) — `account-types.ts` only has `OAuthCredentials` and `StoredTokens`
 - `actions/built-in/index.ts` is a static barrel for webpack — new built-in actions must be added here too
 
 ### Database
 - LanceDB `createEmptyTable()` requires Apache Arrow `Schema`/`Field` objects, NOT plain JS objects
 - DB record interfaces need `[key: string]: unknown` index signatures for `table.add()`
+- Adding columns to existing tables: check schema in `initDb()`, drop+recreate if column missing (LanceDB has no ALTER TABLE)
+- `emails` table has `accountId` column — must be included in all insert records
 
 ### Web (Next.js)
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`

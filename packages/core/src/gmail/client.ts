@@ -1,10 +1,13 @@
 import { google, type gmail_v1 } from "googleapis";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import {
+  createGmailClientForAccount,
+  getDefaultAccount,
+  getStoredTokens,
+} from "./account-manager.js";
 
 const execFileAsync = promisify(execFile);
-
-let gmailClient: gmail_v1.Gmail | null = null;
 
 async function getAccessToken(): Promise<string> {
   const { stdout } = await execFileAsync("gcloud", [
@@ -15,22 +18,36 @@ async function getAccessToken(): Promise<string> {
   return stdout.trim();
 }
 
-export async function createGmailClient(): Promise<gmail_v1.Gmail> {
-  if (gmailClient) return gmailClient;
-
+async function createGmailClientFromGcloud(): Promise<gmail_v1.Gmail> {
   const token = await getAccessToken();
   const auth = new google.auth.OAuth2();
   auth.setCredentials({ access_token: token });
 
-  // Refresh token when it expires
-  auth.on("tokens", () => {
-    // Token refreshed via gcloud ADC automatically
-  });
+  return google.gmail({ version: "v1", auth });
+}
 
-  gmailClient = google.gmail({ version: "v1", auth });
-  return gmailClient;
+export async function createGmailClient(
+  accountEmail?: string,
+): Promise<gmail_v1.Gmail> {
+  // Explicit account requested — delegate to account manager
+  if (accountEmail) {
+    return createGmailClientForAccount(accountEmail);
+  }
+
+  // No explicit account — try the default account if it has stored tokens
+  const defaultAccount = await getDefaultAccount();
+  if (defaultAccount) {
+    const tokens = await getStoredTokens(defaultAccount.email);
+    if (tokens) {
+      return createGmailClientForAccount(defaultAccount.email);
+    }
+  }
+
+  // Fall back to gcloud ADC flow
+  return createGmailClientFromGcloud();
 }
 
 export function resetGmailClient(): void {
-  gmailClient = null;
+  // No-op — kept for backward compatibility.
+  // Clients are no longer cached, so there's nothing to reset.
 }

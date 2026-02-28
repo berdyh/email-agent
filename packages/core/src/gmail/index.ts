@@ -13,3 +13,16 @@ export {
   removeLabels,
   batchModify,
 } from "./operations.js";
+export {
+  listAccounts,
+  addAccount,
+  removeAccount,
+  getDefaultAccount,
+  setDefaultAccount,
+  getOAuthCredentials,
+  saveOAuthCredentials,
+  generateAuthUrl,
+  exchangeCode,
+  createGmailClientForAccount,
+} from "./account-manager.js";
+export type { OAuthCredentials, StoredTokens } from "./account-types.js";

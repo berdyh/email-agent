@@ -13,16 +13,18 @@ export function registerFetch(program: Command) {
       'Fetch scope: "unread" or "all"',
       "unread",
     )
-    .action(async (options: { limit: string; scope: string }) => {
+    .option("-a, --account <email>", "Email account to fetch from")
+    .action(async (options: { limit: string; scope: string; account?: string }) => {
       const limit = parseInt(options.limit, 10);
       const scope = options.scope === "all" ? "all" as const : "unread" as const;
+      const accountLabel = options.account ? ` for ${options.account}` : "";
 
       const spinner = ora(
-        `Fetching ${scope === "all" ? "all" : "unread"} emails...`,
+        `Fetching ${scope === "all" ? "all" : "unread"} emails${accountLabel}...`,
       ).start();
 
       try {
-        const result = await syncEmails({ scope, maxResults: limit });
+        const result = await syncEmails({ scope, maxResults: limit, accountEmail: options.account });
 
         spinner.succeed(`Stored ${result.fetched} emails with embeddings`);
         console.log(

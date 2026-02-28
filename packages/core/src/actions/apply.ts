@@ -83,6 +83,7 @@ function mapSubscriptionResult(result: ActionEmailResult): GmailOperation[] {
  */
 export async function applyOperations(
   operations: GmailOperation[],
+  accountEmail?: string,
 ): Promise<ActionApplyResult> {
   let applied = 0;
   let failed = 0;
@@ -92,25 +93,25 @@ export async function applyOperations(
     try {
       switch (op.type) {
         case "trash":
-          await trashMessage(op.emailId);
+          await trashMessage(op.emailId, accountEmail);
           break;
         case "spam":
-          await markAsSpam(op.emailId);
+          await markAsSpam(op.emailId, accountEmail);
           break;
         case "markRead":
-          await markAsRead(op.emailId);
+          await markAsRead(op.emailId, accountEmail);
           break;
         case "markUnread":
-          await markAsUnread(op.emailId);
+          await markAsUnread(op.emailId, accountEmail);
           break;
         case "addLabels":
           if (op.labelIds?.length) {
-            await addLabels(op.emailId, op.labelIds);
+            await addLabels(op.emailId, op.labelIds, accountEmail);
           }
           break;
         case "removeLabels":
           if (op.labelIds?.length) {
-            await removeLabels(op.emailId, op.labelIds);
+            await removeLabels(op.emailId, op.labelIds, accountEmail);
           }
           break;
       }

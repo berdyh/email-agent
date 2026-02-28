@@ -65,12 +65,13 @@ function parseGmailMessage(msg: any): GmailMessage {
 export interface FetchOptions {
   scope: "unread" | "all";
   maxResults?: number;
+  accountEmail?: string;
 }
 
 export async function fetchEmails(
   options: FetchOptions,
 ): Promise<GmailMessage[]> {
-  const gmail = await createGmailClient();
+  const gmail = await createGmailClient(options.accountEmail);
   const response = await gmail.users.messages.list({
     userId: "me",
     q: options.scope === "unread" ? "is:unread" : undefined,
@@ -80,7 +81,7 @@ export async function fetchEmails(
   const messageIds = response.data.messages ?? [];
   if (messageIds.length === 0) return [];
 
-  const messages = await Promise.all(
+  const results = await Promise.allSettled(
     messageIds.map(async ({ id }) => {
       const msg = await gmail.users.messages.get({
         userId: "me",
@@ -91,6 +92,15 @@ export async function fetchEmails(
     }),
   );
 
+  const messages: GmailMessage[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      messages.push(result.value);
+    } else {
+      console.error("Failed to fetch message:", result.reason);
+    }
+  }
+
   return messages;
 }
 
@@ -100,8 +110,8 @@ export async function fetchUnreadEmails(
   return fetchEmails({ scope: "unread", maxResults });
 }
 
-export async function fetchEmail(id: string): Promise<GmailMessage> {
-  const gmail = await createGmailClient();
+export async function fetchEmail(id: string, accountEmail?: string): Promise<GmailMessage> {
+  const gmail = await createGmailClient(accountEmail);
   const msg = await gmail.users.messages.get({
     userId: "me",
     id,
@@ -110,8 +120,8 @@ export async function fetchEmail(id: string): Promise<GmailMessage> {
   return parseGmailMessage(msg.data);
 }
 
-export async function fetchThread(threadId: string): Promise<GmailThread> {
-  const gmail = await createGmailClient();
+export async function fetchThread(threadId: string, accountEmail?: string): Promise<GmailThread> {
+  const gmail = await createGmailClient(accountEmail);
   const thread = await gmail.users.threads.get({
     userId: "me",
     id: threadId,

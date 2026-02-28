@@ -11,10 +11,12 @@ export function MailList() {
   const filterUnreadOnly = useEmailStore((s) => s.filterUnreadOnly);
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
   const selectEmail = useEmailStore((s) => s.selectEmail);
+  const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
 
   const { data: emails, isLoading } = useEmails({
     unreadOnly: filterUnreadOnly,
     limit: 50,
+    accountId: activeAccountEmail ?? undefined,
   });
 
   return (

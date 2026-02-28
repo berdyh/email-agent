@@ -5,6 +5,7 @@
 export interface EmailRecord {
   [key: string]: unknown;
   id: string;
+  accountId: string;
   threadId: string;
   from: string;
   to: string;

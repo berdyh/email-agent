@@ -9,6 +9,7 @@ interface FetchResponse {
 interface FetchParams {
   scope: "unread" | "all";
   maxResults?: number;
+  accountEmail?: string;
 }
 
 export function useFetchEmails() {
