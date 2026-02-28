@@ -137,7 +137,7 @@ const action: EmailAction = {
 export default action;
 ```
 
-See [SKILLS.md](SKILLS.md) for the full action creation guide with examples.
+See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creation guide with examples, and [EDIT_ACTION_SKILLS.md](EDIT_ACTION_SKILLS.md) for modifying existing actions.
 
 ### Built-in Actions
 

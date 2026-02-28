@@ -44,12 +44,21 @@ packages/
 
 - **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
+- **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
+  - `CREATE_ACTION_SKILLS.md` (CREATE skill) — system prompt teaching the AI to generate new `.action.ts` files from scratch (template, interface, examples)
+  - `EDIT_ACTION_SKILLS.md` (EDIT skill) — system prompt for modifying existing actions; current action code is appended to the prompt
+  - Route: `packages/web/src/app/api/actions/generate/route.ts` — loads skill doc based on `mode: "create" | "edit"`, passes it as `systemPrompt` to `AgentRouter`
+  - UI: `packages/web/src/components/actions/action-chat-card.tsx` + `store/action-chat-store.ts` — chat interface for create/edit conversations
+  - Saved actions go to `~/.email-agent/actions/<id>.action.ts` via `POST /api/actions/user`
 - **DB**: LanceDB vector database with Apache Arrow schemas
 
 ## Key Files
 
+- `CREATE_ACTION_SKILLS.md` — CREATE skill doc (system prompt for generating new actions)
+- `EDIT_ACTION_SKILLS.md` — EDIT skill doc (system prompt for modifying existing actions)
 - `packages/core/src/agents/router.ts` — Agent selection logic
 - `packages/core/src/actions/runner.ts` — Action execution pipeline
+- `packages/web/src/app/api/actions/generate/route.ts` — Coding agent endpoint (loads skill docs, routes to AgentRouter)
 - `packages/core/src/db/connection.ts` — LanceDB init with Arrow schemas
 - `packages/core/src/config/defaults.ts` — All default config values and prompt templates
 - `packages/core/src/gmail/sync.ts` — Shared fetch→embed→store pipeline (used by CLI + web)

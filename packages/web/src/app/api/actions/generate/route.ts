@@ -11,7 +11,7 @@ let editSkillsCache: string | null = null;
 
 async function loadSkills(): Promise<string> {
   if (!skillsCache) {
-    const skillsPath = join(process.cwd(), "..", "..", "SKILLS.md");
+    const skillsPath = join(process.cwd(), "..", "..", "CREATE_ACTION_SKILLS.md");
     skillsCache = await readFile(skillsPath, "utf-8");
   }
   return skillsCache;
@@ -19,7 +19,7 @@ async function loadSkills(): Promise<string> {
 
 async function loadEditSkills(): Promise<string> {
   if (!editSkillsCache) {
-    const editPath = join(process.cwd(), "..", "..", "EDIT_SKILLS.md");
+    const editPath = join(process.cwd(), "..", "..", "EDIT_ACTION_SKILLS.md");
     editSkillsCache = await readFile(editPath, "utf-8");
   }
   return editSkillsCache;
