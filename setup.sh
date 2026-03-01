@@ -11,7 +11,7 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 step=0
-total_steps=10
+total_steps=11
 
 progress() {
   ((++step))
@@ -343,7 +343,67 @@ SETTINGS_EOF
   fi
 fi
 
-# ─── 9. Gmail API check ─────────────────────────────────────────────
+# ─── 9. OAuth credentials for multi-account ───────────────────────
+progress "OAuth credentials..."
+
+OAUTH_FILE="$HOME/.email-agent/oauth.json"
+OAUTH_CONFIGURED=false
+
+if [ -f "$OAUTH_FILE" ] && grep -q '"clientId"' "$OAUTH_FILE" 2>/dev/null && grep -q '"clientSecret"' "$OAUTH_FILE" 2>/dev/null; then
+  ok "OAuth credentials already configured"
+  OAUTH_CONFIGURED=true
+else
+  echo -e "  To add Gmail accounts, you need OAuth 2.0 client credentials."
+  echo ""
+  echo -e "  ${BOLD}If you haven't configured the OAuth consent screen yet:${RESET}"
+  echo -e "    1. Go to: ${CYAN}https://console.cloud.google.com/auth/overview?project=${GCP_PROJECT:-YOUR_PROJECT}${RESET}"
+  echo -e "    2. Click ${BOLD}\"Get started\"${RESET} and fill in app name + support email"
+  echo -e "    3. Under Audience, select ${BOLD}\"External\"${RESET} (or \"Internal\" for Workspace orgs)"
+  echo ""
+  echo -e "  ${BOLD}Create OAuth credentials:${RESET}"
+  echo -e "    1. Go to: ${CYAN}https://console.cloud.google.com/apis/credentials?project=${GCP_PROJECT:-YOUR_PROJECT}${RESET}"
+  echo -e "    2. Click ${BOLD}\"Create Credentials\"${RESET} → ${BOLD}\"OAuth client ID\"${RESET}"
+  echo -e "    3. Application type: ${BOLD}\"Web application\"${RESET}"
+  echo -e "    4. Add authorized redirect URIs:"
+  echo -e "         ${CYAN}http://localhost:3847/api/auth/callback${RESET}  (Web UI)"
+  echo -e "         ${CYAN}http://localhost:9876/callback${RESET}            (CLI)"
+  echo -e "    5. Copy the Client ID and Client Secret"
+  echo ""
+  echo -e "  ${DIM}Press Enter to skip (you can configure later).${RESET}"
+  echo ""
+  read -rp "  Enter OAuth Client ID: " OAUTH_CLIENT_ID
+
+  if [ -n "$OAUTH_CLIENT_ID" ]; then
+    echo ""
+    echo -e "  ${DIM}Paste the full secret (GOCSPX-...) or just the part after GOCSPX-${RESET}"
+    read -rp "  Enter OAuth Client Secret: " OAUTH_CLIENT_SECRET
+    echo ""
+
+    # Normalize: prepend GOCSPX- if user only pasted the suffix
+    if [ -n "$OAUTH_CLIENT_SECRET" ] && [[ "$OAUTH_CLIENT_SECRET" != GOCSPX-* ]]; then
+      OAUTH_CLIENT_SECRET="GOCSPX-${OAUTH_CLIENT_SECRET}"
+    fi
+
+    if [ -n "$OAUTH_CLIENT_SECRET" ]; then
+      mkdir -p "$HOME/.email-agent"
+      cat > "$OAUTH_FILE" <<OAUTH_EOF
+{
+  "clientId": "${OAUTH_CLIENT_ID}",
+  "clientSecret": "${OAUTH_CLIENT_SECRET}"
+}
+OAUTH_EOF
+      ok "OAuth credentials saved to ${OAUTH_FILE}"
+      OAUTH_CONFIGURED=true
+    else
+      warn "No secret entered — skipping OAuth setup"
+    fi
+  else
+    warn "Skipped — to configure later, create ~/.email-agent/oauth.json:"
+    echo -e "  ${DIM}{ \"clientId\": \"YOUR_ID\", \"clientSecret\": \"YOUR_SECRET\" }${RESET}"
+  fi
+fi
+
+# ─── 10. Gmail API check ────────────────────────────────────────────
 progress "Gmail API..."
 
 if [ -n "${GCP_PROJECT:-}" ]; then
@@ -376,7 +436,7 @@ else
   warn "No project configured — skipping Gmail API check"
 fi
 
-# ─── 10. Initialize database ─────────────────────────────────────────
+# ─── 11. Initialize database ─────────────────────────────────────────
 progress "Initializing LanceDB database..."
 
 node -e "
@@ -424,6 +484,7 @@ fi
 
 echo ""
 echo -e "${BOLD}Next steps:${RESET}"
+echo -e "  ${CYAN}npx email-agent accounts add${RESET} Add a Gmail account via OAuth"
 echo -e "  ${CYAN}npm run dev${RESET}                 Start web UI + dev servers"
 echo -e "  ${CYAN}npx email-agent fetch${RESET}       Fetch unread emails"
 echo -e "  ${CYAN}npx email-agent serve${RESET}       Start web UI at http://localhost:3847"

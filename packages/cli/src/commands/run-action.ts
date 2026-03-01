@@ -17,7 +17,8 @@ export function registerRunAction(program: Command) {
     .command("run-action <actionId>")
     .description("Run an action on unread emails")
     .option("-l, --limit <n>", "Maximum emails to process", "20")
-    .action(async (actionId: string, options: { limit: string }) => {
+    .option("-a, --account <email>", "Account to run action on")
+    .action(async (actionId: string, options: { limit: string; account?: string }) => {
       const limit = parseInt(options.limit, 10);
 
       await initDb();
@@ -38,7 +39,7 @@ export function registerRunAction(program: Command) {
       const spinner = ora(`Running "${action.name}"...`).start();
 
       try {
-        const emailRecords = await getEmails({ unreadOnly: true, limit });
+        const emailRecords = await getEmails({ unreadOnly: true, limit, accountId: options.account });
         const emails = emailRecords.map((e) => ({
           id: e.id,
           threadId: e.threadId,
@@ -55,7 +56,7 @@ export function registerRunAction(program: Command) {
         }));
 
         const runner = new ActionRunner();
-        const result = await runner.run(action, emails);
+        const result = await runner.run(action, emails, options.account);
 
         if (result.status === "success") {
           spinner.succeed(
@@ -74,7 +75,7 @@ export function registerRunAction(program: Command) {
 
           // Prompt for pending operations
           if (result.pendingOperations?.length) {
-            await promptApplyOperations(result.pendingOperations);
+            await promptApplyOperations(result.pendingOperations, options.account);
           }
         } else {
           spinner.fail(`"${action.name}" failed: ${result.error}`);
@@ -89,6 +90,7 @@ export function registerRunAction(program: Command) {
 
 async function promptApplyOperations(
   operations: GmailOperation[],
+  accountEmail?: string,
 ): Promise<void> {
   const summary = summarizeOperations(operations);
   const summaryStr = Object.entries(summary)
@@ -102,7 +104,7 @@ async function promptApplyOperations(
     const answer = await rl.question("Apply changes to Gmail? [y/N] ");
     if (answer.trim().toLowerCase() === "y") {
       const applySpinner = ora("Applying changes to Gmail...").start();
-      const result = await applyOperations(operations);
+      const result = await applyOperations(operations, accountEmail);
       applySpinner.succeed(
         `Applied ${result.applied} operations` +
           (result.failed > 0 ? chalk.red(`, ${result.failed} failed`) : ""),

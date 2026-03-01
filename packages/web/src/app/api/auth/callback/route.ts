@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const redirectUri = "http://localhost:3847/api/auth/callback";
     const { email } = await exchangeCode(creds, code, redirectUri);
 
-    await addAccount({ email, isDefault: true });
+    await addAccount({ email, isDefault: false });
 
     return NextResponse.redirect(
       new URL("/?account_added=true", request.nextUrl.origin),

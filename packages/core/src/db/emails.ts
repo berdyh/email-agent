@@ -27,11 +27,21 @@ export async function getEmails(options?: {
   if (options?.unreadOnly) {
     query = query.where("isUnread = true");
   }
-  if (options?.limit) {
-    query = query.limit(options.limit);
+
+  const limit = options?.limit ?? 0;
+  const offset = options?.offset ?? 0;
+
+  if (offset > 0) {
+    // Fetch all matching records, sort, then slice — prevents limit+offset from
+    // truncating before sort, which breaks pagination ordering
+    const results = await query.toArray();
+    const emails = results as unknown as EmailRecord[];
+    emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return limit > 0 ? emails.slice(offset, offset + limit) : emails.slice(offset);
   }
-  if (options?.offset) {
-    query = query.offset(options.offset);
+
+  if (limit > 0) {
+    query = query.limit(limit);
   }
   const results = await query.toArray();
   const emails = results as unknown as EmailRecord[];
@@ -65,10 +75,11 @@ export async function searchEmails(
 ): Promise<EmailRecord[]> {
   const db = await getDb();
   const table = await db.openTable(emailsTable);
-  const results = await table.search(queryVector).limit(limit).toArray();
-  let emails = results as unknown as EmailRecord[];
+  let query = table.search(queryVector);
   if (accountId) {
-    emails = emails.filter((e) => e.accountId === accountId);
+    const safeAccountId = accountId.replace(/'/g, "''");
+    query = query.where(`accountId = '${safeAccountId}'`);
   }
-  return emails;
+  const results = await query.limit(limit).toArray();
+  return results as unknown as EmailRecord[];
 }

@@ -81,18 +81,19 @@ export function useDeleteAction() {
 export function useApplyOperations() {
   const queryClient = useQueryClient();
 
-  return useMutation<ActionApplyResultData, Error, GmailOperationItem[]>({
-    mutationFn: async (operations) => {
+  return useMutation<ActionApplyResultData, Error, { operations: GmailOperationItem[]; accountEmail?: string }>({
+    mutationFn: async ({ operations, accountEmail }) => {
       const res = await fetch("/api/gmail/apply-actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operations }),
+        body: JSON.stringify({ operations, accountEmail }),
       });
       if (!res.ok) throw new Error("Failed to apply operations");
       return res.json() as Promise<ActionApplyResultData>;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["emails"] });
+      void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
     },
   });
 }

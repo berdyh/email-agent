@@ -72,17 +72,29 @@ export async function fetchEmails(
   options: FetchOptions,
 ): Promise<GmailMessage[]> {
   const gmail = await createGmailClient(options.accountEmail);
-  const response = await gmail.users.messages.list({
-    userId: "me",
-    q: options.scope === "unread" ? "is:unread" : undefined,
-    maxResults: options.maxResults ?? 50,
-  });
 
-  const messageIds = response.data.messages ?? [];
-  if (messageIds.length === 0) return [];
+  // Collect all message IDs via pagination
+  const allMessageIds: Array<{ id?: string | null }> = [];
+  let pageToken: string | undefined;
+  const pageSize = Math.min(options.maxResults ?? 500, 500); // Gmail API max per page
+
+  do {
+    const response = await gmail.users.messages.list({
+      userId: "me",
+      q: options.scope === "unread" ? "is:unread" : undefined,
+      maxResults: pageSize,
+      pageToken,
+    });
+
+    const ids = response.data.messages ?? [];
+    allMessageIds.push(...ids);
+    pageToken = response.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  if (allMessageIds.length === 0) return [];
 
   const results = await Promise.allSettled(
-    messageIds.map(async ({ id }) => {
+    allMessageIds.map(async ({ id }) => {
       const msg = await gmail.users.messages.get({
         userId: "me",
         id: id!,
@@ -105,7 +117,7 @@ export async function fetchEmails(
 }
 
 export async function fetchUnreadEmails(
-  maxResults = 50,
+  maxResults = 500,
 ): Promise<GmailMessage[]> {
   return fetchEmails({ scope: "unread", maxResults });
 }

@@ -1,5 +1,6 @@
 import { initDb, upsertEmails, generateEmbeddings } from "../db/index.js";
 import { fetchEmails, type FetchOptions } from "./fetcher.js";
+import { resolveAccountEmail } from "./client.js";
 
 export interface SyncResult {
   fetched: number;
@@ -7,6 +8,8 @@ export interface SyncResult {
 
 export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
   await initDb();
+
+  const accountId = await resolveAccountEmail(options.accountEmail);
 
   const emails = await fetchEmails(options);
   if (emails.length === 0) return { fetched: 0 };
@@ -25,7 +28,7 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
 
   const records = emails.map((e, i) => ({
     id: e.id,
-    accountId: options.accountEmail ?? "",
+    accountId,
     threadId: e.threadId,
     from: e.from,
     to: e.to,

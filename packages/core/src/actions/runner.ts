@@ -63,6 +63,7 @@ export class ActionRunner {
   async run(
     action: EmailAction,
     emails: GmailMessage[],
+    accountEmail?: string,
   ): Promise<ActionRunResult> {
     const prompt = buildPrompt(action, emails);
     const emailIds = emails.map((e) => e.id);
@@ -87,7 +88,7 @@ export class ActionRunner {
       if (pendingOps.length > 0) {
         const settings = await loadSettings();
         if (settings.gmail.syncActions) {
-          result.applyResult = await applyOperations(pendingOps);
+          result.applyResult = await applyOperations(pendingOps, accountEmail);
         } else {
           result.pendingOperations = pendingOps;
         }

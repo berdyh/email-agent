@@ -50,7 +50,7 @@ export default function ActionsPage() {
 
   function handleApply() {
     if (!pendingOps) return;
-    applyOps.mutate(pendingOps, {
+    applyOps.mutate({ operations: pendingOps }, {
       onSuccess: (result) => {
         toast.success(`Applied ${result.applied} operations${result.failed ? `, ${result.failed} failed` : ""}`);
         setPendingOps(null);

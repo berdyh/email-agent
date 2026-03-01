@@ -1,8 +1,9 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { Mail, Moon, Sun } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Mail, Moon, Sun, UserPlus } from "lucide-react";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useEmailStore } from "@/store/email-store";
@@ -20,7 +21,7 @@ export function Navbar() {
         <span className="text-lg font-semibold">Email Agent</span>
       </div>
       <div className="ml-auto flex items-center gap-2">
-        {accounts && accounts.length > 0 && (
+        {accounts && accounts.length > 0 ? (
           <Select
             value={activeAccountEmail ?? ""}
             onChange={(e) =>
@@ -36,6 +37,14 @@ export function Navbar() {
               </option>
             ))}
           </Select>
+        ) : (
+          <Link
+            href="/settings"
+            className={buttonVariants({ variant: "outline", size: "sm" }) + " gap-1.5 text-xs"}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Add Account
+          </Link>
         )}
         <Button
           variant="ghost"

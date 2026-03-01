@@ -1,6 +1,7 @@
 "use client";
 
 import { RefreshCw, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import {
@@ -27,7 +28,7 @@ export function MailToolbar() {
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [timeAgo, setTimeAgo] = useState("");
 
-  useAutoFetch(fetchEmails, isPending);
+  useAutoFetch(fetchEmails, isPending, activeAccountEmail ?? undefined);
 
   useEffect(() => {
     if (isSuccess) {
@@ -88,7 +89,22 @@ export function MailToolbar() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => fetchEmails({ scope: fetchScope, accountEmail: activeAccountEmail ?? undefined })}
+          onClick={() =>
+            fetchEmails(
+              { scope: fetchScope, accountEmail: activeAccountEmail ?? undefined },
+              {
+                onError: (err) => {
+                  const msg = err.message.toLowerCase();
+                  const isAuthError = /gcloud|auth|token|enoent/.test(msg);
+                  toast.error(
+                    isAuthError
+                      ? `${err.message}. Go to Settings → Accounts to add a Gmail account.`
+                      : err.message,
+                  );
+                },
+              },
+            )
+          }
           disabled={isPending}
         >
           {isPending ? (
