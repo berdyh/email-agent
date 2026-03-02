@@ -31,6 +31,7 @@ export function useFetchEmails() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["emails"] });
+      void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
     },
   });
 }
@@ -38,6 +39,7 @@ export function useFetchEmails() {
 export function useAutoFetch(
   fetchFn: (params: FetchParams) => void,
   isFetching: boolean,
+  accountEmail?: string,
 ) {
   const { data: settings } = useSettings();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -48,9 +50,9 @@ export function useAutoFetch(
 
   const doFetch = useCallback(() => {
     if (!isFetching) {
-      fetchFn({ scope: fetchScope === "all" ? "all" : "unread" });
+      fetchFn({ scope: fetchScope === "all" ? "all" : "unread", accountEmail });
     }
-  }, [fetchFn, fetchScope, isFetching]);
+  }, [fetchFn, fetchScope, isFetching, accountEmail]);
 
   useEffect(() => {
     if (intervalRef.current) {

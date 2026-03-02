@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as Partial<FetchOptions>;
     const options: FetchOptions = {
       scope: body.scope === "all" ? "all" : "unread",
-      maxResults: body.maxResults ?? 50,
+      maxResults: body.maxResults ?? 500,
       accountEmail: body.accountEmail,
     };
 

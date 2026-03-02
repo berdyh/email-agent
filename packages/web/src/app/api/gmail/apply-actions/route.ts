@@ -4,7 +4,7 @@ import type { GmailOperation } from "@email-agent/core/actions";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = (await request.json()) as { operations: GmailOperation[] };
+    const body = (await request.json()) as { operations: GmailOperation[]; accountEmail?: string };
 
     if (!Array.isArray(body.operations) || body.operations.length === 0) {
       return NextResponse.json(
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await applyOperations(body.operations);
+    const result = await applyOperations(body.operations, body.accountEmail);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

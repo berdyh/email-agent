@@ -17,7 +17,7 @@ export async function GET(
     // Fire-and-forget: mark as read in Gmail + local DB
     if (email.isUnread) {
       void Promise.all([
-        markAsRead(id),
+        markAsRead(id, email.accountId || undefined),
         updateEmailReadStatus(id, false),
       ]).catch(() => {});
     }
@@ -45,9 +45,9 @@ export async function PATCH(
     }
 
     if (isUnread) {
-      await markAsUnread(id);
+      await markAsUnread(id, email.accountId || undefined);
     } else {
-      await markAsRead(id);
+      await markAsRead(id, email.accountId || undefined);
     }
     await updateEmailReadStatus(id, isUnread);
 

@@ -10,14 +10,20 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Loader2, Save } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { useAccounts } from "@/hooks/use-accounts";
+import { useQueryClient } from "@tanstack/react-query";
+import { Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
 
 export default function SettingsPage() {
   const { data: settings, isLoading } = useSettings();
   const updateSettings = useUpdateSettings();
+  const { data: accounts } = useAccounts();
+  const queryClient = useQueryClient();
   const [local, setLocal] = useState<Record<string, unknown>>({});
+  const [accountLoading, setAccountLoading] = useState(false);
 
   useEffect(() => {
     if (settings) setLocal(settings);
@@ -28,6 +34,63 @@ export default function SettingsPage() {
       onSuccess: () => toast.success("Settings saved"),
       onError: (err) => toast.error(err.message),
     });
+  };
+
+  const addAccount = async () => {
+    setAccountLoading(true);
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "add" }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error: string };
+        throw new Error(data.error);
+      }
+      const { authUrl } = (await res.json()) as { authUrl: string };
+      window.location.href = authUrl;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start OAuth flow");
+      setAccountLoading(false);
+    }
+  };
+
+  const setDefaultAccount = async (email: string) => {
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setDefault", email }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error: string };
+        throw new Error(data.error);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      toast.success(`${email} set as default`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set default");
+    }
+  };
+
+  const removeAccount = async (email: string) => {
+    if (!confirm(`Remove account ${email}? This will delete stored tokens.`)) return;
+    try {
+      const res = await fetch("/api/accounts", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error: string };
+        throw new Error(data.error);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      toast.success(`${email} removed`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove account");
+    }
   };
 
   if (isLoading) {
@@ -72,13 +135,76 @@ export default function SettingsPage() {
             </Button>
           </div>
 
-          <Tabs defaultValue="agents">
+          <Tabs defaultValue="accounts">
             <TabsList>
+              <TabsTrigger value="accounts">Accounts</TabsTrigger>
               <TabsTrigger value="agents">Agents</TabsTrigger>
               <TabsTrigger value="prompts">Prompts</TabsTrigger>
               <TabsTrigger value="notifications">Notifications</TabsTrigger>
               <TabsTrigger value="gmail">Gmail</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="accounts" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Gmail Accounts</CardTitle>
+                  <CardDescription>
+                    Manage connected Gmail accounts for email fetching
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {accounts && accounts.length > 0 ? (
+                    accounts.map((account) => (
+                      <div
+                        key={account.email}
+                        className="flex items-center justify-between rounded-md border px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm">{account.email}</span>
+                          {account.isDefault && (
+                            <Badge variant="secondary">Default</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {!account.isDefault && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void setDefaultAccount(account.email)}
+                            >
+                              Set Default
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void removeAccount(account.email)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No accounts configured. Add one to get started.
+                    </p>
+                  )}
+                  <Button
+                    className="mt-2 gap-2"
+                    onClick={() => void addAccount()}
+                    disabled={accountLoading}
+                  >
+                    {accountLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                    Add Account
+                  </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
 
             <TabsContent value="agents" className="space-y-4">
               <Card>

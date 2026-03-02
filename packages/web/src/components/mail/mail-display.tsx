@@ -55,6 +55,7 @@ export function MailDisplay() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["email", selectedEmailId] });
       void queryClient.invalidateQueries({ queryKey: ["emails"] });
+      void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
     },
   });
 

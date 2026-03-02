@@ -1,6 +1,6 @@
 import { google, type gmail_v1 } from "googleapis";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -13,6 +13,14 @@ const BASE_DIR = join(homedir(), ".email-agent");
 const OAUTH_PATH = join(BASE_DIR, "oauth.json");
 const ACCOUNTS_DIR = join(BASE_DIR, "accounts");
 
+function safeAccountDir(email: string): string {
+  const dir = resolve(ACCOUNTS_DIR, email);
+  if (!dir.startsWith(ACCOUNTS_DIR + "/")) {
+    throw new Error(`Invalid account email: path traversal detected`);
+  }
+  return dir;
+}
+
 const OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
@@ -23,7 +31,7 @@ const OAUTH_SCOPES = [
 ];
 
 function tokenPath(email: string): string {
-  return join(ACCOUNTS_DIR, email, "token.json");
+  return join(safeAccountDir(email), "token.json");
 }
 
 // --- OAuth Credentials ---
@@ -54,7 +62,7 @@ export async function getStoredTokens(email: string): Promise<StoredTokens | nul
 }
 
 async function saveTokens(email: string, tokens: StoredTokens): Promise<void> {
-  const dir = join(ACCOUNTS_DIR, email);
+  const dir = safeAccountDir(email);
   await mkdir(dir, { recursive: true });
   await writeFile(tokenPath(email), JSON.stringify(tokens, null, 2));
 }
@@ -173,7 +181,7 @@ export async function removeAccount(email: string): Promise<void> {
 
   // Clean up stored tokens
   try {
-    await rm(join(ACCOUNTS_DIR, email), { recursive: true });
+    await rm(safeAccountDir(email), { recursive: true });
   } catch {
     // Token dir may not exist
   }
