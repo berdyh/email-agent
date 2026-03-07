@@ -38,7 +38,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     ensureLoaded();
-    const body = (await request.json()) as { actionId: string };
+    const body = (await request.json()) as { actionId: string; accountEmail?: string };
     let action = registry.get(body.actionId);
 
     // Fall back to user actions if not found in built-ins
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get unread emails to run the action on
-    const emailRecords = await getEmails({ unreadOnly: true, limit: 20 });
+    const emailRecords = await getEmails({ unreadOnly: true, limit: 20, accountId: body.accountEmail });
     const emails = emailRecords.map((e) => ({
       id: e.id,
       threadId: e.threadId,
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
       snippet: e.snippet,
     }));
 
-    const result = await runner.run(action, emails);
+    const result = await runner.run(action, emails, body.accountEmail);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

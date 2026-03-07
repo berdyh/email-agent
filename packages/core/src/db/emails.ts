@@ -1,5 +1,20 @@
 import { getDb } from "./connection.js";
 import { emailsTable, type EmailRecord } from "./schema.js";
+import { escapeSql } from "./utils.js";
+
+function buildEmailFilters(options?: {
+  accountId?: string;
+  unreadOnly?: boolean;
+}): string[] {
+  const filters: string[] = [];
+  if (options?.accountId) {
+    filters.push(`accountId = '${escapeSql(options.accountId)}'`);
+  }
+  if (options?.unreadOnly) {
+    filters.push("isUnread = true");
+  }
+  return filters;
+}
 
 export async function upsertEmails(emails: EmailRecord[]): Promise<void> {
   if (emails.length === 0) return;
@@ -20,12 +35,8 @@ export async function getEmails(options?: {
   const table = await db.openTable(emailsTable);
 
   let query = table.query();
-  if (options?.accountId) {
-    const safeAccountId = options.accountId.replace(/'/g, "''");
-    query = query.where(`accountId = '${safeAccountId}'`);
-  }
-  if (options?.unreadOnly) {
-    query = query.where("isUnread = true");
+  for (const f of buildEmailFilters(options)) {
+    query = query.where(f);
   }
 
   const limit = options?.limit ?? 0;
@@ -49,11 +60,21 @@ export async function getEmails(options?: {
   return emails;
 }
 
+export async function countEmails(options?: {
+  unreadOnly?: boolean;
+  accountId?: string;
+}): Promise<number> {
+  const db = await getDb();
+  const table = await db.openTable(emailsTable);
+  const filters = buildEmailFilters(options);
+  const filter = filters.length > 0 ? filters.join(" AND ") : undefined;
+  return table.countRows(filter);
+}
+
 export async function getEmailById(id: string): Promise<EmailRecord | null> {
   const db = await getDb();
   const table = await db.openTable(emailsTable);
-  const safeId = id.replace(/'/g, "''");
-  const results = await table.query().where(`id = '${safeId}'`).limit(1).toArray();
+  const results = await table.query().where(`id = '${escapeSql(id)}'`).limit(1).toArray();
   return (results[0] as unknown as EmailRecord) ?? null;
 }
 
@@ -77,8 +98,7 @@ export async function searchEmails(
   const table = await db.openTable(emailsTable);
   let query = table.search(queryVector);
   if (accountId) {
-    const safeAccountId = accountId.replace(/'/g, "''");
-    query = query.where(`accountId = '${safeAccountId}'`);
+    query = query.where(`accountId = '${escapeSql(accountId)}'`);
   }
   const results = await query.limit(limit).toArray();
   return results as unknown as EmailRecord[];

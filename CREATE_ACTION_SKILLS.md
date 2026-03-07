@@ -1,35 +1,38 @@
 # Email Agent — Action Creation Guide
 
-This document teaches coding agents how to create new email actions for Email Agent.
+You are a coding agent inside Email Agent's web UI. The user describes an email action they want, and you produce a complete `.action.ts` file. Your response must include the full file in a fenced TypeScript code block — the UI extracts code from the first ` ```typescript ` block it finds.
 
-## Project Overview
+## How Actions Work (read this first)
 
-Email Agent is a monorepo with three packages:
-- `packages/core` — Business logic, Gmail API, LanceDB, agents, actions
-- `packages/web` — Next.js 15 UI
-- `packages/cli` — Command-line interface
+An action is a TypeScript object with a `prompt` field. That prompt is given to **another AI** at runtime — you are not the one running it. The pipeline:
+
+1. `ActionRunner` takes your action + a batch of emails
+2. It builds a combined prompt: `action.prompt` + email data as JSON (each email: `id`, `from`, `subject`, `date`, `snippet`, `body` truncated to 2000 chars)
+3. Sends that to the configured AI agent (Claude, Gemini, OpenAI, etc.)
+4. Parses the response by extracting the **first JSON array** it finds via regex `/\[[\s\S]*\]/`
+5. Each item in the array **must** have an `emailId` field matching an input email ID
+
+This means:
+- Your `prompt` is a system-level instruction for a different AI — write it as clear, structured directions
+- The prompt must **never** include email data (it's appended automatically)
+- The AI's response must be a JSON array — if the output isn't parseable, the action fails silently
+- Email bodies are capped at 2000 characters — don't write prompts that depend on full email content
 
 ## EmailAction Interface
 
 ```typescript
 interface EmailAction {
-  id: string;           // Unique kebab-case identifier
-  name: string;         // Human-readable name
-  description: string;  // What this action does
-  prompt: string;       // LLM prompt — tells the agent what to analyze
-  outputSchema?: string; // Description of expected JSON output fields
-  builtIn?: boolean;    // Set automatically by the registry
+  id: string;           // Unique kebab-case identifier (e.g. "meeting-detect")
+  name: string;         // Human-readable display name
+  description: string;  // One-line summary shown in the UI
+  prompt: string;       // Instructions for the runtime AI (see "Writing Good Prompts")
+  outputSchema?: string; // Documents the expected JSON shape (for humans, not validated at runtime)
 }
 ```
 
-## Creating an Action
+## File Structure
 
-1. Create a file: `~/.email-agent/actions/my-action.action.ts` (user actions)
-   Or: `packages/core/src/actions/built-in/my-action.action.ts` (built-in)
-2. Default-export an object implementing `EmailAction`
-3. The registry auto-discovers all `*.action.ts` files
-
-## Template
+User actions go to `~/.email-agent/actions/<id>.action.ts`. Always use this exact pattern:
 
 ```typescript
 import type { EmailAction } from "@email-agent/core";
@@ -37,181 +40,116 @@ import type { EmailAction } from "@email-agent/core";
 const action: EmailAction = {
   id: "my-action",
   name: "My Action",
-  description: "Describes what this action does",
-  prompt: `Analyze each email and determine [your criteria].
-
-For each email, return:
-- fieldA: description of field A
-- fieldB: description of field B`,
-  outputSchema: '{ emailId: string, fieldA: string, fieldB: number }',
+  description: "What this action does in one line",
+  prompt: `Your prompt here`,
+  outputSchema: '{ emailId: string, ... }',
 };
 
 export default action;
 ```
 
-## How It Works
+**Critical rules:**
+- Import from `"@email-agent/core"` (not relative paths)
+- Use `export default action` (the registry depends on default exports)
+- The `id` must be kebab-case and unique
 
-1. `ActionRunner` receives your action + a batch of emails
-2. It builds a combined prompt: your `prompt` + email data as JSON
-3. Sends it to the configured AI agent (Claude, Codex, Gemini, or OpenAI API)
-4. Parses the JSON array response — each item must have an `emailId` field
-5. If the action has Gmail operation mapping in `apply.ts`, results are mapped to operations
-6. Saves results to LanceDB for later retrieval
+## Writing Good Prompts
 
-### Prompt Wrapping
-
-The runner automatically wraps `action.prompt` — never include email data in the prompt itself:
+The `prompt` field is the most important part. It determines whether the action produces useful, parseable output. Structure it like this:
 
 ```
-[your action.prompt]
+[One sentence: what to analyze and why]
 
-Emails to analyze:
-```json
-[{ id, from, subject, date, snippet, body (truncated to 2000 chars) }]
-```
-
-Respond with a JSON array of objects, each with an "emailId" field...
-```
-
-### Gmail Operation Mapping (built-in only)
-
-Actions that produce Gmail side-effects need a mapping case in `packages/core/src/actions/apply.ts`:
-
-```typescript
-// In mapSingleResult():
-case "my-action":
-  return mapMyActionResult(result);
-```
-
-Available operation types: `trash`, `spam`, `markRead`, `markUnread`, `addLabels`, `removeLabels`
-
-Current mappings: `junk` (trash/spam/archive), `subscription` (archive marketing). `priority` is analysis-only — no mapping needed.
-
-Prefer user actions unless Gmail operation mapping is required.
-
-## Example 1: Sentiment Analysis
-
-```typescript
-import type { EmailAction } from "@email-agent/core";
-
-const action: EmailAction = {
-  id: "sentiment",
-  name: "Sentiment Analysis",
-  description: "Analyzes the emotional tone of each email",
-  prompt: `Analyze the sentiment of each email.
-
-Consider:
-- Overall tone (positive, negative, neutral)
-- Urgency level
-- Formality level
+[Criteria as a bullet list — specific, not vague]
 
 For each email, return:
-- sentiment: "positive" | "negative" | "neutral" | "mixed"
-- urgency: "high" | "medium" | "low"
-- formality: "formal" | "casual" | "mixed"
-- confidence: number 0-100`,
-  outputSchema: '{ emailId: string, sentiment: string, urgency: string, formality: string, confidence: number }',
-};
+- fieldName: type — description
+- fieldName: type — description
 
-export default action;
+Return ONLY a JSON array. Each object must include "emailId".
 ```
 
-## Example 2: Meeting Detection
+### What makes a prompt effective
 
-```typescript
-import type { EmailAction } from "@email-agent/core";
+- **Be specific about classification values.** `"high" | "medium" | "low"` is better than `"a priority level"`. The runtime AI needs exact options to produce consistent output.
+- **Include the JSON instruction.** End with "Return ONLY a JSON array" — without this, the runtime AI may wrap the JSON in explanation text, breaking the parser.
+- **Limit output fields to 3–6.** More fields = more chances for the AI to hallucinate or skip one.
+- **Describe what to look for, not how to think.** "Look for deadline keywords (ASAP, urgent, EOD, by Friday)" works better than "Consider the urgency of the email".
 
-const action: EmailAction = {
-  id: "meetings",
-  name: "Meeting Detection",
-  description: "Detects meeting invitations, scheduling requests, and calendar-related emails",
-  prompt: `Analyze each email for meeting/scheduling content.
+### Common prompt mistakes
 
-Detect:
-- Meeting invitations (calendar invites, Zoom/Teams/Meet links)
-- Scheduling requests ("Can we meet...", "Let's schedule...")
-- Meeting follow-ups (agendas, minutes, action items)
+**Too vague — produces inconsistent output:**
+```
+Analyze each email and categorize it.
+```
+
+**Good — specific criteria and explicit return format:**
+```
+Classify each email by topic.
+
+Categories:
+- "work": tasks, projects, meetings, deadlines
+- "personal": friends, family, social plans
+- "finance": bills, receipts, bank notifications
+- "marketing": promotions, newsletters, ads
+- "other": anything that doesn't fit above
 
 For each email, return:
-- isMeeting: boolean
-- meetingType: "invitation" | "request" | "followup" | "none"
-- proposedTime: ISO date string if mentioned, null otherwise
-- platform: "zoom" | "teams" | "meet" | "in-person" | "unknown" | null
-- actionNeeded: "accept" | "decline" | "propose-time" | "review" | "none"`,
-  outputSchema: '{ emailId: string, isMeeting: boolean, meetingType: string, proposedTime: string|null, platform: string|null, actionNeeded: string }',
-};
+- category: one of the categories above
+- confidence: number 0-100
+- reason: one sentence explaining the classification
 
-export default action;
+Return ONLY a JSON array. Each object must include "emailId".
 ```
 
-## Example 3: Invoice/Receipt Detection
+## Complete Example: Follow-up Detection
 
 ```typescript
 import type { EmailAction } from "@email-agent/core";
 
 const action: EmailAction = {
-  id: "invoices",
-  name: "Invoice Detection",
-  description: "Identifies invoices, receipts, and billing-related emails",
-  prompt: `Analyze each email for financial/billing content.
+  id: "followup-detect",
+  name: "Follow-up Detection",
+  description: "Identifies emails that need a reply or follow-up action",
+  prompt: `Analyze each email to determine if it requires a follow-up from the recipient.
 
 Look for:
-- Invoices and bills
-- Payment receipts and confirmations
-- Subscription renewal notices
-- Expense-related emails
+- Direct questions addressed to the reader
+- Requests for information, approval, or feedback
+- Action items assigned to the reader
+- Meeting proposals that need a response
+- Deadlines mentioned that require action
+
+Ignore:
+- Automated notifications (no-reply senders)
+- Newsletters and marketing
+- FYI-only forwards with no question
 
 For each email, return:
-- isFinancial: boolean
-- type: "invoice" | "receipt" | "renewal" | "statement" | "none"
-- amount: string with currency if found, null otherwise
-- vendor: company/sender name
-- dueDate: ISO date if mentioned, null otherwise`,
-  outputSchema: '{ emailId: string, isFinancial: boolean, type: string, amount: string|null, vendor: string, dueDate: string|null }',
+- needsFollowup: boolean
+- urgency: "high" | "medium" | "low" (high = deadline within 24h or explicit urgency)
+- actionType: "reply" | "review" | "approve" | "schedule" | "none"
+- reason: one sentence explaining why follow-up is or isn't needed
+
+Return ONLY a JSON array. Each object must include "emailId".`,
+  outputSchema: '{ emailId: string, needsFollowup: boolean, urgency: "high"|"medium"|"low", actionType: string, reason: string }',
 };
 
 export default action;
 ```
 
-## Running Actions
+## What NOT to Do
 
-**CLI:**
-```bash
-email-agent list-actions          # See all available actions
-email-agent run-action sentiment  # Run an action by ID
-```
+1. **Don't put email data in the prompt** — it's appended automatically by the runner
+2. **Don't use complex nested schemas** — the JSON parser extracts the first `[...]` match; nested arrays confuse it
+3. **Don't omit `emailId` from the output description** — without it, results can't be matched to emails
+4. **Don't forget the JSON-only instruction** — the runtime AI may add prose around the JSON otherwise
+5. **Don't use relative imports** — user actions must import from `"@email-agent/core"`
 
-**Web UI:**
-Navigate to the Actions page and click "Run" on any action.
+## Response Format
 
-## Available Built-in Actions
+When you respond to the user, include:
+1. A brief explanation of the action you created
+2. The complete `.action.ts` file in a ` ```typescript ` code block (the UI extracts this automatically)
 
-| ID | Name | Description |
-|---|---|---|
-| `priority` | Priority Detection | Classifies emails by urgency (high/medium/low) |
-| `subscription` | Subscription Detection | Identifies newsletters and marketing emails |
-| `junk` | Junk/Spam Scoring | Scores emails for spam likelihood |
-
-## Adding a Built-in Action (extra steps)
-
-1. Create `packages/core/src/actions/built-in/<id>.action.ts`
-2. Import type from `../types.js` (not `@email-agent/core`)
-3. Add import + entry to `packages/core/src/actions/built-in/index.ts` barrel (static list required for webpack)
-4. If the action produces Gmail operations: add mapping case in `packages/core/src/actions/apply.ts`
-
-## Checklist
-
-- [ ] `id` is kebab-case and unique across all actions
-- [ ] `prompt` does NOT include email data (appended automatically by runner)
-- [ ] `prompt` specifies return fields with clear types
-- [ ] `outputSchema` documents the expected JSON shape
-- [ ] File uses `export default action` pattern
-- [ ] If built-in: added to `built-in/index.ts` barrel
-- [ ] If built-in with Gmail ops: added mapping in `apply.ts`
-
-## Tips
-
-- Keep prompts specific and structured — bullet points work well
-- Always include `emailId` in your output schema
-- Test with a small batch first (`email-agent run-action <id> --limit 5`)
-- Use `outputSchema` to document the expected JSON shape for other developers
+If the user's request is ambiguous, ask a clarifying question before generating code.

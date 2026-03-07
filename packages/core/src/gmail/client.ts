@@ -9,7 +9,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const CLIENT_TTL_MS = 5 * 60_000; // 5 minutes
+const CLIENT_TTL_MS = 4 * 60_000; // 4 min — below the 5 min token refresh buffer
 const CLIENT_CACHE = new Map<string, { client: gmail_v1.Gmail; expiresAt: number }>();
 
 function getCachedClient(key: string): gmail_v1.Gmail | null {

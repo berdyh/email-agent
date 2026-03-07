@@ -43,12 +43,12 @@ export function useActions() {
 export function useRunAction() {
   const queryClient = useQueryClient();
 
-  return useMutation<ActionResult, Error, { actionId: string }>({
-    mutationFn: async ({ actionId }): Promise<ActionResult> => {
+  return useMutation<ActionResult, Error, { actionId: string; accountEmail?: string }>({
+    mutationFn: async ({ actionId, accountEmail }): Promise<ActionResult> => {
       const res = await fetch("/api/actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actionId }),
+        body: JSON.stringify({ actionId, accountEmail }),
       });
       if (!res.ok) throw new Error("Failed to run action");
       return res.json() as Promise<ActionResult>;

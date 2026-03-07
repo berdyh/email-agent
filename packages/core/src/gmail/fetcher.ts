@@ -73,10 +73,11 @@ export async function fetchEmails(
 ): Promise<GmailMessage[]> {
   const gmail = await createGmailClient(options.accountEmail);
 
-  // Collect all message IDs via pagination
+  // Collect message IDs via pagination, capped at maxResults
+  const totalLimit = options.maxResults ?? 500;
   const allMessageIds: Array<{ id?: string | null }> = [];
   let pageToken: string | undefined;
-  const pageSize = Math.min(options.maxResults ?? 500, 500); // Gmail API max per page
+  const pageSize = Math.min(totalLimit, 500); // Gmail API max per page
 
   do {
     const response = await gmail.users.messages.list({
@@ -88,8 +89,15 @@ export async function fetchEmails(
 
     const ids = response.data.messages ?? [];
     allMessageIds.push(...ids);
+
+    if (allMessageIds.length >= totalLimit) break;
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
+
+  // Trim to exact cap in case the last page pushed us over
+  if (allMessageIds.length > totalLimit) {
+    allMessageIds.length = totalLimit;
+  }
 
   if (allMessageIds.length === 0) return [];
 

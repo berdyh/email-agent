@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AccountConfig } from "../config/types.js";
 import type { OAuthCredentials, StoredTokens } from "./account-types.js";
+import { resetGmailClient } from "./client.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -178,6 +179,7 @@ export async function removeAccount(email: string): Promise<void> {
   }
 
   await saveSettings({ ...settings, accounts });
+  resetGmailClient();
 
   // Clean up stored tokens
   try {
@@ -202,6 +204,7 @@ export async function setDefaultAccount(email: string): Promise<void> {
   }
 
   await saveSettings({ ...settings, accounts });
+  resetGmailClient();
 }
 
 // --- Gmail Client Creation ---

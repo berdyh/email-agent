@@ -47,7 +47,7 @@ packages/
 
 ## Key Patterns
 
-- **Multi-account Gmail**: OAuth2 per-account auth in `gmail/account-manager.ts`, tokens at `~/.email-agent/accounts/{email}/token.json`, OAuth creds at `~/.email-agent/oauth.json`. `client.ts` routing: explicit account → default account → gcloud ADC fallback. `accountEmail?: string` threaded through all Gmail operations.
+- **Multi-account Gmail**: OAuth2 per-account auth in `gmail/account-manager.ts`, tokens at `~/.email-agent/accounts/{email}/token.json`, OAuth creds at `~/.email-agent/oauth.json`. `client.ts` routing: explicit account → default account → gcloud ADC fallback. `accountEmail?: string` threaded through all Gmail operations. Account removal/default-change calls `resetGmailClient()` to invalidate cached clients.
 - **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
@@ -96,6 +96,8 @@ packages/
 - DB record interfaces need `[key: string]: unknown` index signatures for `table.add()`
 - Adding columns to existing tables: check schema in `initDb()`, drop+recreate if column missing (LanceDB has no ALTER TABLE)
 - `emails` table has `accountId` column — must be included in all insert records
+- All `.where()` string interpolation must use `escapeSql()` from `db/utils.ts` — LanceDB has no parameterized queries
+- `countEmails` uses `table.countRows(filter)` (single combined string) vs `getEmails` which chains `.where()` — `buildEmailFilters()` in `emails.ts` bridges both patterns
 
 ### Web (Next.js)
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`
@@ -104,7 +106,7 @@ packages/
 - `packages/web/next.config.ts` has `outputFileTracingRoot` set to monorepo root — prevents Next.js from walking up to stray lockfiles in parent directories
 - `fetch().json()` needs explicit return type annotations with strict TS + TanStack Query generics
 - `Button` component is a plain `forwardRef`, NOT Radix Slot-based — does NOT support `asChild`. To style a `<Link>` as a button, use `buttonVariants()` from `@/components/ui/button` on the Link's `className`
-- `fetcher.ts` paginates Gmail `messages.list` via `nextPageToken` loop — don't add a fixed `maxResults` cap without pagination
+- `fetcher.ts` paginates Gmail `messages.list` via `nextPageToken` loop, capped at `maxResults` (default 500) — breaks early and trims to exact limit
 - New TanStack Query keys must be invalidated in ALL relevant mutation `onSuccess` callbacks — check `use-fetch-emails.ts`, `mail-display.tsx`, `use-actions.ts`
 
 ### CLI

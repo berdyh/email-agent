@@ -1,0 +1,96 @@
+{
+  "skill_name": "action-skills",
+  "evals": [
+    {
+      "id": 1,
+      "name": "vague-request-create",
+      "skill": "create",
+      "prompt": "Create an action that detects urgent emails",
+      "expected_output": "A complete .action.ts file with specific urgency criteria (not vague), explicit classification values in the prompt, JSON array instruction, correct import from @email-agent/core, and export default",
+      "assertions": [
+        { "name": "has-typescript-code-block", "check": "Response contains a ```typescript code block" },
+        { "name": "correct-import", "check": "Code imports from '@email-agent/core' (not relative path)" },
+        { "name": "has-export-default", "check": "Code uses 'export default action' pattern" },
+        { "name": "has-emailId-in-schema", "check": "outputSchema includes 'emailId: string'" },
+        { "name": "prompt-has-json-instruction", "check": "The prompt field ends with or contains instruction to return JSON array" },
+        { "name": "prompt-has-specific-criteria", "check": "The prompt lists specific urgency indicators (not just 'analyze urgency')" },
+        { "name": "prompt-no-email-data", "check": "The prompt field does not contain sample email data" },
+        { "name": "id-is-kebab-case", "check": "The id field is kebab-case" }
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "complex-schema-create",
+      "skill": "create",
+      "prompt": "I want an action that finds emails with attachments and categorizes them by file type, tells me the sender reputation, checks if it might be malware, and also estimates the file size and gives me a summary of what the attachment probably contains based on the email context",
+      "expected_output": "A complete .action.ts file that handles the complex request but keeps the schema manageable (3-6 fields, no nested objects/arrays). Should prioritize the most useful fields rather than trying to include everything.",
+      "assertions": [
+        { "name": "has-typescript-code-block", "check": "Response contains a ```typescript code block" },
+        { "name": "correct-import", "check": "Code imports from '@email-agent/core'" },
+        { "name": "has-export-default", "check": "Code uses 'export default action'" },
+        { "name": "reasonable-field-count", "check": "outputSchema has 3-7 fields (not 8+)" },
+        { "name": "no-nested-arrays", "check": "outputSchema does not contain nested arrays or deeply nested objects" },
+        { "name": "prompt-has-json-instruction", "check": "The prompt contains instruction to return JSON array" },
+        { "name": "has-emailId-in-schema", "check": "outputSchema includes 'emailId'" }
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "casual-phishing-create",
+      "skill": "create",
+      "prompt": "make something that scores how likely an email is to be a phishing attempt. like check for suspicious links, urgency tactics, impersonation, that kind of stuff",
+      "expected_output": "A complete .action.ts file for phishing detection with specific signal criteria, a numeric score, and clear classification values. Should handle casual tone gracefully.",
+      "assertions": [
+        { "name": "has-typescript-code-block", "check": "Response contains a ```typescript code block" },
+        { "name": "correct-import", "check": "Code imports from '@email-agent/core'" },
+        { "name": "has-export-default", "check": "Code uses 'export default action'" },
+        { "name": "prompt-has-specific-signals", "check": "The prompt lists specific phishing signals (links, urgency, impersonation, etc.)" },
+        { "name": "has-numeric-score", "check": "Output includes a numeric score or confidence field" },
+        { "name": "prompt-has-json-instruction", "check": "The prompt contains instruction to return JSON array" },
+        { "name": "has-emailId-in-schema", "check": "outputSchema includes 'emailId'" },
+        { "name": "valid-typescript", "check": "The generated code is syntactically valid TypeScript" }
+      ],
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "add-field-edit",
+      "skill": "edit",
+      "prompt": "Add a 'tone' field that captures whether the email tone is friendly, neutral, or hostile",
+      "currentCode": "import type { EmailAction } from \"@email-agent/core\";\n\nconst action: EmailAction = {\n  id: \"sentiment\",\n  name: \"Sentiment Analysis\",\n  description: \"Analyzes the emotional tone of each email\",\n  prompt: `Analyze the sentiment of each email.\n\nConsider:\n- Overall tone (positive, negative, neutral)\n- Urgency level\n\nFor each email, return:\n- sentiment: \"positive\" | \"negative\" | \"neutral\" | \"mixed\"\n- urgency: \"high\" | \"medium\" | \"low\"\n\nReturn ONLY a JSON array. Each object must include \"emailId\".`,\n  outputSchema: '{ emailId: string, sentiment: string, urgency: string }',\n};\n\nexport default action;",
+      "expected_output": "The same action with 'tone' field added to both prompt and outputSchema. All other fields preserved. id unchanged.",
+      "assertions": [
+        { "name": "has-typescript-code-block", "check": "Response contains a ```typescript code block" },
+        { "name": "id-preserved", "check": "The id is still 'sentiment'" },
+        { "name": "original-fields-kept", "check": "Both 'sentiment' and 'urgency' fields are still in the prompt" },
+        { "name": "tone-field-in-prompt", "check": "The prompt's return section includes a 'tone' field with friendly/neutral/hostile values" },
+        { "name": "tone-field-in-schema", "check": "outputSchema includes 'tone'" },
+        { "name": "prompt-has-json-instruction", "check": "The prompt still contains JSON array instruction" },
+        { "name": "correct-import", "check": "Import is from '@email-agent/core'" },
+        { "name": "has-export-default", "check": "Code uses 'export default action'" }
+      ],
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "change-purpose-edit",
+      "skill": "edit",
+      "prompt": "Actually, change this to detect meeting-related emails instead of sentiment. Keep the same id though.",
+      "currentCode": "import type { EmailAction } from \"@email-agent/core\";\n\nconst action: EmailAction = {\n  id: \"sentiment\",\n  name: \"Sentiment Analysis\",\n  description: \"Analyzes the emotional tone of each email\",\n  prompt: `Analyze the sentiment of each email.\n\nConsider:\n- Overall tone (positive, negative, neutral)\n- Urgency level\n\nFor each email, return:\n- sentiment: \"positive\" | \"negative\" | \"neutral\" | \"mixed\"\n- urgency: \"high\" | \"medium\" | \"low\"\n\nReturn ONLY a JSON array. Each object must include \"emailId\".`,\n  outputSchema: '{ emailId: string, sentiment: string, urgency: string }',\n};\n\nexport default action;",
+      "expected_output": "Complete rewrite of name, description, prompt, outputSchema for meeting detection. The id must remain 'sentiment' as user requested. Import and export pattern preserved.",
+      "assertions": [
+        { "name": "has-typescript-code-block", "check": "Response contains a ```typescript code block" },
+        { "name": "id-preserved", "check": "The id is still 'sentiment'" },
+        { "name": "name-changed", "check": "The name is no longer 'Sentiment Analysis'" },
+        { "name": "description-changed", "check": "The description references meetings, not sentiment" },
+        { "name": "prompt-about-meetings", "check": "The prompt analyzes for meeting/scheduling content" },
+        { "name": "schema-updated", "check": "outputSchema no longer has 'sentiment' or 'urgency' fields, has meeting-related fields" },
+        { "name": "prompt-has-json-instruction", "check": "The prompt contains JSON array instruction" },
+        { "name": "correct-import", "check": "Import is from '@email-agent/core'" }
+      ],
+      "files": []
+    }
+  ]
+}

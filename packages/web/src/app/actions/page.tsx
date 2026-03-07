@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ActionChatCard } from "@/components/actions/action-chat-card";
 import { AppendActionCard } from "@/components/actions/append-action-card";
 import { useActionChatStore } from "@/store/action-chat-store";
+import { useEmailStore } from "@/store/email-store";
 
 function formatOperationSummary(operations: GmailOperationItem[]): string {
   const counts: Record<string, number> = {};
@@ -35,6 +36,7 @@ export default function ActionsPage() {
   const deleteAction = useDeleteAction();
   const applyOps = useApplyOperations();
   const { isOpen, expandedCardId, openEdit } = useActionChatStore();
+  const accountEmail = useEmailStore((s) => s.activeAccountEmail) ?? undefined;
   const [pendingOps, setPendingOps] = useState<GmailOperationItem[] | null>(null);
 
   function handleDelete(filename: string, name: string) {
@@ -50,7 +52,7 @@ export default function ActionsPage() {
 
   function handleApply() {
     if (!pendingOps) return;
-    applyOps.mutate({ operations: pendingOps }, {
+    applyOps.mutate({ operations: pendingOps, accountEmail }, {
       onSuccess: (result) => {
         toast.success(`Applied ${result.applied} operations${result.failed ? `, ${result.failed} failed` : ""}`);
         setPendingOps(null);
@@ -144,7 +146,7 @@ export default function ActionsPage() {
                         disabled={runAction.isPending}
                         onClick={() => {
                           runAction.mutate(
-                            { actionId: action.id },
+                            { actionId: action.id, accountEmail },
                             {
                               onSuccess: (result) => {
                                 if (result.status === "success") {
