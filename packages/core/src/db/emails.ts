@@ -8,10 +8,10 @@ function buildEmailFilters(options?: {
 }): string[] {
   const filters: string[] = [];
   if (options?.accountId) {
-    filters.push(`accountId = '${escapeSql(options.accountId)}'`);
+    filters.push(`\`accountId\` = '${escapeSql(options.accountId)}'`);
   }
   if (options?.unreadOnly) {
-    filters.push("isUnread = true");
+    filters.push("`isUnread` = true");
   }
   return filters;
 }
@@ -98,7 +98,7 @@ export async function searchEmails(
   const table = await db.openTable(emailsTable);
   let query = table.search(queryVector);
   if (accountId) {
-    query = query.where(`accountId = '${escapeSql(accountId)}'`);
+    query = query.where(`\`accountId\` = '${escapeSql(accountId)}'`);
   }
   const results = await query.limit(limit).toArray();
   return results as unknown as EmailRecord[];

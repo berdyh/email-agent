@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getEmails } from "@email-agent/core/db";
+import { getEmails, initDb } from "@email-agent/core/db";
 
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
   const accountId = params.get("accountId") ?? undefined;
 
   try {
+    await initDb();
     const emails = await getEmails({ unreadOnly, limit, offset, accountId });
     return NextResponse.json(emails);
   } catch (err) {

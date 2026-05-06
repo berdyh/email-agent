@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getActionResults } from "@email-agent/core/db";
+import { getActionResults, initDb } from "@email-agent/core/db";
 
 export async function GET(
   _request: NextRequest,
@@ -8,6 +8,7 @@ export async function GET(
   const { id } = await params;
 
   try {
+    await initDb();
     const results = await getActionResults({ actionId: id, limit: 50 });
     return NextResponse.json(results);
   } catch (err) {

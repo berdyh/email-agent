@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { getEmails } from "@email-agent/core/db";
+import { getEmails, initDb } from "@email-agent/core/db";
 import { generateDigest } from "@email-agent/core/analysis";
 
 export async function POST() {
   try {
+    await initDb();
     const emailRecords = await getEmails({ limit: 100 });
     const emails = emailRecords.map((e) => ({
       id: e.id,

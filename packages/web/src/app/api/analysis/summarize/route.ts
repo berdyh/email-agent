@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getEmailById } from "@email-agent/core/db";
+import { getEmailById, initDb } from "@email-agent/core/db";
 import { summarizeEmail } from "@email-agent/core/analysis";
 
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as { emailId: string };
+    await initDb();
     const email = await getEmailById(body.emailId);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });

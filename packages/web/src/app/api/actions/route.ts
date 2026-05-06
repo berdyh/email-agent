@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ActionRegistry, ActionRunner, builtInActions, listUserActions, loadUserAction } from "@email-agent/core/actions";
-import { getEmails } from "@email-agent/core/db";
+import { getEmails, initDb } from "@email-agent/core/db";
 
 const registry = new ActionRegistry();
 const runner = new ActionRunner();
@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get unread emails to run the action on
+    await initDb();
     const emailRecords = await getEmails({ unreadOnly: true, limit: 20, accountId: body.accountEmail });
     const emails = emailRecords.map((e) => ({
       id: e.id,

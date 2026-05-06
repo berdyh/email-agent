@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getEmailById, updateEmailReadStatus } from "@email-agent/core/db";
+import { getEmailById, initDb, updateEmailReadStatus } from "@email-agent/core/db";
 import { markAsRead, markAsUnread } from "@email-agent/core/gmail";
 
 export async function GET(
@@ -9,6 +9,7 @@ export async function GET(
   const { id } = await params;
 
   try {
+    await initDb();
     const email = await getEmailById(id);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });
@@ -39,6 +40,7 @@ export async function PATCH(
     const body = (await request.json()) as { isUnread: boolean };
     const { isUnread } = body;
 
+    await initDb();
     const email = await getEmailById(id);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });
