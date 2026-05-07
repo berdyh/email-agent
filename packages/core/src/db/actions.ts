@@ -18,7 +18,7 @@ export async function getActionResults(options?: {
   const table = await db.openTable(actionResultsTable);
   let query = table.query();
   if (options?.actionId) {
-    query = query.where(`actionId = '${escapeSql(options.actionId)}'`);
+    query = query.where(`\`actionId\` = '${escapeSql(options.actionId)}'`);
   }
   if (options?.limit) {
     query = query.limit(options.limit);
