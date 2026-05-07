@@ -137,6 +137,8 @@ const action: EmailAction = {
 export default action;
 ```
 
+User actions are auto-discovered and run from either the CLI (`npx email-agent run-action <id>`) or the web `/actions` page alongside built-ins.
+
 See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creation guide with examples, and [EDIT_ACTION_SKILLS.md](EDIT_ACTION_SKILLS.md) for modifying existing actions.
 
 ### Built-in Actions

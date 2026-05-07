@@ -97,11 +97,13 @@ packages/
 - Adding columns to existing tables: check schema in `initDb()`, drop+recreate if column missing (LanceDB has no ALTER TABLE)
 - `emails` table has `accountId` column — must be included in all insert records
 - All `.where()` string interpolation must use `escapeSql()` from `db/utils.ts` — LanceDB has no parameterized queries
+- LanceDB's DataFusion SQL parser folds unquoted identifiers to lowercase — wrap camelCase columns in backticks (e.g. `` `actionId` = '...' ``) or queries fail with `No field named actionid`. See `emails.ts` for the convention
 - `countEmails` uses `table.countRows(filter)` (single combined string) vs `getEmails` which chains `.where()` — `buildEmailFilters()` in `emails.ts` bridges both patterns
 
 ### Web (Next.js)
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`
-- Dynamic filesystem patterns (`readdir`, `import.meta.url` dirs, dynamic `import()`) in core don't work in webpack — use static imports in web routes (e.g. `ActionRegistry.loadStatic()`)
+- Dynamic filesystem patterns (`readdir`, `import.meta.url` dirs) in core don't work in webpack — use static imports in web routes (e.g. `ActionRegistry.loadStatic()`)
+- For runtime `import()` of files outside the bundle (e.g. user plugins in `~/.email-agent/actions/`), use the `new Function("p", "return import(p)")` escape hatch — webpack can't statically trace it, so Node's native loader handles the call. See `loadUserAction()` in `actions/user-actions.ts`. Without this, the import silently fails inside webpack and the route returns 404
 - `packages/web/package-lock.json` is a **symlink** to `../../package-lock.json` — do NOT delete it. Next.js uses it to detect npm as the package manager; without it, it falls back to globally-installed pnpm and fails with `ENOWORKSPACES`
 - `packages/web/next.config.ts` has `outputFileTracingRoot` set to monorepo root — prevents Next.js from walking up to stray lockfiles in parent directories
 - `fetch().json()` needs explicit return type annotations with strict TS + TanStack Query generics
