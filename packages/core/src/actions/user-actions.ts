@@ -73,6 +73,10 @@ export async function deleteUserAction(filename: string): Promise<void> {
   await unlink(filePath);
 }
 
+// Bypass webpack's static analysis of dynamic import — defers to Node's native
+// loader so .action.ts files can be imported at runtime from outside the bundle.
+const nativeImport = new Function("p", "return import(p)") as (p: string) => Promise<unknown>;
+
 /** Dynamic-import a single user action by ID (server-side only). */
 export async function loadUserAction(id: string): Promise<EmailAction | undefined> {
   let entries: string[];
@@ -91,7 +95,7 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
       if (fileId !== id) continue;
 
       const fileUrl = pathToFileURL(join(ACTIONS_DIR, entry));
-      const mod = (await import(fileUrl.href)) as {
+      const mod = (await nativeImport(fileUrl.href)) as {
         default?: EmailAction;
         action?: EmailAction;
       };
