@@ -7,23 +7,29 @@ import {
   getOAuthCredentials,
   generateAuthUrl,
 } from "@email-agent/core/gmail";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseAccountDeleteRequest,
+  parseAccountPostRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 export async function GET() {
   try {
     const accounts = await listAccounts();
     return NextResponse.json(accounts);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to load accounts");
   }
 }
 
 export async function POST(request: NextRequest) {
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
+
   try {
-    const body = (await request.json()) as {
-      action: string;
-      email?: string;
-    };
+    const body = parseAccountPostRequest(await request.json());
 
     if (body.action === "add") {
       const creds = await getOAuthCredentials();
@@ -42,41 +48,32 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === "setDefault") {
-      if (!body.email) {
-        return NextResponse.json(
-          { error: "email is required" },
-          { status: 400 },
-        );
-      }
       await setDefaultAccount(body.email);
       return NextResponse.json({ ok: true });
     }
 
-    return NextResponse.json(
-      { error: `Unknown action: ${body.action}` },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to update account");
   }
 }
 
 export async function DELETE(request: NextRequest) {
-  try {
-    const body = (await request.json()) as { email: string };
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
 
-    if (!body.email) {
-      return NextResponse.json(
-        { error: "email is required" },
-        { status: 400 },
-      );
-    }
+  try {
+    const body = parseAccountDeleteRequest(await request.json());
 
     await removeAccount(body.email);
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to remove account");
   }
 }

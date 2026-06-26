@@ -1,36 +1,45 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { listSnapshots, restoreSnapshot } from "@email-agent/core/actions";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseSnapshotRestoreRequest,
+  parseUserActionDeleteRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 export async function GET(request: NextRequest) {
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
+
   try {
-    const filename = request.nextUrl.searchParams.get("filename");
-    if (!filename) {
-      return NextResponse.json({ error: "filename query param is required" }, { status: 400 });
-    }
+    const filename = parseUserActionDeleteRequest({
+      filename: request.nextUrl.searchParams.get("filename"),
+    }).filename;
 
     const snapshots = await listSnapshots(filename);
     return NextResponse.json(snapshots);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to list action snapshots");
   }
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = (await request.json()) as { snapshotFilename: string; originalFilename: string };
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
 
-    if (!body.snapshotFilename || !body.originalFilename) {
-      return NextResponse.json(
-        { error: "snapshotFilename and originalFilename are required" },
-        { status: 400 },
-      );
-    }
+  try {
+    const body = parseSnapshotRestoreRequest(await request.json());
 
     await restoreSnapshot(body.snapshotFilename, body.originalFilename);
     return NextResponse.json({ success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to restore action snapshot");
   }
 }

@@ -2,6 +2,12 @@ import { type NextRequest } from "next/server";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentRouter } from "@email-agent/core/agents";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseActionGenerateRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 const router = new AgentRouter();
 
@@ -25,17 +31,6 @@ async function loadEditSkills(): Promise<string> {
   return editSkillsCache;
 }
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface GenerateRequest {
-  messages: ChatMessage[];
-  mode: "create" | "edit";
-  currentCode?: string;
-}
-
 const encoder = new TextEncoder();
 
 function sseEvent(event: string, data: unknown): Uint8Array {
@@ -43,15 +38,11 @@ function sseEvent(event: string, data: unknown): Uint8Array {
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = (await request.json()) as GenerateRequest;
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
 
-    if (!body.messages?.length) {
-      return new Response(
-        JSON.stringify({ error: "messages are required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
-    }
+  try {
+    const body = parseActionGenerateRequest(await request.json());
 
     // Build system prompt based on mode
     let systemPrompt: string;
@@ -96,17 +87,16 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
+      console.error(err);
       return new Response(
-        JSON.stringify({ error: message }),
+        JSON.stringify({ error: "Failed to generate action" }),
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to generate action");
   }
 }

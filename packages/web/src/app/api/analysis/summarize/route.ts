@@ -1,8 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEmailById, initDb } from "@email-agent/core/db";
 import { summarizeEmail } from "@email-agent/core/analysis";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+} from "@/modules/api/validation";
 
 export async function POST(request: NextRequest) {
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
+
   try {
     const body = (await request.json()) as { emailId: string };
     await initDb();
@@ -28,7 +35,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(summary);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to summarize email");
   }
 }

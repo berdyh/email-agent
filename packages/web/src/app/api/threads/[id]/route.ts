@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getThreadById, initDb } from "@email-agent/core/db";
+import { internalErrorResponse } from "@/modules/api/validation";
 
 export async function GET(
   _request: NextRequest,
@@ -15,7 +16,6 @@ export async function GET(
     }
     return NextResponse.json(thread);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to load thread");
   }
 }

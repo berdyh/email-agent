@@ -4,6 +4,7 @@ import {
   getOAuthCredentials,
   addAccount,
 } from "@email-agent/core/gmail";
+import { internalErrorResponse } from "@/modules/api/validation";
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
@@ -33,7 +34,6 @@ export async function GET(request: NextRequest) {
       new URL("/?account_added=true", request.nextUrl.origin),
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "OAuth callback failed");
   }
 }

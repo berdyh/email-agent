@@ -1,0 +1,328 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseActionGenerateRequest,
+  parseActionRunRequest,
+  parseAccountDeleteRequest,
+  parseAccountPostRequest,
+  parseApplyActionsRequest,
+  parseEmailListQuery,
+  parseEmailReadStatusRequest,
+  parseSettingsUpdateRequest,
+  parseSnapshotRestoreRequest,
+  parseFetchEmailsRequest,
+  parseUserActionSaveRequest,
+  sanitizeSettingsForResponse,
+} from "./validation.js";
+
+describe("web API validation", () => {
+  it("normalizes fetch requests and clamps invalid scope to unread", () => {
+    assert.deepEqual(parseFetchEmailsRequest({ scope: "all", maxResults: 25 }), {
+      scope: "all",
+      maxResults: 25,
+      accountEmail: undefined,
+    });
+    assert.equal(parseFetchEmailsRequest({ scope: "unknown" }).scope, "unread");
+  });
+
+  it("rejects invalid fetch limits", () => {
+    assert.throws(() => parseFetchEmailsRequest({ maxResults: 0 }), /maxResults/);
+    assert.throws(() => parseFetchEmailsRequest({ maxResults: 1001 }), /maxResults/);
+  });
+
+  it("validates action generation conversations", () => {
+    const parsed = parseActionGenerateRequest({
+      mode: "edit",
+      currentCode: "const action = {};",
+      messages: [{ role: "user", content: "Add a tone field" }],
+    });
+
+    assert.equal(parsed.mode, "edit");
+    assert.equal(parsed.messages[0]?.role, "user");
+  });
+
+  it("normalizes optional action generation fields", () => {
+    const parsed = parseActionGenerateRequest({
+      mode: "create",
+      currentCode: "",
+      messages: [{ role: "assistant", content: "draft" }],
+    });
+
+    assert.equal(parsed.currentCode, undefined);
+    assert.equal(parsed.messages[0]?.role, "assistant");
+  });
+
+  it("rejects invalid action generation mode and message roles", () => {
+    assert.throws(
+      () => parseActionGenerateRequest({ mode: "delete", messages: [] }),
+      /mode/,
+    );
+    assert.throws(
+      () =>
+        parseActionGenerateRequest({
+          mode: "create",
+          messages: [{ role: "system", content: "bad" }],
+        }),
+      /role/,
+    );
+  });
+
+  it("validates action run and save requests", () => {
+    assert.deepEqual(parseActionRunRequest({ actionId: "priority" }), {
+      actionId: "priority",
+      accountEmail: undefined,
+    });
+    assert.equal(
+      parseUserActionSaveRequest({
+        filename: "custom.action.js",
+        content: "export default action;",
+      }).filename,
+      "custom.action.js",
+    );
+    assert.throws(
+      () => parseUserActionSaveRequest({ filename: "../custom.action.ts", content: "x" }),
+      /filename/,
+    );
+  });
+
+  it("validates email list query parameters", () => {
+    assert.deepEqual(
+      parseEmailListQuery(new URLSearchParams("unreadOnly=true&limit=10&offset=5")),
+      {
+        unreadOnly: true,
+        limit: 10,
+        offset: 5,
+        accountId: undefined,
+      },
+    );
+    assert.throws(() => parseEmailListQuery(new URLSearchParams("limit=abc")), /limit/);
+  });
+
+  it("validates apply-actions and snapshot restore requests", () => {
+    assert.equal(
+      parseApplyActionsRequest({
+        operations: [{ emailId: "m1", type: "trash" }],
+      }).operations[0]?.type,
+      "trash",
+    );
+    assert.equal(
+      parseSnapshotRestoreRequest({
+        snapshotFilename: "custom.action.ts.2026-06-26T10-00-00-000Z.ts",
+        originalFilename: "custom.action.ts",
+      }).originalFilename,
+      "custom.action.ts",
+    );
+    assert.throws(() => parseApplyActionsRequest({ operations: [] }), /operations/);
+    assert.throws(
+      () => parseApplyActionsRequest({ operations: [{ emailId: "m1", type: "archive" }] }),
+      /type/,
+    );
+    assert.throws(
+      () =>
+        parseApplyActionsRequest({
+          operations: [{ emailId: "m1", type: "addLabels", labelIds: "INBOX" }],
+        }),
+      /labelIds/,
+    );
+    assert.throws(
+      () =>
+        parseSnapshotRestoreRequest({
+          snapshotFilename: "../custom.action.ts.2026-06-26T10-00-00-000Z.ts",
+          originalFilename: "custom.action.ts",
+        }),
+      /snapshotFilename/,
+    );
+  });
+
+  it("validates account and read-status mutations", () => {
+    assert.deepEqual(parseAccountPostRequest({ action: "add" }), { action: "add" });
+    assert.deepEqual(parseAccountPostRequest({ action: "setDefault", email: "me@example.com" }), {
+      action: "setDefault",
+      email: "me@example.com",
+    });
+    assert.deepEqual(parseAccountDeleteRequest({ email: "me@example.com" }), {
+      email: "me@example.com",
+    });
+    assert.deepEqual(parseEmailReadStatusRequest({ isUnread: true }), {
+      isUnread: true,
+    });
+    assert.throws(() => parseAccountPostRequest({ action: "setDefault" }), /email/);
+    assert.throws(() => parseEmailReadStatusRequest({ isUnread: "false" }), /isUnread/);
+  });
+
+  it("accepts only object settings updates", () => {
+    assert.deepEqual(parseSettingsUpdateRequest({ gmail: { syncActions: true } }), {
+      gmail: { syncActions: true },
+    });
+    assert.throws(() => parseSettingsUpdateRequest([]), /object/);
+    assert.throws(() => parseSettingsUpdateRequest({ unknown: true }), /Unknown setting/);
+    assert.throws(() => parseSettingsUpdateRequest({ gmail: { syncActions: "yes" } }), /syncActions/);
+  });
+
+  it("validates a full settings update shape", () => {
+    const settings = parseSettingsUpdateRequest({
+      agentMode: "hybrid",
+      preferredAgent: "codex",
+      gcp: {
+        projectId: "project",
+        pubsubTopic: "topic",
+        pubsubSubscription: "sub",
+        watchExpiration: "2026-06-26T12:00:00Z",
+      },
+      notifications: {
+        desktop: { enabled: true, priorityOnly: false },
+        webhooks: [
+          {
+            name: "ops",
+            url: "https://example.com/webhook",
+            type: "generic",
+            enabled: true,
+          },
+        ],
+      },
+      prompts: {
+        summary: "summary",
+        priority: "priority",
+        clustering: "cluster",
+        digest: "digest",
+      },
+      embedding: {
+        provider: "openrouter",
+        model: "qwen/qwen3-embedding-0.6b",
+        dimensions: 768,
+      },
+      gmail: { syncActions: true },
+      ui: {
+        theme: "dark",
+        sidebarCollapsed: true,
+        panelWidths: [25, 35, 40],
+        fetchInterval: 15,
+        fetchScope: "all",
+      },
+      dataDir: "/tmp/email-agent",
+      accounts: [{ email: "me@example.com", name: "Me", isDefault: true }],
+      oauth: { clientId: "client", clientSecret: "secret" },
+    });
+
+    assert.equal(settings.agentMode, "hybrid");
+    assert.equal(settings.notifications?.webhooks[0]?.type, "generic");
+    assert.equal(settings.accounts?.[0]?.isDefault, true);
+    assert.equal(settings.oauth?.clientSecret, "secret");
+  });
+
+  it("rejects malformed nested settings", () => {
+    assert.throws(() => parseSettingsUpdateRequest({ agentMode: "bad" }), /agentMode/);
+    assert.throws(() => parseSettingsUpdateRequest({ preferredAgent: "bad" }), /preferredAgent/);
+    assert.throws(
+      () => parseSettingsUpdateRequest({ embedding: { provider: "openai", dimensions: 5000 } }),
+      /dimensions/,
+    );
+    assert.throws(
+      () =>
+        parseSettingsUpdateRequest({
+          ui: {
+            theme: "system",
+            sidebarCollapsed: false,
+            panelWidths: [20, 80],
+            fetchInterval: 0,
+            fetchScope: "unread",
+          },
+        }),
+      /panelWidths/,
+    );
+    assert.throws(
+      () =>
+        parseSettingsUpdateRequest({
+          notifications: {
+            desktop: { enabled: true },
+            webhooks: [{ name: "bad", url: "https://example.com", type: "ftp" }],
+          },
+        }),
+      /webhooks/,
+    );
+    assert.throws(() => parseSettingsUpdateRequest({ accounts: {} }), /accounts/);
+  });
+
+  it("removes OAuth secrets from settings responses", () => {
+    const sanitized = sanitizeSettingsForResponse({
+      agentMode: "all-agents",
+      preferredAgent: "claude",
+      gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+      notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
+      prompts: { summary: "", priority: "", clustering: "", digest: "" },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      gmail: { syncActions: false },
+      ui: {
+        theme: "system",
+        sidebarCollapsed: false,
+        panelWidths: [20, 35, 45],
+        fetchInterval: 0,
+        fetchScope: "unread",
+      },
+      dataDir: "/tmp/email-agent",
+      accounts: [],
+      oauth: { clientId: "client", clientSecret: "secret" },
+    });
+
+    assert.equal("oauth" in sanitized, false);
+  });
+
+  it("blocks cross-site and non-local mutation requests", () => {
+    const crossSite = new Request("http://localhost:3847/api/actions", {
+      method: "POST",
+      headers: {
+        origin: "https://example.com",
+        "sec-fetch-site": "cross-site",
+      },
+    });
+    assert.equal(mutationGuardResponse(crossSite)?.status, 403);
+
+    const remoteHost = new Request("http://192.168.1.20:3847/api/actions", {
+      method: "POST",
+      headers: { origin: "http://192.168.1.20:3847" },
+    });
+    assert.equal(mutationGuardResponse(remoteHost)?.status, 403);
+
+    const sameOrigin = new Request("http://localhost:3847/api/actions", {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:3847",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(mutationGuardResponse(sameOrigin), undefined);
+
+    const previous = process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
+    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = "1";
+    try {
+      const allowedRemote = new Request("http://192.168.1.20:3847/api/actions", {
+        method: "POST",
+        headers: { origin: "http://192.168.1.20:3847" },
+      });
+      assert.equal(mutationGuardResponse(allowedRemote), undefined);
+    } finally {
+      if (previous === undefined) {
+        delete process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
+      } else {
+        process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = previous;
+      }
+    }
+  });
+
+  it("returns generic internal errors", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    let response: Response;
+    try {
+      response = internalErrorResponse(new Error("/tmp/secret/token.json"));
+    } finally {
+      console.error = originalError;
+    }
+    const body = await response.json() as { error: string };
+
+    assert.equal(response.status, 500);
+    assert.equal(body.error.includes("/tmp"), false);
+  });
+});

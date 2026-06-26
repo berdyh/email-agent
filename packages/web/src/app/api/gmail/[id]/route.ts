@@ -1,9 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEmailById, initDb, updateEmailReadStatus } from "@email-agent/core/db";
 import { markAsRead, markAsUnread } from "@email-agent/core/gmail";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseEmailReadStatusRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -17,6 +23,9 @@ export async function GET(
 
     // Fire-and-forget: mark as read in Gmail + local DB
     if (email.isUnread) {
+      const guard = mutationGuardResponse(request);
+      if (guard) return guard;
+
       void Promise.all([
         markAsRead(id, email.accountId || undefined),
         updateEmailReadStatus(id, false),
@@ -25,8 +34,7 @@ export async function GET(
 
     return NextResponse.json({ ...email, isUnread: false });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to load email");
   }
 }
 
@@ -34,11 +42,13 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
+
   const { id } = await params;
 
   try {
-    const body = (await request.json()) as { isUnread: boolean };
-    const { isUnread } = body;
+    const { isUnread } = parseEmailReadStatusRequest(await request.json());
 
     await initDb();
     const email = await getEmailById(id);
@@ -55,7 +65,9 @@ export async function PATCH(
 
     return NextResponse.json({ id, isUnread });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to update read status");
   }
 }
