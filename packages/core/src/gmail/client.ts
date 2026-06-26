@@ -41,14 +41,27 @@ async function createGmailClientFromGcloud(): Promise<gmail_v1.Gmail> {
   return google.gmail({ version: "v1", auth });
 }
 
+async function createCachedGcloudClient(): Promise<gmail_v1.Gmail> {
+  const gcloudKey = "__gcloud__";
+  const cached = getCachedClient(gcloudKey);
+  if (cached) return cached;
+  return setCachedClient(gcloudKey, await createGmailClientFromGcloud());
+}
+
 export async function createGmailClient(
   accountEmail?: string,
 ): Promise<gmail_v1.Gmail> {
   // Explicit account requested — delegate to account manager
-  if (accountEmail) {
+  if (accountEmail !== undefined) {
+    if (accountEmail === "") {
+      return createCachedGcloudClient();
+    }
     const cached = getCachedClient(accountEmail);
     if (cached) return cached;
-    return setCachedClient(accountEmail, await createGmailClientForAccount(accountEmail));
+    return setCachedClient(
+      accountEmail,
+      await createGmailClientForAccount(accountEmail),
+    );
   }
 
   // No explicit account — try the default account if it has stored tokens
@@ -66,18 +79,17 @@ export async function createGmailClient(
   }
 
   // Fall back to gcloud ADC flow
-  const gcloudKey = "__gcloud__";
-  const cached = getCachedClient(gcloudKey);
-  if (cached) return cached;
-  return setCachedClient(gcloudKey, await createGmailClientFromGcloud());
+  return createCachedGcloudClient();
 }
 
 export function resetGmailClient(): void {
   CLIENT_CACHE.clear();
 }
 
-export async function resolveAccountEmail(accountEmail?: string): Promise<string> {
-  if (accountEmail) return accountEmail;
+export async function resolveAccountEmail(
+  accountEmail?: string,
+): Promise<string> {
+  if (accountEmail !== undefined) return accountEmail;
   const defaultAccount = await getDefaultAccount();
   return defaultAccount?.email ?? "";
 }

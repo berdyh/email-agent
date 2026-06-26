@@ -1,5 +1,10 @@
 import OpenAI from "openai";
 import { loadSettings } from "../config/settings.js";
+import {
+  VECTOR_DIMENSION,
+  createLocalEmbeddingVector,
+  createLocalEmbeddingVectors,
+} from "../shared/vector.js";
 
 let openaiClient: OpenAI | null = null;
 let openrouterClient: OpenAI | null = null;
@@ -23,7 +28,8 @@ function getOpenRouter(): OpenAI {
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   const settings = await loadSettings();
-  const { provider, model, dimensions } = settings.embedding;
+  const { provider, model } = settings.embedding;
+  const dimensions = VECTOR_DIMENSION;
 
   if (provider === "openai") {
     const openai = getOpenAI();
@@ -45,8 +51,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     return response.data[0]!.embedding;
   }
 
-  // Local fallback: zero vector (to be replaced with local embedding model)
-  return Array(dimensions).fill(0);
+  return createLocalEmbeddingVector(text, dimensions);
 }
 
 export async function generateEmbeddings(
@@ -55,7 +60,8 @@ export async function generateEmbeddings(
   if (texts.length === 0) return [];
 
   const settings = await loadSettings();
-  const { provider, model, dimensions } = settings.embedding;
+  const { provider, model } = settings.embedding;
+  const dimensions = VECTOR_DIMENSION;
 
   if (provider === "openai") {
     const openai = getOpenAI();
@@ -77,5 +83,5 @@ export async function generateEmbeddings(
     return response.data.map((d) => d.embedding);
   }
 
-  return texts.map(() => Array(dimensions).fill(0));
+  return createLocalEmbeddingVectors(texts, dimensions);
 }

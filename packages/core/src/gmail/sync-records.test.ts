@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { VECTOR_DIMENSION, createZeroVector } from "../shared/vector.js";
+import {
+  VECTOR_DIMENSION,
+  createEmptyVector,
+  createLocalEmbeddingVector,
+} from "../shared/vector.js";
 import { buildEmailRecords } from "./sync-records.js";
 import type { GmailMessage } from "./types.js";
 
@@ -22,7 +26,7 @@ const message: GmailMessage = {
 describe("sync record mapping", () => {
   it("maps Gmail messages into DB records with account and serialized labels", () => {
     const records = buildEmailRecords("person@example.com", [message], [
-      createZeroVector(),
+      createEmptyVector(),
     ]);
 
     assert.equal(records[0]?.accountId, "person@example.com");
@@ -30,9 +34,13 @@ describe("sync record mapping", () => {
     assert.equal(records[0]?.vector.length, VECTOR_DIMENSION);
   });
 
-  it("uses a zero vector when embedding generation returns no vector for a message", () => {
+  it("uses a local vector when embedding generation returns no vector for a message", () => {
     const records = buildEmailRecords("person@example.com", [message], []);
 
-    assert.deepEqual(records[0]?.vector, createZeroVector());
+    assert.deepEqual(
+      records[0]?.vector,
+      createLocalEmbeddingVector("Hello\nsender@example.com\nBody text"),
+    );
+    assert.equal(records[0]?.vector.some((value) => value !== 0), true);
   });
 });

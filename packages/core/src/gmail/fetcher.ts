@@ -68,18 +68,25 @@ export interface FetchOptions {
   accountEmail?: string;
 }
 
-export async function fetchEmails(
+export interface FetchEmailsResult {
+  messages: GmailMessage[];
+  exhausted: boolean;
+  failedCount: number;
+}
+
+export async function fetchEmailsWithMetadata(
   options: FetchOptions,
-): Promise<GmailMessage[]> {
+): Promise<FetchEmailsResult> {
   const gmail = await createGmailClient(options.accountEmail);
 
   // Collect message IDs via pagination, capped at maxResults
   const totalLimit = options.maxResults ?? 500;
   const allMessageIds: Array<{ id?: string | null }> = [];
   let pageToken: string | undefined;
-  const pageSize = Math.min(totalLimit, 500); // Gmail API max per page
+  let exhausted = false;
 
   do {
+    const pageSize = Math.min(totalLimit - allMessageIds.length, 500);
     const response = await gmail.users.messages.list({
       userId: "me",
       q: options.scope === "unread" ? "is:unread" : undefined,
@@ -88,18 +95,26 @@ export async function fetchEmails(
     });
 
     const ids = response.data.messages ?? [];
+    const nextPageToken = response.data.nextPageToken ?? undefined;
     allMessageIds.push(...ids);
 
-    if (allMessageIds.length >= totalLimit) break;
-    pageToken = response.data.nextPageToken ?? undefined;
+    if (allMessageIds.length >= totalLimit) {
+      exhausted = !nextPageToken;
+      break;
+    }
+    pageToken = nextPageToken;
+    exhausted = !pageToken;
   } while (pageToken);
 
   // Trim to exact cap in case the last page pushed us over
   if (allMessageIds.length > totalLimit) {
     allMessageIds.length = totalLimit;
+    exhausted = false;
   }
 
-  if (allMessageIds.length === 0) return [];
+  if (allMessageIds.length === 0) {
+    return { messages: [], exhausted: true, failedCount: 0 };
+  }
 
   const results = await Promise.allSettled(
     allMessageIds.map(async ({ id }) => {
@@ -113,15 +128,24 @@ export async function fetchEmails(
   );
 
   const messages: GmailMessage[] = [];
+  let failedCount = 0;
   for (const result of results) {
     if (result.status === "fulfilled") {
       messages.push(result.value);
     } else {
+      failedCount += 1;
       console.error("Failed to fetch message:", result.reason);
     }
   }
 
-  return messages;
+  return { messages, exhausted, failedCount };
+}
+
+export async function fetchEmails(
+  options: FetchOptions,
+): Promise<GmailMessage[]> {
+  const result = await fetchEmailsWithMetadata(options);
+  return result.messages;
 }
 
 export async function fetchUnreadEmails(

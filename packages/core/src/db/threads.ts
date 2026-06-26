@@ -5,7 +5,8 @@ import { escapeSql } from "./utils.js";
 export async function upsertThread(thread: ThreadRecord): Promise<void> {
   const db = await getDb();
   const table = await db.openTable(threadsTable);
-  await table.add([thread], { mode: "overwrite" });
+  await table.delete(`id = '${escapeSql(thread.id)}'`);
+  await table.add([thread]);
 }
 
 export async function getThreads(options?: {

@@ -2,10 +2,11 @@ import { getDb } from "./connection.js";
 import { clustersTable, type ClusterRecord } from "./schema.js";
 
 export async function saveClusters(clusters: ClusterRecord[]): Promise<void> {
-  if (clusters.length === 0) return;
   const db = await getDb();
   const table = await db.openTable(clustersTable);
-  await table.add(clusters, { mode: "overwrite" });
+  await table.delete("id IS NOT NULL");
+  if (clusters.length === 0) return;
+  await table.add(clusters);
 }
 
 export async function getClusters(): Promise<ClusterRecord[]> {

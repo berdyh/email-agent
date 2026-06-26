@@ -51,7 +51,7 @@ export interface ClusterRecord {
   id: string;
   name: string;
   description: string;
-  emailIds: string; // JSON array
+  emailIds: string; // JSON array of account-scoped email keys
   method: string;
   centroid: number[];
 }
