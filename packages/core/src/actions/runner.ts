@@ -5,11 +5,10 @@ import { loadSettings } from "../config/settings.js";
 import type { GmailMessage } from "../gmail/types.js";
 import type {
   EmailAction,
-  ActionOutput,
   ActionRunResult,
-  ActionEmailResult,
 } from "./types.js";
 import { mapResultToOperations, applyOperations } from "./apply.js";
+import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
 
@@ -35,30 +34,6 @@ function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
   ].join("\n");
 }
 
-function parseOutput(raw: string, emailIds: string[]): ActionOutput {
-  const results: ActionEmailResult[] = [];
-
-  // Try to extract JSON from the response
-  const jsonMatch = raw.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as ActionEmailResult[];
-      if (Array.isArray(parsed)) {
-        return { results: parsed, rawText: raw };
-      }
-    } catch {
-      // Fall through to fallback
-    }
-  }
-
-  // Fallback: create a result per email with the raw text
-  for (const emailId of emailIds) {
-    results.push({ emailId, rawResult: raw });
-  }
-
-  return { results, rawText: raw };
-}
-
 export class ActionRunner {
   async run(
     action: EmailAction,
@@ -71,7 +46,7 @@ export class ActionRunner {
     try {
       const agentResult = await router.execute({ prompt });
 
-      const output = parseOutput(agentResult.text, emailIds);
+      const output = parseActionOutput(agentResult.text, emailIds);
 
       const result: ActionRunResult = {
         actionId: action.id,

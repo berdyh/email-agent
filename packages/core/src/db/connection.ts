@@ -10,6 +10,7 @@ import {
   FixedSizeList,
 } from "apache-arrow";
 import { LANCEDB_DIR } from "../config/defaults.js";
+import { VECTOR_DIMENSION } from "../shared/vector.js";
 
 let db: Connection | null = null;
 
@@ -20,12 +21,10 @@ export async function getDb(): Promise<Connection> {
   return db;
 }
 
-const VECTOR_DIM = 768;
-
 function vectorField(name: string): Field {
   return new Field(
     name,
-    new FixedSizeList(VECTOR_DIM, new Field("item", new Float32())),
+    new FixedSizeList(VECTOR_DIMENSION, new Field("item", new Float32())),
   );
 }
 

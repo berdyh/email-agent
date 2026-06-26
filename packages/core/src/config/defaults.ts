@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { VECTOR_DIMENSION } from "../shared/vector.js";
 import type { AppConfig } from "./types.js";
 
 export const DATA_DIR = join(homedir(), ".email-agent", "data");
@@ -34,7 +35,7 @@ export const defaultConfig: AppConfig = {
   embedding: {
     provider: "openai",
     model: "text-embedding-3-small",
-    dimensions: 768,
+    dimensions: VECTOR_DIMENSION,
   },
   gmail: {
     syncActions: false,

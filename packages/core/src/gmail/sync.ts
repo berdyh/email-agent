@@ -1,6 +1,8 @@
 import { initDb, upsertEmails, generateEmbeddings } from "../db/index.js";
+import { createZeroVector } from "../shared/vector.js";
 import { fetchEmails, type FetchOptions } from "./fetcher.js";
 import { resolveAccountEmail } from "./client.js";
+import { buildEmailRecords } from "./sync-records.js";
 
 export interface SyncResult {
   fetched: number;
@@ -23,25 +25,10 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
     vectors = await generateEmbeddings(texts);
   } catch {
     // Graceful degradation: store with zero vectors if embedding fails
-    vectors = texts.map(() => Array(768).fill(0) as number[]);
+    vectors = texts.map(() => createZeroVector());
   }
 
-  const records = emails.map((e, i) => ({
-    id: e.id,
-    accountId,
-    threadId: e.threadId,
-    from: e.from,
-    to: e.to,
-    subject: e.subject,
-    date: e.date,
-    bodyText: e.bodyText,
-    bodyHtml: e.bodyHtml,
-    labels: JSON.stringify(e.labels),
-    isUnread: e.isUnread,
-    senderDomain: e.senderDomain,
-    snippet: e.snippet,
-    vector: vectors[i] ?? (Array(768).fill(0) as number[]),
-  }));
+  const records = buildEmailRecords(accountId, emails, vectors);
 
   await upsertEmails(records);
 
