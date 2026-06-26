@@ -4,6 +4,7 @@ import { markAsRead, markAsUnread } from "@email-agent/core/gmail";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseEmailIdentityQuery,
   parseEmailReadStatusRequest,
   validationResponse,
 } from "@/modules/api/validation";
@@ -15,25 +16,18 @@ export async function GET(
   const { id } = await params;
 
   try {
+    const { accountId } = parseEmailIdentityQuery(request.nextUrl.searchParams);
     await initDb();
-    const email = await getEmailById(id);
+    const email = await getEmailById(id, accountId);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });
     }
 
-    // Fire-and-forget: mark as read in Gmail + local DB
-    if (email.isUnread) {
-      const guard = mutationGuardResponse(request);
-      if (guard) return guard;
-
-      void Promise.all([
-        markAsRead(id, email.accountId || undefined),
-        updateEmailReadStatus(id, false),
-      ]).catch(() => {});
-    }
-
-    return NextResponse.json({ ...email, isUnread: false });
+    return NextResponse.json(email);
   } catch (err) {
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
     return internalErrorResponse(err, "Failed to load email");
   }
 }
@@ -48,22 +42,23 @@ export async function PATCH(
   const { id } = await params;
 
   try {
+    const { accountId } = parseEmailIdentityQuery(request.nextUrl.searchParams);
     const { isUnread } = parseEmailReadStatusRequest(await request.json());
 
     await initDb();
-    const email = await getEmailById(id);
+    const email = await getEmailById(id, accountId);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });
     }
 
     if (isUnread) {
-      await markAsUnread(id, email.accountId || undefined);
+      await markAsUnread(id, email.accountId);
     } else {
-      await markAsRead(id, email.accountId || undefined);
+      await markAsRead(id, email.accountId);
     }
-    await updateEmailReadStatus(id, isUnread);
+    await updateEmailReadStatus(id, isUnread, email.accountId);
 
-    return NextResponse.json({ id, isUnread });
+    return NextResponse.json({ id, accountId: email.accountId, isUnread });
   } catch (err) {
     const validation = validationResponse(err);
     if (validation) return validation;

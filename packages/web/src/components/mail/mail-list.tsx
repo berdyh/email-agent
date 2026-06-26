@@ -10,6 +10,7 @@ import { MailToolbar } from "./mail-toolbar";
 export function MailList() {
   const filterUnreadOnly = useEmailStore((s) => s.filterUnreadOnly);
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
+  const selectedEmailAccountId = useEmailStore((s) => s.selectedEmailAccountId);
   const selectEmail = useEmailStore((s) => s.selectEmail);
   const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
 
@@ -35,12 +36,14 @@ export function MailList() {
           <div className="flex flex-col">
             {emails.map((email) => (
               <button
-                key={email.id}
+                key={`${email.accountId}:${email.id}`}
                 className={cn(
                   "flex flex-col gap-1 border-b p-3 text-left transition-colors hover:bg-accent",
-                  selectedEmailId === email.id && "bg-accent",
+                  selectedEmailId === email.id &&
+                    selectedEmailAccountId === email.accountId &&
+                    "bg-accent",
                 )}
-                onClick={() => selectEmail(email.id)}
+                onClick={() => selectEmail(email.id, email.accountId)}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span

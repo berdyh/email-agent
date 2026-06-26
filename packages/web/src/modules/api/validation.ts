@@ -1,6 +1,6 @@
+import { defaultConfig, type AppConfig } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
 import type { GmailOperation } from "@email-agent/core/actions";
-import type { AppConfig } from "@email-agent/core/config";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const SETTING_KEYS = new Set([
@@ -66,6 +66,30 @@ export interface EmailReadStatusRequest {
   isUnread: boolean;
 }
 
+export interface EmailIdRequest {
+  emailId: string;
+  accountId: string;
+}
+
+type SettingsUpdate = Partial<
+  Omit<
+    AppConfig,
+    "gcp" | "notifications" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
+  >
+> & {
+  gcp?: Partial<AppConfig["gcp"]>;
+  notifications?: {
+    desktop?: Partial<AppConfig["notifications"]["desktop"]>;
+    webhooks?: AppConfig["notifications"]["webhooks"];
+  };
+  prompts?: Partial<AppConfig["prompts"]>;
+  embedding?: Partial<AppConfig["embedding"]>;
+  gmail?: Partial<AppConfig["gmail"]>;
+  ui?: Partial<AppConfig["ui"]>;
+  accounts?: AppConfig["accounts"];
+  oauth?: AppConfig["oauth"];
+};
+
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new RequestValidationError("Request body must be an object");
@@ -81,8 +105,26 @@ function optionalString(value: unknown, field: string): string | undefined {
   return value;
 }
 
+function optionalPresentString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requiredPresentString(value, field);
+}
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
+    throw new RequestValidationError(`${field} is required`);
+  }
+  return value.trim();
+}
+
+function requiredPresentString(value: unknown, field: string): string {
+  if (value === undefined || value === null) {
+    throw new RequestValidationError(`${field} is required`);
+  }
+  if (typeof value !== "string") {
+    throw new RequestValidationError(`${field} must be a string`);
+  }
+  if (value !== "" && !value.trim()) {
     throw new RequestValidationError(`${field} is required`);
   }
   return value.trim();
@@ -160,7 +202,7 @@ export function parseFetchEmailsRequest(input: unknown): FetchOptions {
   return {
     scope,
     maxResults: parseMaxResults(body["maxResults"]),
-    accountEmail: optionalString(body["accountEmail"], "accountEmail"),
+    accountEmail: optionalPresentString(body["accountEmail"], "accountEmail"),
   };
 }
 
@@ -169,7 +211,10 @@ export function parseEmailListQuery(params: URLSearchParams) {
     unreadOnly: params.get("unreadOnly") === "true",
     limit: parseIntegerParam(params, "limit", 50, 1, 500),
     offset: parseIntegerParam(params, "offset", 0, 0, 100000),
-    accountId: optionalString(params.get("accountId"), "accountId"),
+    accountId: optionalPresentString(
+      params.has("accountId") ? params.get("accountId") : undefined,
+      "accountId",
+    ),
   };
 }
 
@@ -207,7 +252,7 @@ export function parseActionRunRequest(input: unknown): ActionRunRequest {
   const body = asRecord(input);
   return {
     actionId: requiredString(body["actionId"], "actionId"),
-    accountEmail: optionalString(body["accountEmail"], "accountEmail"),
+    accountEmail: optionalPresentString(body["accountEmail"], "accountEmail"),
   };
 }
 
@@ -239,6 +284,23 @@ export function parseEmailReadStatusRequest(input: unknown): EmailReadStatusRequ
     throw new RequestValidationError("isUnread is required");
   }
   return { isUnread };
+}
+
+export function parseEmailIdRequest(input: unknown): EmailIdRequest {
+  const body = asRecord(input);
+  return {
+    emailId: requiredString(body["emailId"], "emailId"),
+    accountId: requiredPresentString(body["accountId"], "accountId"),
+  };
+}
+
+export function parseEmailIdentityQuery(params: URLSearchParams): { accountId: string } {
+  return {
+    accountId: requiredPresentString(
+      params.has("accountId") ? params.get("accountId") : undefined,
+      "accountId",
+    ),
+  };
 }
 
 export function parseUserActionSaveRequest(input: unknown): UserActionSaveRequest {
@@ -303,11 +365,11 @@ export function parseApplyActionsRequest(input: unknown): {
 
   return {
     operations,
-    accountEmail: optionalString(body["accountEmail"], "accountEmail"),
+    accountEmail: optionalPresentString(body["accountEmail"], "accountEmail"),
   };
 }
 
-export function parseSettingsUpdateRequest(input: unknown): Partial<AppConfig> {
+export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
   const body = asRecord(input);
   for (const key of Object.keys(body)) {
     if (!SETTING_KEYS.has(key)) {
@@ -315,7 +377,7 @@ export function parseSettingsUpdateRequest(input: unknown): Partial<AppConfig> {
     }
   }
 
-  const settings: Partial<AppConfig> = {};
+  const settings: SettingsUpdate = {};
 
   if (body["agentMode"] !== undefined) {
     if (
@@ -343,8 +405,11 @@ export function parseSettingsUpdateRequest(input: unknown): Partial<AppConfig> {
 
   if (body["gmail"] !== undefined) {
     const gmail = asRecord(body["gmail"]);
-    const syncActions = optionalBoolean(gmail["syncActions"], "gmail.syncActions");
-    settings.gmail = { syncActions: syncActions ?? false };
+    const update: Partial<AppConfig["gmail"]> = {};
+    if ("syncActions" in gmail) {
+      update.syncActions = optionalBoolean(gmail["syncActions"], "gmail.syncActions") ?? false;
+    }
+    settings.gmail = update;
   }
 
   if (body["dataDir"] !== undefined) {
@@ -353,94 +418,110 @@ export function parseSettingsUpdateRequest(input: unknown): Partial<AppConfig> {
 
   if (body["gcp"] !== undefined) {
     const gcp = asRecord(body["gcp"]);
-    settings.gcp = {
-      projectId: optionalString(gcp["projectId"], "gcp.projectId") ?? "",
-      pubsubTopic: optionalString(gcp["pubsubTopic"], "gcp.pubsubTopic") ?? "",
-      pubsubSubscription: optionalString(gcp["pubsubSubscription"], "gcp.pubsubSubscription") ?? "",
-      watchExpiration: optionalString(gcp["watchExpiration"], "gcp.watchExpiration"),
-    };
+    const update: Partial<AppConfig["gcp"]> = {};
+    if ("projectId" in gcp) update.projectId = optionalString(gcp["projectId"], "gcp.projectId") ?? "";
+    if ("pubsubTopic" in gcp) update.pubsubTopic = optionalString(gcp["pubsubTopic"], "gcp.pubsubTopic") ?? "";
+    if ("pubsubSubscription" in gcp) {
+      update.pubsubSubscription = optionalString(gcp["pubsubSubscription"], "gcp.pubsubSubscription") ?? "";
+    }
+    if ("watchExpiration" in gcp) {
+      update.watchExpiration = optionalString(gcp["watchExpiration"], "gcp.watchExpiration");
+    }
+    settings.gcp = update;
   }
 
   if (body["prompts"] !== undefined) {
     const prompts = asRecord(body["prompts"]);
-    settings.prompts = {
-      summary: optionalString(prompts["summary"], "prompts.summary") ?? "",
-      priority: optionalString(prompts["priority"], "prompts.priority") ?? "",
-      clustering: optionalString(prompts["clustering"], "prompts.clustering") ?? "",
-      digest: optionalString(prompts["digest"], "prompts.digest") ?? "",
-    };
+    const update: Partial<AppConfig["prompts"]> = {};
+    if ("summary" in prompts) update.summary = optionalString(prompts["summary"], "prompts.summary") ?? "";
+    if ("priority" in prompts) update.priority = optionalString(prompts["priority"], "prompts.priority") ?? "";
+    if ("clustering" in prompts) update.clustering = optionalString(prompts["clustering"], "prompts.clustering") ?? "";
+    if ("digest" in prompts) update.digest = optionalString(prompts["digest"], "prompts.digest") ?? "";
+    settings.prompts = update;
   }
 
   if (body["embedding"] !== undefined) {
     const embedding = asRecord(body["embedding"]);
-    const provider = embedding["provider"];
-    if (provider !== "openai" && provider !== "openrouter" && provider !== "local") {
-      throw new RequestValidationError("embedding.provider is invalid");
+    const update: Partial<AppConfig["embedding"]> = {};
+    if ("provider" in embedding) {
+      const provider = embedding["provider"];
+      if (provider !== "openai" && provider !== "openrouter" && provider !== "local") {
+        throw new RequestValidationError("embedding.provider is invalid");
+      }
+      update.provider = provider;
     }
-    const dimensions = optionalNumber(embedding["dimensions"], "embedding.dimensions") ?? 768;
-    if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > 4096) {
-      throw new RequestValidationError("embedding.dimensions must be an integer between 1 and 4096");
+    if ("model" in embedding) {
+      update.model = optionalString(embedding["model"], "embedding.model") ?? "";
     }
-    settings.embedding = {
-      provider,
-      model: optionalString(embedding["model"], "embedding.model") ?? "",
-      dimensions,
-    };
+    if ("dimensions" in embedding) {
+      optionalNumber(embedding["dimensions"], "embedding.dimensions");
+      update.dimensions = defaultConfig.embedding.dimensions;
+    }
+    settings.embedding = update;
   }
 
   if (body["ui"] !== undefined) {
     const ui = asRecord(body["ui"]);
-    const theme = ui["theme"];
-    const fetchScope = ui["fetchScope"];
-    if (theme !== "light" && theme !== "dark" && theme !== "system") {
-      throw new RequestValidationError("ui.theme is invalid");
+    const update: Partial<AppConfig["ui"]> = {};
+    if ("theme" in ui) {
+      const theme = ui["theme"];
+      if (theme !== "light" && theme !== "dark" && theme !== "system") {
+        throw new RequestValidationError("ui.theme is invalid");
+      }
+      update.theme = theme;
     }
-    if (fetchScope !== "unread" && fetchScope !== "all") {
-      throw new RequestValidationError("ui.fetchScope is invalid");
+    if ("fetchScope" in ui) {
+      const fetchScope = ui["fetchScope"];
+      if (fetchScope !== "unread" && fetchScope !== "all") {
+        throw new RequestValidationError("ui.fetchScope is invalid");
+      }
+      update.fetchScope = fetchScope;
     }
-    const panelWidths = ui["panelWidths"];
-    if (
-      !Array.isArray(panelWidths) ||
-      panelWidths.length !== 3 ||
-      panelWidths.some((value) => typeof value !== "number" || !Number.isFinite(value))
-    ) {
-      throw new RequestValidationError("ui.panelWidths must contain three numbers");
+    if ("sidebarCollapsed" in ui) {
+      update.sidebarCollapsed = optionalBoolean(ui["sidebarCollapsed"], "ui.sidebarCollapsed") ?? false;
     }
-    settings.ui = {
-      theme,
-      sidebarCollapsed: optionalBoolean(ui["sidebarCollapsed"], "ui.sidebarCollapsed") ?? false,
-      panelWidths: panelWidths as [number, number, number],
-      fetchInterval: optionalNumber(ui["fetchInterval"], "ui.fetchInterval") ?? 0,
-      fetchScope,
-    };
+    if ("fetchInterval" in ui) {
+      update.fetchInterval = optionalNumber(ui["fetchInterval"], "ui.fetchInterval") ?? 0;
+    }
+    settings.ui = update;
   }
 
   if (body["notifications"] !== undefined) {
     const notifications = asRecord(body["notifications"]);
-    const desktop = asRecord(notifications["desktop"] ?? {});
-    const webhooksValue = notifications["webhooks"] ?? [];
-    if (!Array.isArray(webhooksValue)) {
-      throw new RequestValidationError("notifications.webhooks must be an array");
+    const update: NonNullable<SettingsUpdate["notifications"]> = {};
+    if ("desktop" in notifications) {
+      const desktop = asRecord(notifications["desktop"]);
+      update.desktop = {};
+      if ("enabled" in desktop) {
+        update.desktop.enabled = optionalBoolean(desktop["enabled"], "notifications.desktop.enabled") ?? false;
+      }
+      if ("priorityOnly" in desktop) {
+        update.desktop.priorityOnly = optionalBoolean(desktop["priorityOnly"], "notifications.desktop.priorityOnly") ?? false;
+      }
     }
-    settings.notifications = {
-      desktop: {
-        enabled: optionalBoolean(desktop["enabled"], "notifications.desktop.enabled") ?? false,
-        priorityOnly: optionalBoolean(desktop["priorityOnly"], "notifications.desktop.priorityOnly") ?? false,
-      },
-      webhooks: webhooksValue.map((webhook, index) => {
-        const record = asRecord(webhook);
-        const type = record["type"];
-        if (type !== "slack" && type !== "discord" && type !== "generic") {
-          throw new RequestValidationError(`notifications.webhooks[${index}].type is invalid`);
-        }
-        return {
-          name: requiredString(record["name"], `notifications.webhooks[${index}].name`),
-          url: requiredString(record["url"], `notifications.webhooks[${index}].url`),
-          type,
-          enabled: optionalBoolean(record["enabled"], `notifications.webhooks[${index}].enabled`) ?? false,
-        };
-      }),
-    };
+    if ("webhooks" in notifications) {
+      const webhooksValue = notifications["webhooks"];
+      if (webhooksValue === null) {
+        update.webhooks = [];
+      } else if (!Array.isArray(webhooksValue)) {
+        throw new RequestValidationError("notifications.webhooks must be an array");
+      } else {
+        update.webhooks = webhooksValue.map((webhook, index) => {
+          const record = asRecord(webhook);
+          const type = record["type"];
+          if (type !== "slack" && type !== "discord" && type !== "generic") {
+            throw new RequestValidationError(`notifications.webhooks[${index}].type is invalid`);
+          }
+          return {
+            name: requiredString(record["name"], `notifications.webhooks[${index}].name`),
+            url: requiredString(record["url"], `notifications.webhooks[${index}].url`),
+            type,
+            enabled: optionalBoolean(record["enabled"], `notifications.webhooks[${index}].enabled`) ?? false,
+          };
+        });
+      }
+    }
+    settings.notifications = update;
   }
 
   if (body["accounts"] !== undefined) {
@@ -466,6 +547,34 @@ export function parseSettingsUpdateRequest(input: unknown): Partial<AppConfig> {
   }
 
   return settings;
+}
+
+export function mergeSettingsUpdate(
+  current: AppConfig,
+  update: SettingsUpdate,
+): AppConfig {
+  return {
+    ...current,
+    ...update,
+    gcp: { ...current.gcp, ...update.gcp },
+    notifications: {
+      desktop: {
+        ...current.notifications.desktop,
+        ...update.notifications?.desktop,
+      },
+      webhooks: update.notifications?.webhooks ?? normalizeWebhooks(current.notifications.webhooks),
+    },
+    prompts: { ...current.prompts, ...update.prompts },
+    embedding: {
+      ...current.embedding,
+      ...update.embedding,
+      dimensions: defaultConfig.embedding.dimensions,
+    },
+    gmail: { ...current.gmail, ...update.gmail },
+    ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
+    accounts: update.accounts ?? current.accounts,
+    oauth: update.oauth ?? current.oauth,
+  };
 }
 
 export function validationResponse(error: unknown): Response | undefined {
@@ -504,9 +613,35 @@ export function mutationGuardResponse(request: Request): Response | undefined {
 }
 
 export function sanitizeSettingsForResponse(settings: AppConfig): Omit<AppConfig, "oauth"> {
-  const safe: Partial<AppConfig> = { ...settings };
+  const safe: Partial<AppConfig> = {
+    ...settings,
+    embedding: {
+      ...settings.embedding,
+      dimensions: defaultConfig.embedding.dimensions,
+    },
+    notifications: {
+      desktop: settings.notifications.desktop,
+      webhooks: normalizeWebhooks(settings.notifications.webhooks),
+    },
+    ui: normalizeUiConfig(settings.ui),
+  };
   delete safe.oauth;
   return safe as Omit<AppConfig, "oauth">;
+}
+
+function normalizeUiConfig(ui: AppConfig["ui"]): AppConfig["ui"] {
+  return {
+    theme: ui.theme,
+    sidebarCollapsed: ui.sidebarCollapsed,
+    fetchInterval: ui.fetchInterval,
+    fetchScope: ui.fetchScope,
+  };
+}
+
+function normalizeWebhooks(
+  webhooks: AppConfig["notifications"]["webhooks"] | null | undefined,
+): AppConfig["notifications"]["webhooks"] {
+  return Array.isArray(webhooks) ? webhooks : [];
 }
 
 export function internalErrorResponse(

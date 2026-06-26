@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { loadSettings, saveSettings } from "@email-agent/core/config";
 import {
   internalErrorResponse,
+  mergeSettingsUpdate,
   mutationGuardResponse,
   parseSettingsUpdateRequest,
   sanitizeSettingsForResponse,
@@ -24,7 +25,7 @@ export async function PUT(request: NextRequest) {
   try {
     const body = parseSettingsUpdateRequest(await request.json());
     const current = await loadSettings();
-    const merged = { ...current, ...body };
+    const merged = mergeSettingsUpdate(current, body);
     await saveSettings(merged);
     return NextResponse.json({ ok: true });
   } catch (err) {

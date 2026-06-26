@@ -44,7 +44,6 @@ export interface GmailSyncConfig {
 export interface UiConfig {
   theme: "light" | "dark" | "system";
   sidebarCollapsed: boolean;
-  panelWidths: [number, number, number];
   fetchInterval: number;
   fetchScope: "unread" | "all";
 }

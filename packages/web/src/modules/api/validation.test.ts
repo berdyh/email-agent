@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   internalErrorResponse,
+  mergeSettingsUpdate,
   mutationGuardResponse,
   parseActionGenerateRequest,
   parseActionRunRequest,
   parseAccountDeleteRequest,
   parseAccountPostRequest,
   parseApplyActionsRequest,
+  parseEmailIdRequest,
+  parseEmailIdentityQuery,
   parseEmailListQuery,
   parseEmailReadStatusRequest,
   parseSettingsUpdateRequest,
@@ -24,6 +27,7 @@ describe("web API validation", () => {
       maxResults: 25,
       accountEmail: undefined,
     });
+    assert.equal(parseFetchEmailsRequest({ accountEmail: "" }).accountEmail, "");
     assert.equal(parseFetchEmailsRequest({ scope: "unknown" }).scope, "unread");
   });
 
@@ -74,6 +78,10 @@ describe("web API validation", () => {
       actionId: "priority",
       accountEmail: undefined,
     });
+    assert.deepEqual(parseActionRunRequest({ actionId: "priority", accountEmail: "" }), {
+      actionId: "priority",
+      accountEmail: "",
+    });
     assert.equal(
       parseUserActionSaveRequest({
         filename: "custom.action.js",
@@ -97,7 +105,28 @@ describe("web API validation", () => {
         accountId: undefined,
       },
     );
+    assert.equal(parseEmailListQuery(new URLSearchParams("accountId=")).accountId, "");
     assert.throws(() => parseEmailListQuery(new URLSearchParams("limit=abc")), /limit/);
+  });
+
+  it("validates email id requests", () => {
+    assert.deepEqual(parseEmailIdRequest({ emailId: "email-1", accountId: "me@example.com" }), {
+      emailId: "email-1",
+      accountId: "me@example.com",
+    });
+    assert.deepEqual(parseEmailIdRequest({ emailId: "email-1", accountId: "" }), {
+      emailId: "email-1",
+      accountId: "",
+    });
+    assert.throws(() => parseEmailIdRequest({ emailId: "" }), /emailId/);
+    assert.throws(() => parseEmailIdRequest({ emailId: "email-1" }), /accountId/);
+    assert.deepEqual(parseEmailIdentityQuery(new URLSearchParams("accountId=me%40example.com")), {
+      accountId: "me@example.com",
+    });
+    assert.deepEqual(parseEmailIdentityQuery(new URLSearchParams("accountId=")), {
+      accountId: "",
+    });
+    assert.throws(() => parseEmailIdentityQuery(new URLSearchParams()), /accountId/);
   });
 
   it("validates apply-actions and snapshot restore requests", () => {
@@ -106,6 +135,13 @@ describe("web API validation", () => {
         operations: [{ emailId: "m1", type: "trash" }],
       }).operations[0]?.type,
       "trash",
+    );
+    assert.equal(
+      parseApplyActionsRequest({
+        operations: [{ emailId: "m1", type: "trash" }],
+        accountEmail: "",
+      }).accountEmail,
+      "",
     );
     assert.equal(
       parseSnapshotRestoreRequest({
@@ -207,17 +243,18 @@ describe("web API validation", () => {
     });
 
     assert.equal(settings.agentMode, "hybrid");
-    assert.equal(settings.notifications?.webhooks[0]?.type, "generic");
+    assert.equal(settings.notifications?.webhooks?.[0]?.type, "generic");
     assert.equal(settings.accounts?.[0]?.isDefault, true);
     assert.equal(settings.oauth?.clientSecret, "secret");
+    assert.equal("panelWidths" in settings.ui!, false);
   });
 
   it("rejects malformed nested settings", () => {
     assert.throws(() => parseSettingsUpdateRequest({ agentMode: "bad" }), /agentMode/);
     assert.throws(() => parseSettingsUpdateRequest({ preferredAgent: "bad" }), /preferredAgent/);
-    assert.throws(
-      () => parseSettingsUpdateRequest({ embedding: { provider: "openai", dimensions: 5000 } }),
-      /dimensions/,
+    assert.equal(
+      parseSettingsUpdateRequest({ embedding: { dimensions: 1536 } }).embedding?.dimensions,
+      768,
     );
     assert.throws(
       () =>
@@ -225,12 +262,11 @@ describe("web API validation", () => {
           ui: {
             theme: "system",
             sidebarCollapsed: false,
-            panelWidths: [20, 80],
             fetchInterval: 0,
-            fetchScope: "unread",
+            fetchScope: "everything",
           },
         }),
-      /panelWidths/,
+      /fetchScope/,
     );
     assert.throws(
       () =>
@@ -242,7 +278,72 @@ describe("web API validation", () => {
         }),
       /webhooks/,
     );
+    assert.deepEqual(
+      parseSettingsUpdateRequest({
+        notifications: {
+          webhooks: null,
+        },
+      }).notifications?.webhooks,
+      [],
+    );
     assert.throws(() => parseSettingsUpdateRequest({ accounts: {} }), /accounts/);
+  });
+
+  it("supports partial nested settings updates without resetting omitted fields", () => {
+    const update = parseSettingsUpdateRequest({ ui: { fetchInterval: 10 } });
+    const merged = mergeSettingsUpdate(
+      {
+        agentMode: "all-agents",
+        preferredAgent: "claude",
+        gcp: { projectId: "project", pubsubTopic: "topic", pubsubSubscription: "sub" },
+        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: null as never },
+        prompts: { summary: "s", priority: "p", clustering: "c", digest: "d" },
+        embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
+        gmail: { syncActions: false },
+        ui: {
+          theme: "dark",
+          sidebarCollapsed: true,
+          fetchInterval: 0,
+          fetchScope: "all",
+        },
+        dataDir: "/tmp/email-agent",
+        accounts: [],
+      },
+      update,
+    );
+
+    assert.equal(merged.ui.fetchInterval, 10);
+    assert.equal(merged.ui.theme, "dark");
+    assert.equal(merged.ui.fetchScope, "all");
+    assert.equal(merged.ui.sidebarCollapsed, true);
+    assert.equal("panelWidths" in merged.ui, false);
+  });
+
+  it("keeps omitted gmail settings during partial updates", () => {
+    const update = parseSettingsUpdateRequest({ gmail: {} });
+    const merged = mergeSettingsUpdate(
+      {
+        agentMode: "all-agents",
+        preferredAgent: "claude",
+        gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
+        prompts: { summary: "", priority: "", clustering: "", digest: "" },
+        embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+        gmail: { syncActions: true },
+        ui: {
+          theme: "system",
+          sidebarCollapsed: false,
+          fetchInterval: 0,
+          fetchScope: "unread",
+        },
+        dataDir: "/tmp/email-agent",
+        accounts: [],
+      },
+      update,
+    );
+
+    assert.equal(merged.gmail.syncActions, true);
+    assert.equal(merged.embedding.dimensions, 768);
   });
 
   it("removes OAuth secrets from settings responses", () => {
@@ -252,21 +353,24 @@ describe("web API validation", () => {
       gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
       notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
       prompts: { summary: "", priority: "", clustering: "", digest: "" },
-      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
       gmail: { syncActions: false },
       ui: {
         theme: "system",
         sidebarCollapsed: false,
-        panelWidths: [20, 35, 45],
         fetchInterval: 0,
         fetchScope: "unread",
-      },
+        panelWidths: [20, 35, 45],
+      } as never,
       dataDir: "/tmp/email-agent",
       accounts: [],
       oauth: { clientId: "client", clientSecret: "secret" },
     });
 
     assert.equal("oauth" in sanitized, false);
+    assert.equal(sanitized.embedding.dimensions, 768);
+    assert.deepEqual(sanitized.notifications.webhooks, []);
+    assert.equal("panelWidths" in sanitized.ui, false);
   });
 
   it("blocks cross-site and non-local mutation requests", () => {

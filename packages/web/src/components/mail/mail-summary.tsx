@@ -17,9 +17,11 @@ interface Summary {
 
 export function MailSummary({
   emailId,
+  accountId,
   bodyText,
 }: {
   emailId: string;
+  accountId: string;
   bodyText: string;
 }) {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -29,7 +31,7 @@ export function MailSummary({
       const res = await fetch("/api/analysis/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ emailId }),
+        body: JSON.stringify({ emailId, accountId }),
       });
       if (!res.ok) throw new Error("Failed to summarize");
       return res.json() as Promise<Summary>;

@@ -4,6 +4,8 @@ import { summarizeEmail } from "@email-agent/core/analysis";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseEmailIdRequest,
+  validationResponse,
 } from "@/modules/api/validation";
 
 export async function POST(request: NextRequest) {
@@ -11,9 +13,9 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = (await request.json()) as { emailId: string };
+    const body = parseEmailIdRequest(await request.json());
     await initDb();
-    const email = await getEmailById(body.emailId);
+    const email = await getEmailById(body.emailId, body.accountId);
     if (!email) {
       return NextResponse.json({ error: "Email not found" }, { status: 404 });
     }
@@ -35,6 +37,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(summary);
   } catch (err) {
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
     return internalErrorResponse(err, "Failed to summarize email");
   }
 }
