@@ -90,14 +90,15 @@ while true; do
   echo -e "  ${BOLD}Embedding provider:${RESET}"
   echo -e "    1) ${CYAN}openrouter${RESET}  — OpenRouter Qwen3 Embedding 8B (best quality, recommended)"
   echo -e "    2) ${CYAN}openai${RESET}      — OpenAI text-embedding-3-small"
-  echo -e "    3) ${CYAN}local${RESET}       — Zero-vector fallback (no API key needed, no semantic search)"
+  echo -e "    3) ${CYAN}local${RESET}       — Deterministic lexical embeddings (no API key needed)"
   echo ""
   read -rp "  Choose [1/2/3] (default: 1): " embed_choice
   embed_choice=${embed_choice:-1}
 
   if [ "$embed_choice" = "3" ]; then
     EMBEDDING_PROVIDER="local"
-    ok "Embedding provider: local (zero-vector fallback)"
+    EMBEDDING_MODEL="local-hashed-v1"
+    ok "Embedding provider: local (deterministic lexical embeddings)"
     break
 
   elif [ "$embed_choice" = "2" ]; then

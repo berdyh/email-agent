@@ -6,7 +6,7 @@
 - connected modules/submodules: `agents` for summary/digest generation, `db/emails` and `db/clusters` for clustering, web analysis API routes.
 - allowed change types: Analysis prompts, parsing, cluster algorithm changes, citation extraction logic.
 - special operating rules: Preserve JSON extraction fallbacks until callers have typed model outputs.
-- current stubs/placeholders: Simple k-means labels/descriptions are `isolate-for-later`.
+- current stubs/placeholders: None known; k-means labels/descriptions are derived from cluster member terms and sender domains, cluster membership uses account-scoped email keys, and clustering backfills old empty vectors before grouping.
 - irrelevant or incomplete code to remove/rework: None known.
 - docs that must stay aligned: Web analysis routes, README feature list, module index.
 - local validation commands/checks: `npx tsc -p packages/core/tsconfig.json --noEmit`, add focused tests for any parser/algorithm change.

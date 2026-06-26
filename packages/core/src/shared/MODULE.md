@@ -1,7 +1,7 @@
 # Module Card: Core Shared
 
 - purpose: Hold small cross-module constants and pure helpers that would otherwise be duplicated.
-- product/module functionality: Currently centralizes vector dimension and zero-vector creation.
+- product/module functionality: Centralizes vector dimension, empty vector creation, and deterministic local embedding vectors.
 - scope boundaries: Must not become a dumping ground for product flows, IO, or framework adapters.
 - connected modules/submodules: `config`, `db`, `gmail`, and any vector-aware analysis code.
 - allowed change types: Stable constants, pure utility helpers with at least two real consumers.

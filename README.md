@@ -23,7 +23,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
   - [Google Gemini CLI](https://github.com/google/gemini-cli) (`npx @google/gemini-cli`)
-- **API key for embeddings** — OpenAI or [OpenRouter](https://openrouter.ai) (or use `EMBEDDING_PROVIDER=local` for zero-vector fallback)
+- **API key for embeddings** — OpenAI or [OpenRouter](https://openrouter.ai) (or use `EMBEDDING_PROVIDER=local` for deterministic lexical embeddings)
 
 ## Setup
 

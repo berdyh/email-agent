@@ -6,7 +6,7 @@
 - connected modules/submodules: `CREATE_ACTION_SKILLS.md`, `EDIT_ACTION_SKILLS.md`, core action type contracts.
 - allowed change types: Eval cases, grading assertions, benchmark output format.
 - special operating rules: `grade.py` writes `grading.json` and `benchmark.json`; do not treat it as read-only.
-- current stubs/placeholders: No `iteration-*` outputs are currently present.
+- current stubs/placeholders: None known; generated `iteration-*` outputs are intentionally not checked in.
 - irrelevant or incomplete code to remove/rework: None known.
 - docs that must stay aligned: Action skill docs and action contract changes.
 - local validation commands/checks: Run `python action-skills-workspace/grade.py <iteration-dir>` only when eval outputs exist.

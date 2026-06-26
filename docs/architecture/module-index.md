@@ -25,7 +25,7 @@ This index is the first context layer for agents. Load this file, then the local
 
 ## Cross-Module Flows
 
-- Gmail sync: web/CLI fetch adapters -> `core/gmail/sync` -> Gmail fetcher -> embedding generation -> DB email records.
+- Gmail sync: web/CLI fetch adapters -> `core/gmail/sync` -> Gmail fetcher -> embedding generation -> DB email records keyed by `accountId` + Gmail `id`.
 - Action execution: web/CLI action adapters -> `core/actions` registry/runner -> `core/agents` -> optional Gmail write operations -> DB action results.
 - Action generation: web action chat -> `/api/actions/generate` -> skill docs -> `core/agents`.
 - Analysis: web analysis routes -> `core/analysis` -> `core/agents` or `core/db`.
@@ -42,9 +42,11 @@ This index is the first context layer for agents. Load this file, then the local
 
 ## Stub Classification
 
-- Local zero-vector embeddings: `replace-with-contract`; zero vectors are the documented degraded-mode fallback until a real local embedding provider exists.
-- Embedding generation failure fallback: `replace-with-contract`; sync stores zero vectors and must remain explicit in Gmail/DB cards.
-- Simple k-means cluster labels/descriptions: `isolate-for-later`; valid MVP behavior, not a final semantic labeling system.
-- Dynamic user action import escape hatch: `isolate-for-later`; required by Next webpack/runtime split and guarded by filename/path validation.
+- Local embeddings: `complete-now`; the `local` provider uses deterministic hashed token vectors for lexical similarity without an API key.
+- Embedding provider failure fallback: `complete-now`; sync uses deterministic local vectors when network/API embedding calls fail, and clustering backfills older all-zero records from stored email text.
+- Unread sync reconciliation: `complete-now`; complete unread-scoped syncs mark same-account local unread rows as read when Gmail no longer returns them, without table overwrite.
+- Cluster labels/descriptions: `complete-now`; k-means clusters now derive names/descriptions from member terms and sender domains.
+- Cluster membership identity: `complete-now`; clustering stores account-scoped email keys so duplicate Gmail ids across accounts stay distinct.
+- Dynamic user action import escape hatch: `replace-with-contract`; required by Next webpack/runtime split and guarded by filename/path validation until a separate plugin sandbox exists.
 - Remote browser mutations: `replace-with-contract`; the local app blocks non-local/cross-site mutation requests unless `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` is explicitly set for a trusted deployment.
-- `ui.panelWidths`: `remove` if the final reference scan confirms no consumer uses it.
+- `ui.panelWidths`: `remove`; unused config/store field was removed after a reference scan found no layout consumer.
