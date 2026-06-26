@@ -7,7 +7,7 @@
     "dev": "next dev --port 3847",
     "build": "next build",
     "start": "next start --port 3847",
-    "lint": "next lint"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@email-agent/core": "*",

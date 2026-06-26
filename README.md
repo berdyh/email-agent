@@ -60,6 +60,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | For direct-api mode | When using direct API instead of CLI agents |
 | `SLACK_WEBHOOK_URL` | No | Slack notification webhook |
 | `DISCORD_WEBHOOK_URL` | No | Discord notification webhook |
+| `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments that need non-local browser writes |
 
 ## Usage
 
@@ -109,6 +110,10 @@ packages/
   web/    @email-agent/web    — Next.js 15 App Router UI
   cli/    @email-agent/cli    — Commander.js CLI
 ```
+
+For agent-safe module boundaries, start with
+[`docs/architecture/module-index.md`](docs/architecture/module-index.md), then
+load the local `MODULE.md` card beside the area being changed.
 
 ### Agent System
 
@@ -162,6 +167,15 @@ See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creat
 | State | Zustand + TanStack Query |
 | CLI | Commander.js, ora, chalk |
 | Notifications | node-notifier, Slack/Discord webhooks |
+
+## Development Checks
+
+```bash
+npm test
+npm run lint
+npm run check:boundaries
+npm run build
+```
 
 ## License
 

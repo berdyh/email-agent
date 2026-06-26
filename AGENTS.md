@@ -2,7 +2,7 @@
 
 Local AI-powered email analysis tool. Monorepo with Turbo.
 
-> **Worktree:** This directory (`main/`) is a git worktree. The bare repo is at `../.bare/`. See global CLAUDE.md for git worktree SOPs.
+> **Worktree:** This directory (`main/`) is a git worktree. The bare repo is at `../.bare/`. See global AGENTS.md for git worktree SOPs.
 
 ## Commands
 
@@ -52,7 +52,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 ## Key Patterns
 
 - **Multi-account Gmail**: OAuth2 per-account auth in `gmail/account-manager.ts`, tokens at `~/.email-agent/accounts/{email}/token.json`, OAuth creds at `~/.email-agent/oauth.json`. `client.ts` routing: explicit account → default account → gcloud ADC fallback. `accountEmail?: string` threaded through all Gmail operations. Account removal/default-change calls `resetGmailClient()` to invalidate cached clients.
-- **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
+- **Agent system**: Strategy pattern executors (Codex SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
   - `CREATE_ACTION_SKILLS.md` (CREATE skill) — system prompt teaching the AI to generate new `.action.ts` files from scratch (template, interface, examples)
@@ -126,10 +126,10 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - `setup.sh` also writes `~/.email-agent/oauth.json` (step 9) — the JSON format must match what `account-manager.ts` reads (`{clientId, clientSecret}`)
 
 ### Agent Executors (Spawning CLIs)
-- Claude CLI: `--system-prompt` (NOT `--system`), `--output-format stream-json` for streaming, NO `--max-tokens` flag (use `--max-budget-usd` instead)
-- **Large `--system-prompt` args hang the CLI** — combine system prompt into the user prompt instead (see `claude-executor.ts`)
-- **Use `spawn` not `execFile`** for Claude CLI — `execFile` can get killed (exit 143/SIGTERM) by Node.js for long-running processes
-- When spawning `claude` CLI from a process inside Claude Code, strip `CLAUDECODE` env var or it refuses as "nested session" — use `cleanEnv()` in `claude-executor.ts`
+- Codex CLI: `--system-prompt` (NOT `--system`), `--output-format stream-json` for streaming, NO `--max-tokens` flag (use `--max-budget-usd` instead)
+- **Large `--system-prompt` args hang the CLI** — combine system prompt into the user prompt instead (see `Codex-executor.ts`)
+- **Use `spawn` not `execFile`** for Codex CLI — `execFile` can get killed (exit 143/SIGTERM) by Node.js for long-running processes
+- When spawning `Codex` CLI from a process inside Codex, strip `Codex` env var or it refuses as "nested session" — use `cleanEnv()` in `Codex-executor.ts`
 - Core module changes (via tsconfig `paths`) may not hot-reload in Next.js — restart `npm run dev` after modifying `packages/core/` source
 
 ## Code Style
