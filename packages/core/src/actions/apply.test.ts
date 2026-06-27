@@ -35,6 +35,26 @@ describe("Gmail operation account scoping", () => {
     );
   });
 
+  it("validates lookup membership before applying an explicit batch account", () => {
+    assert.deepEqual(
+      scopeOperationsToAccounts(
+        [{ emailId: "m1", type: "spam" }],
+        "me@example.com",
+        new Map([["m1", "me@example.com"]]),
+      ),
+      [{ emailId: "m1", type: "spam", accountEmail: "me@example.com" }],
+    );
+    assert.throws(
+      () =>
+        scopeOperationsToAccounts(
+          [{ emailId: "missing", type: "trash" }],
+          "me@example.com",
+          new Map([["m1", "me@example.com"]]),
+        ),
+      /not in the action batch/,
+    );
+  });
+
   it("rejects ambiguous message ids only when an operation targets one", () => {
     assert.throws(
       () =>

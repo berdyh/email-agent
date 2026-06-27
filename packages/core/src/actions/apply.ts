@@ -37,24 +37,27 @@ export function scopeOperationsToAccounts(
   accountEmailByMessageId?: OperationAccountLookup,
 ): GmailOperation[] {
   return operations.map((op) => {
-    if (op.accountEmail !== undefined) return op;
-
-    const scopedAccountEmail = accountEmail ?? accountEmailByMessageId?.get(op.emailId);
-    if (scopedAccountEmail === null) {
-      throw new Error(
-        `Cannot apply Gmail operation for message ${op.emailId}; the message id exists in multiple accounts`,
-      );
-    }
-    if (scopedAccountEmail === undefined) {
-      if (accountEmailByMessageId) {
+    if (accountEmailByMessageId) {
+      if (!accountEmailByMessageId.has(op.emailId)) {
         throw new Error(
           `Cannot apply Gmail operation for message ${op.emailId}; the message id was not in the action batch`,
         );
       }
-      return op;
+
+      const lookupAccountEmail = accountEmailByMessageId.get(op.emailId);
+      if (lookupAccountEmail === null) {
+        throw new Error(
+          `Cannot apply Gmail operation for message ${op.emailId}; the message id exists in multiple accounts`,
+        );
+      }
+
+      if (op.accountEmail !== undefined) return op;
+      return { ...op, accountEmail: accountEmail ?? lookupAccountEmail };
     }
 
-    return { ...op, accountEmail: scopedAccountEmail };
+    if (op.accountEmail !== undefined) return op;
+    if (accountEmail !== undefined) return { ...op, accountEmail };
+    return op;
   });
 }
 

@@ -364,9 +364,11 @@ describe("web API validation", () => {
       dataDir: "/tmp/email-agent",
       accounts: [],
       oauth: { clientId: "client", clientSecret: "secret" },
-    });
+      customCliKey: true,
+    } as never);
 
     assert.equal("oauth" in sanitized, false);
+    assert.equal("customCliKey" in sanitized, false);
     assert.equal(sanitized.embedding.dimensions, 768);
     assert.deepEqual(sanitized.notifications.webhooks, []);
     assert.equal("panelWidths" in sanitized.ui, false);

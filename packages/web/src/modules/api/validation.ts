@@ -617,20 +617,24 @@ export function mutationGuardResponse(request: Request): Response | undefined {
 }
 
 export function sanitizeSettingsForResponse(settings: AppConfig): Omit<AppConfig, "oauth"> {
-  const safe: Partial<AppConfig> = {
-    ...settings,
+  return {
+    agentMode: settings.agentMode,
+    preferredAgent: settings.preferredAgent,
+    gcp: settings.gcp,
     embedding: {
       ...settings.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
+    gmail: settings.gmail,
     notifications: {
       desktop: settings.notifications.desktop,
       webhooks: normalizeWebhooks(settings.notifications.webhooks),
     },
+    prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
+    dataDir: settings.dataDir,
+    accounts: settings.accounts,
   };
-  delete safe.oauth;
-  return safe as Omit<AppConfig, "oauth">;
 }
 
 function normalizeUiConfig(ui: AppConfig["ui"]): AppConfig["ui"] {
