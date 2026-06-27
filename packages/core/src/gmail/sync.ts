@@ -21,11 +21,12 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
   await initDb();
 
   const accountId = await resolveAccountEmail(options.accountEmail);
+  const fetchOptions = resolveSyncFetchOptions(options, accountId);
 
-  const fetchResult = await fetchEmailsWithMetadata(options);
+  const fetchResult = await fetchEmailsWithMetadata(fetchOptions);
   const emails = fetchResult.messages;
   if (emails.length === 0) {
-    await reconcileUnreadSync(accountId, emails, options, fetchResult);
+    await reconcileUnreadSync(accountId, emails, fetchOptions, fetchResult);
     return { fetched: 0 };
   }
 
@@ -43,9 +44,16 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
   const records = buildEmailRecords(accountId, emails, vectors);
 
   await upsertEmails(records);
-  await reconcileUnreadSync(accountId, emails, options, fetchResult);
+  await reconcileUnreadSync(accountId, emails, fetchOptions, fetchResult);
 
   return { fetched: emails.length };
+}
+
+export function resolveSyncFetchOptions(
+  options: FetchOptions,
+  accountId: string,
+): FetchOptions {
+  return { ...options, accountEmail: accountId };
 }
 
 export function shouldReconcileUnreadSync(

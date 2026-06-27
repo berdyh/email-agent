@@ -7,6 +7,7 @@ import {
   parseActionRunRequest,
   validationResponse,
 } from "@/modules/api/validation";
+import { resolveActionRunAccountEmail } from "@/modules/api/action-account-scope";
 
 const registry = new ActionRegistry();
 const runner = new ActionRunner();
@@ -61,6 +62,7 @@ export async function POST(request: NextRequest) {
     // Get unread emails to run the action on
     await initDb();
     const emailRecords = await getEmails({ unreadOnly: true, limit: 20, accountId: body.accountEmail });
+    const actionAccountEmail = resolveActionRunAccountEmail(body.accountEmail, emailRecords);
     const emails = emailRecords.map((e) => ({
       id: e.id,
       threadId: e.threadId,
@@ -76,7 +78,7 @@ export async function POST(request: NextRequest) {
       snippet: e.snippet,
     }));
 
-    const result = await runner.run(action, emails, body.accountEmail);
+    const result = await runner.run(action, emails, actionAccountEmail);
     return NextResponse.json(result);
   } catch (err) {
     const validation = validationResponse(err);

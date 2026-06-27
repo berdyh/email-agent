@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { shouldReconcileUnreadSync } from "./sync.js";
+import { resolveSyncFetchOptions, shouldReconcileUnreadSync } from "./sync.js";
 
 describe("sync unread reconciliation", () => {
+  it("fetches with the resolved account identity before reconciling", () => {
+    assert.deepEqual(resolveSyncFetchOptions({ scope: "unread" }, "me@example.com"), {
+      scope: "unread",
+      accountEmail: "me@example.com",
+    });
+    assert.deepEqual(resolveSyncFetchOptions({ scope: "unread" }, ""), {
+      scope: "unread",
+      accountEmail: "",
+    });
+  });
+
   it("runs only for complete unread syncs without message fetch failures", () => {
     assert.equal(
       shouldReconcileUnreadSync(
