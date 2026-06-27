@@ -45,7 +45,14 @@ export function scopeOperationsToAccounts(
         `Cannot apply Gmail operation for message ${op.emailId}; the message id exists in multiple accounts`,
       );
     }
-    if (scopedAccountEmail === undefined) return op;
+    if (scopedAccountEmail === undefined) {
+      if (accountEmailByMessageId) {
+        throw new Error(
+          `Cannot apply Gmail operation for message ${op.emailId}; the message id was not in the action batch`,
+        );
+      }
+      return op;
+    }
 
     return { ...op, accountEmail: scopedAccountEmail };
   });

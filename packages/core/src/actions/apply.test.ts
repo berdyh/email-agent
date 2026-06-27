@@ -46,4 +46,16 @@ describe("Gmail operation account scoping", () => {
       /multiple accounts/,
     );
   });
+
+  it("rejects unknown message ids when a lookup-backed action run produced operations", () => {
+    assert.throws(
+      () =>
+        scopeOperationsToAccounts(
+          [{ emailId: "missing", type: "trash" }],
+          undefined,
+          new Map([["m1", "me@example.com"]]),
+        ),
+      /not in the action batch/,
+    );
+  });
 });
