@@ -12,6 +12,7 @@ export interface GmailOperationItem {
   emailId: string;
   type: string;
   labelIds?: string[];
+  accountEmail?: string;
 }
 
 export interface ActionApplyResultData {

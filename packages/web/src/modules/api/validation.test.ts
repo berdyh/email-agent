@@ -138,9 +138,8 @@ describe("web API validation", () => {
     );
     assert.equal(
       parseApplyActionsRequest({
-        operations: [{ emailId: "m1", type: "trash" }],
-        accountEmail: "",
-      }).accountEmail,
+        operations: [{ emailId: "m1", type: "trash", accountEmail: "" }],
+      }).operations[0]?.accountEmail,
       "",
     );
     assert.equal(

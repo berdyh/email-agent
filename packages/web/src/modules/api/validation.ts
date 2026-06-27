@@ -360,6 +360,10 @@ export function parseApplyActionsRequest(input: unknown): {
       emailId,
       type: operationType,
       labelIds: Array.isArray(labels) ? labels as string[] : undefined,
+      accountEmail: optionalPresentString(
+        record["accountEmail"],
+        `operations[${index}].accountEmail`,
+      ),
     };
   });
 

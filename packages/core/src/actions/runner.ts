@@ -7,7 +7,12 @@ import type {
   EmailAction,
   ActionRunResult,
 } from "./types.js";
-import { mapResultToOperations, applyOperations } from "./apply.js";
+import {
+  mapResultToOperations,
+  applyOperations,
+  scopeOperationsToAccounts,
+  type OperationAccountLookup,
+} from "./apply.js";
 import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
@@ -39,6 +44,7 @@ export class ActionRunner {
     action: EmailAction,
     emails: GmailMessage[],
     accountEmail?: string,
+    accountEmailByMessageId?: OperationAccountLookup,
   ): Promise<ActionRunResult> {
     const prompt = buildPrompt(action, emails);
     const emailIds = emails.map((e) => e.id);
@@ -58,7 +64,11 @@ export class ActionRunner {
       };
 
       // Map action results to Gmail operations
-      const pendingOps = mapResultToOperations(action.id, output.results);
+      const pendingOps = scopeOperationsToAccounts(
+        mapResultToOperations(action.id, output.results),
+        accountEmail,
+        accountEmailByMessageId,
+      );
 
       if (pendingOps.length > 0) {
         const settings = await loadSettings();

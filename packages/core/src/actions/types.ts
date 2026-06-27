@@ -39,6 +39,7 @@ export interface GmailOperation {
   emailId: string;
   type: GmailOperationType;
   labelIds?: string[];
+  accountEmail?: string;
 }
 
 export interface ActionApplyResult {

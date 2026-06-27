@@ -8,6 +8,7 @@ import {
   ActionRegistry,
   ActionRunner,
   applyOperations,
+  buildOperationAccountLookup,
   summarizeOperations,
 } from "@email-agent/core";
 import type { GmailOperation } from "@email-agent/core";
@@ -56,7 +57,12 @@ export function registerRunAction(program: Command) {
         }));
 
         const runner = new ActionRunner();
-        const result = await runner.run(action, emails, options.account);
+        const result = await runner.run(
+          action,
+          emails,
+          options.account,
+          buildOperationAccountLookup(emailRecords),
+        );
 
         if (result.status === "success") {
           spinner.succeed(
