@@ -11,7 +11,8 @@ import {
   type FetchOptions,
 } from "./fetcher.js";
 import { resolveAccountEmail } from "./client.js";
-import { buildEmailRecords } from "./sync-records.js";
+import { buildEmailRecords, emailEmbeddingText } from "./sync-records.js";
+import { loadSettings } from "../config/settings.js";
 
 export interface SyncResult {
   fetched: number;
@@ -30,14 +31,17 @@ export async function syncEmails(options: FetchOptions): Promise<SyncResult> {
     return { fetched: 0 };
   }
 
-  const texts = emails.map(
-    (e) => `${e.subject}\n${e.from}\n${e.bodyText.slice(0, 500)}`,
-  );
+  const texts = emails.map(emailEmbeddingText);
 
   let vectors: number[][];
   try {
     vectors = await generateEmbeddings(texts);
-  } catch {
+  } catch (error) {
+    const settings = await loadSettings();
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `Embedding provider "${settings.embedding.provider}" failed, falling back to local hashed vectors: ${message}`,
+    );
     vectors = createLocalEmbeddingVectors(texts);
   }
 

@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useEmailStore } from "@/store/email-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,16 +23,35 @@ export default function SettingsPage() {
   const updateSettings = useUpdateSettings();
   const { data: accounts } = useAccounts();
   const queryClient = useQueryClient();
+  const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
+  const setActiveAccount = useEmailStore((s) => s.setActiveAccount);
   const [local, setLocal] = useState<Record<string, unknown>>({});
   const [accountLoading, setAccountLoading] = useState(false);
+  // Track whether the form has unsaved edits. Account operations invalidate the
+  // ["settings"] query, so unconditionally copying every refetch into local
+  // state would wipe in-progress edits. Only sync remote → local while pristine.
+  const [dirty, setDirty] = useState(false);
+
+  const editLocal = (next: Record<string, unknown>) => {
+    setDirty(true);
+    setLocal(next);
+  };
 
   useEffect(() => {
-    if (settings) setLocal(settings);
-  }, [settings]);
+    if (settings && !dirty) setLocal(settings);
+  }, [settings, dirty]);
 
   const save = () => {
-    updateSettings.mutate(local, {
-      onSuccess: () => toast.success("Settings saved"),
+    // Accounts are managed by the dedicated /api/accounts endpoints. Never send
+    // the stale local snapshot back, or removed accounts get resurrected.
+    const payload = { ...local };
+    delete payload["accounts"];
+    updateSettings.mutate(payload, {
+      onSuccess: () => {
+        // Mark pristine so the post-save settings refetch resyncs remote → local.
+        setDirty(false);
+        toast.success("Settings saved");
+      },
       onError: (err) => toast.error(err.message),
     });
   };
@@ -68,6 +88,7 @@ export default function SettingsPage() {
         throw new Error(data.error);
       }
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
       toast.success(`${email} set as default`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to set default");
@@ -86,7 +107,14 @@ export default function SettingsPage() {
         const data = (await res.json()) as { error: string };
         throw new Error(data.error);
       }
+      // Removing the active account would leave activeAccountEmail pointing at a
+      // deleted account (stale badge / list / action scoping). Reset to the
+      // all-accounts view so scoping stays valid.
+      if (activeAccountEmail === email) {
+        setActiveAccount(null);
+      }
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
       toast.success(`${email} removed`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove account");
@@ -219,7 +247,7 @@ export default function SettingsPage() {
                     <label className="mb-1 block text-sm font-medium">Mode</label>
                     <Select
                       value={agentMode}
-                      onChange={(e) => setLocal({ ...local, agentMode: e.target.value })}
+                      onChange={(e) => editLocal({ ...local, agentMode: e.target.value })}
                     >
                       <option value="all-agents">All Agents (try each CLI)</option>
                       <option value="hybrid">Hybrid (CLI + API fallback)</option>
@@ -232,11 +260,14 @@ export default function SettingsPage() {
                     </label>
                     <Select
                       value={preferredAgent}
-                      onChange={(e) => setLocal({ ...local, preferredAgent: e.target.value })}
+                      onChange={(e) => editLocal({ ...local, preferredAgent: e.target.value })}
                     >
                       <option value="claude">Claude</option>
+                      <option value="claude-sdk">Claude SDK</option>
                       <option value="codex">Codex</option>
                       <option value="gemini">Gemini</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="direct-api">Direct API</option>
                     </Select>
                   </div>
                 </CardContent>
@@ -254,7 +285,7 @@ export default function SettingsPage() {
                       rows={4}
                       value={(prompts[key] as string) ?? ""}
                       onChange={(e) =>
-                        setLocal({
+                        editLocal({
                           ...local,
                           prompts: { ...prompts, [key]: e.target.value },
                         })
@@ -276,7 +307,7 @@ export default function SettingsPage() {
                     <Switch
                       checked={notifications.desktop?.enabled ?? true}
                       onCheckedChange={(v) =>
-                        setLocal({
+                        editLocal({
                           ...local,
                           notifications: {
                             ...notifications,
@@ -291,7 +322,7 @@ export default function SettingsPage() {
                     <Switch
                       checked={notifications.desktop?.priorityOnly ?? true}
                       onCheckedChange={(v) =>
-                        setLocal({
+                        editLocal({
                           ...local,
                           notifications: {
                             ...notifications,
@@ -338,7 +369,7 @@ export default function SettingsPage() {
                     <Switch
                       checked={gmail.syncActions ?? false}
                       onCheckedChange={(v) =>
-                        setLocal({
+                        editLocal({
                           ...local,
                           gmail: { ...gmail, syncActions: v },
                         })

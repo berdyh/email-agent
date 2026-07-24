@@ -6,6 +6,7 @@ import { Inbox, Zap, Network, Newspaper, Settings } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/store/ui-store";
+import { useEmailStore } from "@/store/email-store";
 
 const navItems = [
   { href: "/mail", label: "Inbox", icon: Inbox },
@@ -18,11 +19,15 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const accountEmail = useEmailStore((s) => s.activeAccountEmail);
 
   const { data: unreadData } = useQuery<{ count: number }>({
-    queryKey: ["unreadCount"],
+    queryKey: ["unreadCount", accountEmail ?? null],
     queryFn: async () => {
-      const res = await fetch("/api/gmail/unread-count");
+      const url = accountEmail
+        ? `/api/gmail/unread-count?accountId=${encodeURIComponent(accountEmail)}`
+        : "/api/gmail/unread-count";
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch unread count");
       return res.json() as Promise<{ count: number }>;
     },

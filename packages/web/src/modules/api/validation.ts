@@ -400,7 +400,8 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
       body["preferredAgent"] !== "codex" &&
       body["preferredAgent"] !== "gemini" &&
       body["preferredAgent"] !== "openrouter" &&
-      body["preferredAgent"] !== "claude-sdk"
+      body["preferredAgent"] !== "claude-sdk" &&
+      body["preferredAgent"] !== "direct-api"
     ) {
       throw new RequestValidationError("preferredAgent is invalid");
     }
@@ -576,7 +577,10 @@ export function mergeSettingsUpdate(
     },
     gmail: { ...current.gmail, ...update.gmail },
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
-    accounts: update.accounts ?? current.accounts,
+    // Accounts are owned by the dedicated /api/accounts endpoints; a settings
+    // PUT must never mutate them, or a stale client snapshot resurrects a
+    // removed account. Ignore any accounts key in the update.
+    accounts: current.accounts,
     oauth: update.oauth ?? current.oauth,
   };
 }

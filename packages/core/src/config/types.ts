@@ -1,4 +1,10 @@
-export type AgentId = "claude" | "codex" | "gemini" | "openrouter" | "claude-sdk";
+export type AgentId =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "openrouter"
+  | "claude-sdk"
+  | "direct-api";
 export type AgentMode = "all-agents" | "hybrid" | "direct-api";
 export type EmbeddingProvider = "openai" | "openrouter" | "local";
 

@@ -54,8 +54,15 @@ export function useRunAction() {
       if (!res.ok) throw new Error("Failed to run action");
       return res.json() as Promise<ActionResult>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
+      // When gmail.syncActions is on, a successful run auto-applies Gmail
+      // operations (trash/spam/markRead), so email-derived caches go stale.
+      if (result.applyResult) {
+        void queryClient.invalidateQueries({ queryKey: ["emails"] });
+        void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
+        void queryClient.invalidateQueries({ queryKey: ["email"] });
+      }
     },
   });
 }

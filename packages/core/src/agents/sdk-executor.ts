@@ -6,6 +6,19 @@ import type {
   AgentStreamChunk,
 } from "./types.js";
 
+/** Bridge an AbortSignal into the AbortController the SDK expects. */
+function toAbortController(signal?: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+  }
+  return controller;
+}
+
 export class SdkExecutor implements AgentExecutor {
   readonly id = "claude-sdk" as const;
 
@@ -25,13 +38,25 @@ export class SdkExecutor implements AgentExecutor {
         systemPrompt: request.systemPrompt,
         maxTurns: 1,
         permissionMode: "plan",
+        abortController: toAbortController(request.signal),
       },
     })) {
-      if (message.type === "result" && message.subtype === "success") {
-        text = message.result;
-        tokensUsed =
-          (message.usage.output_tokens ?? 0) +
-          (message.usage.input_tokens ?? 0);
+      if (message.type === "result") {
+        if (message.subtype === "success") {
+          text = message.result;
+          tokensUsed =
+            (message.usage.output_tokens ?? 0) +
+            (message.usage.input_tokens ?? 0);
+        } else {
+          // Non-success subtypes (max turns, budget, execution error) must not
+          // be persisted as an empty successful result — surface them instead.
+          const detail = message.errors?.length
+            ? `: ${message.errors.join("; ")}`
+            : "";
+          throw new Error(
+            `Claude SDK returned non-success result "${message.subtype}"${detail}`,
+          );
+        }
       }
     }
 
@@ -52,6 +77,7 @@ export class SdkExecutor implements AgentExecutor {
         maxTurns: 1,
         permissionMode: "plan",
         includePartialMessages: true,
+        abortController: toAbortController(request.signal),
       },
     })) {
       if (message.type === "stream_event") {
@@ -67,6 +93,14 @@ export class SdkExecutor implements AgentExecutor {
           yield { text: event.delta.text, done: false };
         }
       } else if (message.type === "result") {
+        if (message.subtype !== "success") {
+          const detail = message.errors?.length
+            ? `: ${message.errors.join("; ")}`
+            : "";
+          throw new Error(
+            `Claude SDK returned non-success result "${message.subtype}"${detail}`,
+          );
+        }
         yield { text: "", done: true };
       }
     }

@@ -30,12 +30,15 @@ export class OpenRouterExecutor implements AgentExecutor {
     }
     messages.push({ role: "user", content: request.prompt });
 
-    const response = await openrouter.chat.completions.create({
-      model: process.env["OPENROUTER_MODEL"] ?? "qwen/qwen3-8b",
-      messages,
-      max_tokens: request.maxTokens,
-      temperature: request.temperature ?? 0.3,
-    });
+    const response = await openrouter.chat.completions.create(
+      {
+        model: process.env["OPENROUTER_MODEL"] ?? "qwen/qwen3-8b",
+        messages,
+        max_tokens: request.maxTokens,
+        temperature: request.temperature ?? 0.3,
+      },
+      { signal: request.signal },
+    );
 
     const choice = response.choices[0];
     const text = choice?.message?.content ?? "";

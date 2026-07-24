@@ -345,6 +345,44 @@ describe("web API validation", () => {
     assert.equal(merged.embedding.dimensions, 768);
   });
 
+  it("ignores an accounts key in settings updates (managed by account endpoints)", () => {
+    const update = parseSettingsUpdateRequest({
+      accounts: [{ email: "attacker@example.com", isDefault: true }],
+    });
+    const merged = mergeSettingsUpdate(
+      {
+        agentMode: "all-agents",
+        preferredAgent: "claude",
+        gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
+        prompts: { summary: "", priority: "", clustering: "", digest: "" },
+        embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+        gmail: { syncActions: false },
+        ui: {
+          theme: "system",
+          sidebarCollapsed: false,
+          fetchInterval: 0,
+          fetchScope: "unread",
+        },
+        dataDir: "/tmp/email-agent",
+        accounts: [{ email: "real@example.com", name: "Real", isDefault: true }],
+      },
+      update,
+    );
+
+    // The removed/attacker account must not be written back; current wins.
+    assert.deepEqual(merged.accounts, [
+      { email: "real@example.com", name: "Real", isDefault: true },
+    ]);
+  });
+
+  it("accepts direct-api as a preferred agent", () => {
+    assert.equal(
+      parseSettingsUpdateRequest({ preferredAgent: "direct-api" }).preferredAgent,
+      "direct-api",
+    );
+  });
+
   it("removes OAuth secrets from settings responses", () => {
     const sanitized = sanitizeSettingsForResponse({
       agentMode: "all-agents",

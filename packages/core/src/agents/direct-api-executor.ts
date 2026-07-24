@@ -11,7 +11,7 @@ function getClient(): OpenAI {
 }
 
 export class DirectApiExecutor implements AgentExecutor {
-  readonly id = "claude" as const; // Uses OpenAI-compatible API
+  readonly id = "direct-api" as const; // OpenAI-compatible chat completions API
 
   async isAvailable(): Promise<boolean> {
     return Boolean(process.env["OPENAI_API_KEY"]);
@@ -27,19 +27,22 @@ export class DirectApiExecutor implements AgentExecutor {
     }
     messages.push({ role: "user", content: request.prompt });
 
-    const response = await openai.chat.completions.create({
-      model: process.env["OPENAI_MODEL"] ?? "gpt-4o-mini",
-      messages,
-      max_tokens: request.maxTokens,
-      temperature: request.temperature ?? 0.3,
-    });
+    const response = await openai.chat.completions.create(
+      {
+        model: process.env["OPENAI_MODEL"] ?? "gpt-4o-mini",
+        messages,
+        max_tokens: request.maxTokens,
+        temperature: request.temperature ?? 0.3,
+      },
+      { signal: request.signal },
+    );
 
     const choice = response.choices[0];
     const text = choice?.message?.content ?? "";
 
     return {
       text,
-      agentUsed: "claude",
+      agentUsed: "direct-api",
       tokensUsed: response.usage?.total_tokens ?? 0,
       durationMs: Date.now() - start,
     };

@@ -12,6 +12,7 @@ export async function saveActionResult(
 
 export async function getActionResults(options?: {
   actionId?: string;
+  accountId?: string;
   limit?: number;
 }): Promise<ActionResultRecord[]> {
   const db = await getDb();
@@ -20,9 +21,16 @@ export async function getActionResults(options?: {
   if (options?.actionId) {
     query = query.where(`\`actionId\` = '${escapeSql(options.actionId)}'`);
   }
-  if (options?.limit) {
-    query = query.limit(options.limit);
+  if (options?.accountId !== undefined) {
+    query = query.where(`\`accountId\` = '${escapeSql(options.accountId)}'`);
   }
+  // Fetch all matching rows, sort newest-first, then slice. LanceDB applies
+  // limit before this JS sort, so limiting in-query would return an arbitrary
+  // N rows rather than the most recent N.
   const results = await query.toArray();
-  return results as unknown as ActionResultRecord[];
+  const records = results as unknown as ActionResultRecord[];
+  records.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+  return options?.limit ? records.slice(0, options.limit) : records;
 }

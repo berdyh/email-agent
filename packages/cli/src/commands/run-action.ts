@@ -20,7 +20,11 @@ export function registerRunAction(program: Command) {
     .option("-l, --limit <n>", "Maximum emails to process", "20")
     .option("-a, --account <email>", "Account to run action on")
     .action(async (actionId: string, options: { limit: string; account?: string }) => {
-      const limit = parseInt(options.limit, 10);
+      if (!/^[0-9]+$/.test(options.limit) || Number(options.limit) <= 0) {
+        console.error(chalk.red(`Invalid --limit "${options.limit}": must be a positive integer`));
+        process.exit(1);
+      }
+      const limit = Number(options.limit);
 
       await initDb();
 

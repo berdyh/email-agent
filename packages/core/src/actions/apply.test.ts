@@ -2,8 +2,34 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildOperationAccountLookup,
+  mapResultToOperations,
   scopeOperationsToAccounts,
 } from "./apply.js";
+
+describe("junk action operation mapping", () => {
+  it("maps a spam recommendation to a spam operation", () => {
+    assert.deepEqual(
+      mapResultToOperations("junk", [
+        { emailId: "m1", recommendation: "spam" },
+      ]),
+      [{ emailId: "m1", type: "spam" }],
+    );
+  });
+
+  it("maps delete and archive recommendations", () => {
+    assert.deepEqual(
+      mapResultToOperations("junk", [
+        { emailId: "m1", recommendation: "delete" },
+        { emailId: "m2", recommendation: "archive" },
+        { emailId: "m3", recommendation: "keep" },
+      ]),
+      [
+        { emailId: "m1", type: "trash" },
+        { emailId: "m2", type: "removeLabels", labelIds: ["INBOX"] },
+      ],
+    );
+  });
+});
 
 describe("Gmail operation account scoping", () => {
   it("builds account lookup by message id and marks duplicate ids ambiguous", () => {

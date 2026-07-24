@@ -44,15 +44,20 @@ export function useAutoFetch(
   const { data: settings } = useSettings();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Keep the latest isFetching in a ref so doFetch (and thus the interval)
+  // stays referentially stable and does not reset on every fetch.
+  const isFetchingRef = useRef(isFetching);
+  isFetchingRef.current = isFetching;
+
   const ui = ((settings as Record<string, unknown> | undefined)?.ui ?? {}) as Record<string, unknown>;
   const fetchInterval = (ui.fetchInterval as number) ?? 0;
   const fetchScope = (ui.fetchScope as string) ?? "unread";
 
   const doFetch = useCallback(() => {
-    if (!isFetching) {
+    if (!isFetchingRef.current) {
       fetchFn({ scope: fetchScope === "all" ? "all" : "unread", accountEmail });
     }
-  }, [fetchFn, fetchScope, isFetching, accountEmail]);
+  }, [fetchFn, fetchScope, accountEmail]);
 
   useEffect(() => {
     if (intervalRef.current) {

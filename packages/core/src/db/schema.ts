@@ -37,6 +37,7 @@ export interface ActionResultRecord {
   [key: string]: unknown;
   id: string;
   actionId: string;
+  accountId: string;
   status: string;
   emailIds: string; // JSON array
   resultData: string; // JSON string

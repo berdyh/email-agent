@@ -4,7 +4,6 @@ import { promisify } from "node:util";
 import {
   createGmailClientForAccount,
   getDefaultAccount,
-  getStoredTokens,
 } from "./account-manager.js";
 
 const execFileAsync = promisify(execFile);
@@ -64,21 +63,20 @@ export async function createGmailClient(
     );
   }
 
-  // No explicit account — try the default account if it has stored tokens
+  // No explicit account — a configured default account is authoritative.
+  // createGmailClientForAccount throws if its creds/tokens are missing;
+  // falling back to ADC here would sync a different mailbox under its id.
   const defaultAccount = await getDefaultAccount();
   if (defaultAccount) {
-    const tokens = await getStoredTokens(defaultAccount.email);
-    if (tokens) {
-      const cached = getCachedClient(defaultAccount.email);
-      if (cached) return cached;
-      return setCachedClient(
-        defaultAccount.email,
-        await createGmailClientForAccount(defaultAccount.email),
-      );
-    }
+    const cached = getCachedClient(defaultAccount.email);
+    if (cached) return cached;
+    return setCachedClient(
+      defaultAccount.email,
+      await createGmailClientForAccount(defaultAccount.email),
+    );
   }
 
-  // Fall back to gcloud ADC flow
+  // Legacy path: no accounts configured at all — gcloud ADC flow
   return createCachedGcloudClient();
 }
 

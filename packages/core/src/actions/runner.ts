@@ -79,18 +79,29 @@ export class ActionRunner {
         }
       }
 
-      // Persist to DB
-      await saveActionResult({
-        id: randomUUID(),
-        actionId: action.id,
-        status: "success",
-        emailIds: JSON.stringify(emailIds),
-        resultData: JSON.stringify(output),
-        agentUsed: agentResult.agentUsed,
-        tokensUsed: agentResult.tokensUsed,
-        durationMs: agentResult.durationMs,
-        createdAt: new Date().toISOString(),
-      });
+      // Persist to DB in its own try/catch: the Gmail mutations in applyResult
+      // are already real, so a persistence failure must not be reported to the
+      // caller as a failed run.
+      try {
+        await saveActionResult({
+          id: randomUUID(),
+          actionId: action.id,
+          accountId: accountEmail ?? "",
+          status: "success",
+          emailIds: JSON.stringify(emailIds),
+          resultData: JSON.stringify(output),
+          agentUsed: agentResult.agentUsed,
+          tokensUsed: agentResult.tokensUsed,
+          durationMs: agentResult.durationMs,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (persistErr) {
+        const message =
+          persistErr instanceof Error ? persistErr.message : String(persistErr);
+        console.error(
+          `Failed to persist action result for "${action.id}": ${message}`,
+        );
+      }
 
       return result;
     } catch (err) {

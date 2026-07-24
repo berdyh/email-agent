@@ -64,35 +64,41 @@ export async function POST(request: NextRequest) {
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
       .join("\n\n");
 
-    try {
-      const result = await router.execute({
-        prompt: conversationText,
-        systemPrompt,
-        signal: request.signal,
-      });
-
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(sseEvent("chunk", { text: result.text }));
-          controller.enqueue(sseEvent("done", { message: result.text }));
+    const stream = new ReadableStream({
+      async start(controller) {
+        let fullText = "";
+        try {
+          for await (const chunk of router.executeStream({
+            prompt: conversationText,
+            systemPrompt,
+            signal: request.signal,
+          })) {
+            if (chunk.text) {
+              fullText += chunk.text;
+              controller.enqueue(sseEvent("chunk", { text: chunk.text }));
+            }
+          }
+          controller.enqueue(sseEvent("done", { message: fullText }));
+        } catch (err) {
+          // Headers are already sent, so surface failures as an SSE error event
+          // rather than an HTTP status the client can no longer read.
+          console.error(err);
+          controller.enqueue(
+            sseEvent("error", { error: "Failed to generate action" }),
+          );
+        } finally {
           controller.close();
-        },
-      });
+        }
+      },
+    });
 
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      });
-    } catch (err) {
-      console.error(err);
-      return new Response(
-        JSON.stringify({ error: "Failed to generate action" }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
-      );
-    }
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
   } catch (err) {
     const validation = validationResponse(err);
     if (validation) return validation;

@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   listAccounts,
-  addAccount,
   removeAccount,
   setDefaultAccount,
   getOAuthCredentials,
@@ -14,6 +13,11 @@ import {
   parseAccountPostRequest,
   validationResponse,
 } from "@/modules/api/validation";
+import {
+  getOAuthRedirectUri,
+  generateOAuthState,
+  setOAuthStateCookie,
+} from "@/modules/api/oauth-state";
 
 export async function GET() {
   try {
@@ -40,11 +44,11 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const authUrl = generateAuthUrl(
-        creds,
-        "http://localhost:3847/api/auth/callback",
-      );
-      return NextResponse.json({ authUrl });
+      const state = generateOAuthState();
+      const authUrl = generateAuthUrl(creds, getOAuthRedirectUri(request), state);
+      const response = NextResponse.json({ authUrl });
+      setOAuthStateCookie(response, state);
+      return response;
     }
 
     if (body.action === "setDefault") {

@@ -38,6 +38,10 @@ export default function ActionsPage() {
   const { isOpen, expandedCardId, openEdit } = useActionChatStore();
   const accountEmail = useEmailStore((s) => s.activeAccountEmail) ?? undefined;
   const [pendingOps, setPendingOps] = useState<GmailOperationItem[] | null>(null);
+  // Track per-card in-flight runs by action id. The shared mutation only exposes
+  // the most recent variables, so deriving "running" from it lets a second run
+  // make the first card look runnable again (double-launch, wrong spinner).
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
   function handleDelete(filename: string, name: string) {
     if (!window.confirm(`Delete action "${name}"? This cannot be undone.`)) return;
@@ -127,6 +131,10 @@ export default function ActionsPage() {
                 return <ActionChatCard key={action.id} />;
               }
 
+              const isRunning = runningIds.has(action.id);
+              const isDeleting =
+                deleteAction.isPending && deleteAction.variables?.filename === action.filename;
+
               return (
                 <Card key={action.id}>
                   <CardHeader>
@@ -143,8 +151,13 @@ export default function ActionsPage() {
                       <Button
                         size="sm"
                         className="gap-2"
-                        disabled={runAction.isPending}
+                        disabled={isRunning}
                         onClick={() => {
+                          setRunningIds((prev) => {
+                            const next = new Set(prev);
+                            next.add(action.id);
+                            return next;
+                          });
                           runAction.mutate(
                             { actionId: action.id, accountEmail },
                             {
@@ -165,11 +178,18 @@ export default function ActionsPage() {
                                 }
                               },
                               onError: (err) => toast.error(err.message),
+                              onSettled: () => {
+                                setRunningIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(action.id);
+                                  return next;
+                                });
+                              },
                             },
                           );
                         }}
                       >
-                        {runAction.isPending ? (
+                        {isRunning ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                           <Play className="h-4 w-4" />
@@ -194,10 +214,10 @@ export default function ActionsPage() {
                             size="sm"
                             variant="outline"
                             className="gap-1 text-destructive hover:text-destructive"
-                            disabled={deleteAction.isPending}
+                            disabled={isDeleting}
                             onClick={() => handleDelete(action.filename!, action.name)}
                           >
-                            {deleteAction.isPending ? (
+                            {isDeleting ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
                             ) : (
                               <Trash2 className="h-3 w-3" />

@@ -2,13 +2,9 @@ import { google, type gmail_v1 } from "googleapis";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { AccountConfig } from "../config/types.js";
 import type { OAuthCredentials, StoredTokens } from "./account-types.js";
 import { resetGmailClient } from "./client.js";
-
-const execFileAsync = promisify(execFile);
 
 const BASE_DIR = join(homedir(), ".email-agent");
 const OAUTH_PATH = join(BASE_DIR, "oauth.json");
@@ -146,25 +142,36 @@ export async function listAccounts(): Promise<AccountConfig[]> {
   }
 }
 
-export async function addAccount(account: AccountConfig): Promise<void> {
-  const { loadSettings, saveSettings } = await import("../config/settings.js");
-  const settings = await loadSettings();
-  const accounts = [...settings.accounts];
+export function upsertAccountEntry(
+  accounts: readonly AccountConfig[],
+  account: AccountConfig,
+): AccountConfig[] {
+  const existing = accounts.find((a) => a.email === account.email);
+  // Re-adding (re-authing) an existing account must not silently demote it
+  // from default — preserve its isDefault unless the new entry claims it.
+  const merged: AccountConfig = {
+    ...account,
+    isDefault: account.isDefault === true || existing?.isDefault === true,
+  };
 
-  const existing = accounts.findIndex((a) => a.email === account.email);
-  if (existing >= 0) {
-    accounts[existing] = account;
-  } else {
-    accounts.push(account);
-  }
+  const next = existing
+    ? accounts.map((a) => (a.email === account.email ? merged : { ...a }))
+    : [...accounts.map((a) => ({ ...a })), merged];
 
   // If this is the first account or marked default, clear other defaults
-  if (account.isDefault || accounts.length === 1) {
-    for (const a of accounts) {
+  if (merged.isDefault || next.length === 1) {
+    for (const a of next) {
       a.isDefault = a.email === account.email;
     }
   }
 
+  return next;
+}
+
+export async function addAccount(account: AccountConfig): Promise<void> {
+  const { loadSettings, saveSettings } = await import("../config/settings.js");
+  const settings = await loadSettings();
+  const accounts = upsertAccountEntry(settings.accounts, account);
   await saveSettings({ ...settings, accounts });
 }
 
@@ -209,16 +216,38 @@ export async function setDefaultAccount(email: string): Promise<void> {
 
 // --- Gmail Client Creation ---
 
+export function requireAccountAuth(
+  email: string,
+  creds: OAuthCredentials | null,
+  stored: StoredTokens | null,
+): { creds: OAuthCredentials; stored: StoredTokens } {
+  if (!creds) {
+    throw new Error(
+      `Cannot access Gmail account "${email}": OAuth client credentials are missing ` +
+        `(~/.email-agent/oauth.json). Restore them (re-run setup), then run ` +
+        `'npx email-agent accounts add ${email}' to re-authorize the account.`,
+    );
+  }
+  if (!stored) {
+    throw new Error(
+      `Cannot access Gmail account "${email}": no stored tokens for this account. ` +
+        `Run 'npx email-agent accounts add ${email}' to authorize it.`,
+    );
+  }
+  return { creds, stored };
+}
+
 export async function createGmailClientForAccount(
   email: string,
 ): Promise<gmail_v1.Gmail> {
-  const creds = await getOAuthCredentials();
-  const stored = await getStoredTokens(email);
-
-  if (!creds || !stored) {
-    // Fallback to gcloud ADC
-    return createGmailClientFromGcloud();
-  }
+  // A named account must never silently fall back to gcloud ADC — that would
+  // read/write a different mailbox under this account's id (cross-account
+  // contamination). ADC is reserved for the unscoped path in client.ts.
+  const { creds, stored } = requireAccountAuth(
+    email,
+    await getOAuthCredentials(),
+    await getStoredTokens(email),
+  );
 
   let tokens = stored;
   // Refresh if expired (with 5 min buffer)
@@ -231,19 +260,6 @@ export async function createGmailClientForAccount(
     access_token: tokens.accessToken,
     refresh_token: tokens.refreshToken,
   });
-
-  return google.gmail({ version: "v1", auth });
-}
-
-async function createGmailClientFromGcloud(): Promise<gmail_v1.Gmail> {
-  const { stdout } = await execFileAsync("gcloud", [
-    "auth",
-    "application-default",
-    "print-access-token",
-  ]);
-  const token = stdout.trim();
-  const auth = new google.auth.OAuth2();
-  auth.setCredentials({ access_token: token });
 
   return google.gmail({ version: "v1", auth });
 }

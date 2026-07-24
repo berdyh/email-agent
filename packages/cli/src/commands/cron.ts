@@ -1,9 +1,19 @@
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import chalk from "chalk";
 import ora from "ora";
 
 const MARKER = "# email-agent-cron";
+
+// This file compiles to packages/cli/dist/commands/cron.js — walk up to the
+// monorepo root so the installed crontab entry doesn't depend on cron's cwd
+// (cron runs jobs from $HOME, not the repo).
+function resolveRepoRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, "..", "..", "..", "..");
+}
 
 function getCurrentCrontab(): string {
   try {
@@ -39,6 +49,12 @@ function resolveNpxPath(): string {
   }
 }
 
+// Single-quote a value for safe embedding in a crontab command line, escaping
+// any embedded single quotes (POSIX shell quoting: close, escaped quote, reopen).
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export function registerCron(program: Command) {
   const cron = program
     .command("cron")
@@ -68,15 +84,28 @@ export function registerCron(program: Command) {
           process.exit(1);
         }
 
-        const scope = options.scope === "all" ? "all" : "unread";
-        const limit = options.limit;
+        if (options.scope !== "all" && options.scope !== "unread") {
+          console.error(chalk.red('Scope must be "all" or "unread"'));
+          process.exit(1);
+        }
+        const scope = options.scope;
+
+        if (!/^[0-9]+$/.test(options.limit) || Number(options.limit) <= 0) {
+          console.error(
+            chalk.red(`Invalid --limit "${options.limit}": must be a positive integer`),
+          );
+          process.exit(1);
+        }
+        const limit = Number(options.limit);
+
         const npx = resolveNpxPath();
+        const repoRoot = resolveRepoRoot();
 
         const spinner = ora("Setting up crontab entry...").start();
 
         const crontab = getCurrentCrontab();
         const cleaned = removeAgentEntries(crontab);
-        const entry = `*/${interval} * * * * ${npx} email-agent fetch --scope ${scope} --limit ${limit} ${MARKER}`;
+        const entry = `*/${interval} * * * * cd ${shellQuote(repoRoot)} && ${shellQuote(npx)} email-agent fetch --scope ${scope} --limit ${limit} ${MARKER}`;
         const updated = cleaned.trimEnd() + "\n" + entry + "\n";
 
         setCrontab(updated);

@@ -12,13 +12,22 @@ import {
 import { LANCEDB_DIR } from "../config/defaults.js";
 import { VECTOR_DIMENSION } from "../shared/vector.js";
 
-let db: Connection | null = null;
+let dbPromise: Promise<Connection> | null = null;
 
-export async function getDb(): Promise<Connection> {
-  if (db) return db;
-  await mkdir(LANCEDB_DIR, { recursive: true });
-  db = await connect(LANCEDB_DIR);
-  return db;
+export function getDb(): Promise<Connection> {
+  // Cache the connect() promise, not the resolved connection, so concurrent
+  // first callers share a single connect() instead of each racing their own.
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      await mkdir(LANCEDB_DIR, { recursive: true });
+      return connect(LANCEDB_DIR);
+    })().catch((err) => {
+      // Don't cache a rejected promise — allow the next caller to retry.
+      dbPromise = null;
+      throw err;
+    });
+  }
+  return dbPromise;
 }
 
 function vectorField(name: string): Field {
@@ -60,6 +69,7 @@ const threadSchema = new Schema([
 const actionResultSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("actionId", new Utf8()),
+  new Field("accountId", new Utf8()),
   new Field("status", new Utf8()),
   new Field("emailIds", new Utf8()),
   new Field("resultData", new Utf8()),
@@ -112,6 +122,20 @@ export async function initDb(): Promise<void> {
 
   if (!tableNames.includes("action_results")) {
     await conn.createEmptyTable("action_results", actionResultSchema);
+  } else {
+    // Migration: ensure accountId column exists (LanceDB has no ALTER TABLE)
+    const actionResults = await conn.openTable("action_results");
+    const existingSchema = await actionResults.schema();
+    const hasAccountId = existingSchema.fields.some(
+      (f: { name: string }) => f.name === "accountId",
+    );
+    if (!hasAccountId) {
+      console.warn(
+        "Migrating action_results table: adding accountId column. Existing action results will be cleared.",
+      );
+      await conn.dropTable("action_results");
+      await conn.createEmptyTable("action_results", actionResultSchema);
+    }
   }
 
   if (!tableNames.includes("clusters")) {

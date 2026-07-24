@@ -16,7 +16,7 @@ For each email, return:
 - junkScore: number 0-100 (0 = definitely not junk, 100 = definitely junk)
 - confidence: "high" | "medium" | "low"
 - signals: array of detected junk indicators
-- recommendation: "keep" | "archive" | "delete"`,
+- recommendation: "keep" | "archive" | "delete" | "spam"`,
   outputSchema: '{ emailId: string, junkScore: number, confidence: string, signals: string[], recommendation: string }',
 };
 
