@@ -20,7 +20,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [OpenAI Codex](https://github.com/openai/codex) (`codex`)
   - [Google Gemini CLI](https://github.com/google/gemini-cli) (`npx @google/gemini-cli`)
-- **API key for embeddings** — OpenAI or [OpenRouter](https://openrouter.ai) (or use `EMBEDDING_PROVIDER=local` for deterministic lexical embeddings)
+- **API key for embeddings** — OpenAI or [OpenRouter](https://openrouter.ai) (or pick the `local` embedding provider in setup for deterministic lexical embeddings)
 
 ## Setup
 
@@ -48,13 +48,20 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `GCP_PROJECT_ID` | Yes | Google Cloud project with Gmail API enabled |
 | `OPENAI_API_KEY` | For OpenAI embeddings / direct-api mode | Embeddings, clustering, and the direct LLM API |
+| `ANTHROPIC_API_KEY` | For the `claude-sdk` executor | Claude Agent SDK access without the CLI |
 | `OPENROUTER_API_KEY` | For OpenRouter | Embeddings (Qwen3) + LLM access via openrouter.ai |
 | `OPENROUTER_MODEL` | No | OpenRouter LLM model (default: `qwen/qwen3-8b`) |
-| `AGENT_MODE` | No | `all-agents` (default), `hybrid`, or `direct-api` |
-| `PREFERRED_AGENT` | No | `claude` (default), `codex`, `gemini`, or `openrouter` |
 | `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments that need non-local browser writes |
+
+The root `.env` is loaded by both the CLI and the web server at startup (it holds
+API keys). Agent selection, embedding provider, GCP project, and data dir are
+**not** env vars — they live in `~/.email-agent/settings.json`:
+
+```bash
+npx email-agent config set agentMode direct-api   # all-agents | hybrid | direct-api
+npx email-agent config set preferredAgent codex   # claude | codex | gemini | openrouter
+```
 
 ## Usage
 
@@ -116,7 +123,7 @@ The agent router tries your preferred CLI agent first, then falls back through o
 |---|---|
 | `all-agents` | Try preferred CLI → other CLIs → OpenRouter → error |
 | `hybrid` | Try preferred CLI → other CLIs → OpenRouter → direct API |
-| `direct-api` | API only — OpenAI-compatible direct API or OpenRouter, whichever is configured (`PREFERRED_AGENT` picks the order) |
+| `direct-api` | API only — OpenAI-compatible direct API or OpenRouter, whichever is configured (`preferredAgent` picks the order) |
 
 ### Action Plugin System
 

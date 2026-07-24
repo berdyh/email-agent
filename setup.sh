@@ -146,7 +146,7 @@ while true; do
     fi
   fi
 done
-set_env "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"
+# EMBEDDING_PROVIDER is persisted into settings.json below; no env var is read.
 
 # ── Agent mode ──
 echo ""
@@ -163,7 +163,8 @@ case "$agent_choice" in
   3) AGENT_MODE="hybrid" ;;
   *) AGENT_MODE="all-agents" ;;
 esac
-set_env "AGENT_MODE" "$AGENT_MODE"
+# Agent mode is runtime config — it's written to settings.json below (agentMode),
+# not to .env, which is only loaded for API keys / embedding provider.
 ok "Agent mode: ${AGENT_MODE}"
 
 # ── Gmail sync ──
@@ -221,21 +222,6 @@ if [ "$AGENT_MODE" = "direct-api" ] || [ "$AGENT_MODE" = "hybrid" ]; then
     fi
   fi
 
-  # Google
-  EXISTING_GOOGLE=$(grep "^GOOGLE_API_KEY=" .env 2>/dev/null | sed 's/^GOOGLE_API_KEY=//' || true)
-  if [ -n "$EXISTING_GOOGLE" ]; then
-    ok "GOOGLE_API_KEY already set"
-  else
-    echo ""
-    read -rsp "  Google API key: " google_key
-    echo ""
-    if [ -n "$google_key" ]; then
-      set_env "GOOGLE_API_KEY" "$google_key"
-      ok "GOOGLE_API_KEY saved"
-    else
-      warn "Skipped GOOGLE_API_KEY"
-    fi
-  fi
 fi
 
 ok "Environment configured"
@@ -486,8 +472,9 @@ fi
 
 if [ "$AGENTS_FOUND" -eq 0 ]; then
   echo ""
-  warn "No AI agent CLI found. Install at least one above, or set AGENT_MODE=direct-api"
-  echo -e "  ${DIM}With direct-api mode, set OPENAI_API_KEY in .env${RESET}"
+  warn "No AI agent CLI found. Install at least one above, or use direct-api mode"
+  echo -e "  ${DIM}Switch mode:  npx email-agent config set agentMode direct-api${RESET}"
+  echo -e "  ${DIM}Then set OPENAI_API_KEY (or OPENROUTER_API_KEY) in .env${RESET}"
 fi
 
 echo ""

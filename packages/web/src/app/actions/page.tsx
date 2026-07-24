@@ -8,6 +8,7 @@ import {
   useRunAction,
   useDeleteAction,
   useApplyOperations,
+  type ActionItem,
   type GmailOperationItem,
 } from "@/hooks/use-actions";
 import { Button } from "@/components/ui/button";
@@ -38,20 +39,65 @@ export default function ActionsPage() {
   const { isOpen, expandedCardId, openEdit } = useActionChatStore();
   const accountEmail = useEmailStore((s) => s.activeAccountEmail) ?? undefined;
   const [pendingOps, setPendingOps] = useState<GmailOperationItem[] | null>(null);
-  // Track per-card in-flight runs by action id. The shared mutation only exposes
-  // the most recent variables, so deriving "running" from it lets a second run
-  // make the first card look runnable again (double-launch, wrong spinner).
+  // Track per-card in-flight runs/deletes by id. The shared mutation only exposes
+  // the most recent variables and detaches per-invocation callbacks when a second
+  // call starts, so we track progress locally and drive result handling inline via
+  // mutateAsync (see handleRun / handleDelete) instead of per-call onSuccess/onSettled.
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [deletingFilenames, setDeletingFilenames] = useState<Set<string>>(new Set());
 
-  function handleDelete(filename: string, name: string) {
+  async function handleRun(action: ActionItem) {
+    setRunningIds((prev) => {
+      const next = new Set(prev);
+      next.add(action.id);
+      return next;
+    });
+    try {
+      const result = await runAction.mutateAsync({ actionId: action.id, accountEmail });
+      if (result.status === "success") {
+        if (result.applyResult) {
+          toast.success(
+            `"${action.name}" completed — auto-applied ${result.applyResult.applied} operations`,
+          );
+        } else {
+          toast.success(`Action "${action.name}" completed`);
+        }
+        if (result.pendingOperations?.length) {
+          setPendingOps(result.pendingOperations);
+        }
+      } else {
+        toast.error(result.error ?? "Action failed");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setRunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(action.id);
+        return next;
+      });
+    }
+  }
+
+  async function handleDelete(filename: string, name: string) {
     if (!window.confirm(`Delete action "${name}"? This cannot be undone.`)) return;
-    deleteAction.mutate(
-      { filename },
-      {
-        onSuccess: () => toast.success(`Action "${name}" deleted`),
-        onError: (err) => toast.error(err.message),
-      },
-    );
+    setDeletingFilenames((prev) => {
+      const next = new Set(prev);
+      next.add(filename);
+      return next;
+    });
+    try {
+      await deleteAction.mutateAsync({ filename });
+      toast.success(`Action "${name}" deleted`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete action");
+    } finally {
+      setDeletingFilenames((prev) => {
+        const next = new Set(prev);
+        next.delete(filename);
+        return next;
+      });
+    }
   }
 
   function handleApply() {
@@ -132,8 +178,9 @@ export default function ActionsPage() {
               }
 
               const isRunning = runningIds.has(action.id);
-              const isDeleting =
-                deleteAction.isPending && deleteAction.variables?.filename === action.filename;
+              const isDeleting = action.filename
+                ? deletingFilenames.has(action.filename)
+                : false;
 
               return (
                 <Card key={action.id}>
@@ -152,42 +199,7 @@ export default function ActionsPage() {
                         size="sm"
                         className="gap-2"
                         disabled={isRunning}
-                        onClick={() => {
-                          setRunningIds((prev) => {
-                            const next = new Set(prev);
-                            next.add(action.id);
-                            return next;
-                          });
-                          runAction.mutate(
-                            { actionId: action.id, accountEmail },
-                            {
-                              onSuccess: (result) => {
-                                if (result.status === "success") {
-                                  if (result.applyResult) {
-                                    toast.success(
-                                      `"${action.name}" completed — auto-applied ${result.applyResult.applied} operations`,
-                                    );
-                                  } else {
-                                    toast.success(`Action "${action.name}" completed`);
-                                  }
-                                  if (result.pendingOperations?.length) {
-                                    setPendingOps(result.pendingOperations);
-                                  }
-                                } else {
-                                  toast.error(result.error ?? "Action failed");
-                                }
-                              },
-                              onError: (err) => toast.error(err.message),
-                              onSettled: () => {
-                                setRunningIds((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(action.id);
-                                  return next;
-                                });
-                              },
-                            },
-                          );
-                        }}
+                        onClick={() => void handleRun(action)}
                       >
                         {isRunning ? (
                           <Loader2 className="h-4 w-4 animate-spin" />

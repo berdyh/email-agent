@@ -76,7 +76,22 @@ const clusterSchema = new Schema([
   vectorField("centroid"),
 ]);
 
-export async function initDb(): Promise<void> {
+let initPromise: Promise<void> | null = null;
+
+export function initDb(): Promise<void> {
+  // Cache the in-flight migration promise (mirroring getDb) so concurrent
+  // callers share a single init pass instead of racing the drop/create
+  // sequence. Clear on rejection so a later caller can retry.
+  if (!initPromise) {
+    initPromise = runInit().catch((err) => {
+      initPromise = null;
+      throw err;
+    });
+  }
+  return initPromise;
+}
+
+async function runInit(): Promise<void> {
   const conn = await getDb();
   const tableNames = await conn.tableNames();
 
@@ -109,10 +124,24 @@ export async function initDb(): Promise<void> {
     );
     if (!hasAccountId) {
       console.warn(
-        "Migrating action_results table: adding accountId column. Existing action results will be cleared.",
+        "Migrating action_results table: adding accountId column. Existing action results will be preserved with an empty (legacy/unscoped) accountId.",
       );
+      // Unlike emails, action results cannot be re-fetched — preserve every
+      // legacy row. Read them before the drop, then re-insert with the
+      // unscoped accountId sentinel ("") under the new schema.
+      const legacyRows = (await actionResults
+        .query()
+        .toArray()) as unknown as Array<Record<string, unknown>>;
       await conn.dropTable("action_results");
-      await conn.createEmptyTable("action_results", actionResultSchema);
+      const migrated = await conn.createEmptyTable(
+        "action_results",
+        actionResultSchema,
+      );
+      if (legacyRows.length > 0) {
+        await migrated.add(
+          legacyRows.map((row) => ({ ...row, accountId: "" })),
+        );
+      }
     }
   }
 

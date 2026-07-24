@@ -24,6 +24,8 @@ export interface ActionResultRecord {
   [key: string]: unknown;
   id: string;
   actionId: string;
+  // "" is the unscoped sentinel: a legacy/ADC row OR a mixed multi-account run
+  // whose processed emails did not resolve to a single account.
   accountId: string;
   status: string;
   emailIds: string; // JSON array
