@@ -206,21 +206,8 @@ describe("web API validation", () => {
         pubsubSubscription: "sub",
         watchExpiration: "2026-06-26T12:00:00Z",
       },
-      notifications: {
-        desktop: { enabled: true, priorityOnly: false },
-        webhooks: [
-          {
-            name: "ops",
-            url: "https://example.com/webhook",
-            type: "generic",
-            enabled: true,
-          },
-        ],
-      },
       prompts: {
         summary: "summary",
-        priority: "priority",
-        clustering: "cluster",
         digest: "digest",
       },
       embedding: {
@@ -230,8 +217,6 @@ describe("web API validation", () => {
       },
       gmail: { syncActions: true },
       ui: {
-        theme: "dark",
-        sidebarCollapsed: true,
         panelWidths: [25, 35, 40],
         fetchInterval: 15,
         fetchScope: "all",
@@ -242,7 +227,7 @@ describe("web API validation", () => {
     });
 
     assert.equal(settings.agentMode, "hybrid");
-    assert.equal(settings.notifications?.webhooks?.[0]?.type, "generic");
+    assert.equal(settings.prompts?.summary, "summary");
     assert.equal(settings.accounts?.[0]?.isDefault, true);
     assert.equal(settings.oauth?.clientSecret, "secret");
     assert.equal("panelWidths" in settings.ui!, false);
@@ -259,8 +244,6 @@ describe("web API validation", () => {
       () =>
         parseSettingsUpdateRequest({
           ui: {
-            theme: "system",
-            sidebarCollapsed: false,
             fetchInterval: 0,
             fetchScope: "everything",
           },
@@ -268,22 +251,8 @@ describe("web API validation", () => {
       /fetchScope/,
     );
     assert.throws(
-      () =>
-        parseSettingsUpdateRequest({
-          notifications: {
-            desktop: { enabled: true },
-            webhooks: [{ name: "bad", url: "https://example.com", type: "ftp" }],
-          },
-        }),
-      /webhooks/,
-    );
-    assert.deepEqual(
-      parseSettingsUpdateRequest({
-        notifications: {
-          webhooks: null,
-        },
-      }).notifications?.webhooks,
-      [],
+      () => parseSettingsUpdateRequest({ notifications: { desktop: { enabled: true } } }),
+      /Unknown setting/,
     );
     assert.throws(() => parseSettingsUpdateRequest({ accounts: {} }), /accounts/);
   });
@@ -295,13 +264,10 @@ describe("web API validation", () => {
         agentMode: "all-agents",
         preferredAgent: "claude",
         gcp: { projectId: "project", pubsubTopic: "topic", pubsubSubscription: "sub" },
-        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: null as never },
-        prompts: { summary: "s", priority: "p", clustering: "c", digest: "d" },
+        prompts: { summary: "s", digest: "d" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
         gmail: { syncActions: false },
         ui: {
-          theme: "dark",
-          sidebarCollapsed: true,
           fetchInterval: 0,
           fetchScope: "all",
         },
@@ -312,9 +278,7 @@ describe("web API validation", () => {
     );
 
     assert.equal(merged.ui.fetchInterval, 10);
-    assert.equal(merged.ui.theme, "dark");
     assert.equal(merged.ui.fetchScope, "all");
-    assert.equal(merged.ui.sidebarCollapsed, true);
     assert.equal("panelWidths" in merged.ui, false);
   });
 
@@ -325,13 +289,10 @@ describe("web API validation", () => {
         agentMode: "all-agents",
         preferredAgent: "claude",
         gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
-        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
-        prompts: { summary: "", priority: "", clustering: "", digest: "" },
+        prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
         gmail: { syncActions: true },
         ui: {
-          theme: "system",
-          sidebarCollapsed: false,
           fetchInterval: 0,
           fetchScope: "unread",
         },
@@ -354,13 +315,10 @@ describe("web API validation", () => {
         agentMode: "all-agents",
         preferredAgent: "claude",
         gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
-        notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
-        prompts: { summary: "", priority: "", clustering: "", digest: "" },
+        prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
         gmail: { syncActions: false },
         ui: {
-          theme: "system",
-          sidebarCollapsed: false,
           fetchInterval: 0,
           fetchScope: "unread",
         },
@@ -388,13 +346,10 @@ describe("web API validation", () => {
       agentMode: "all-agents",
       preferredAgent: "claude",
       gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
-      notifications: { desktop: { enabled: true, priorityOnly: true }, webhooks: [] },
-      prompts: { summary: "", priority: "", clustering: "", digest: "" },
+      prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
       gmail: { syncActions: false },
       ui: {
-        theme: "system",
-        sidebarCollapsed: false,
         fetchInterval: 0,
         fetchScope: "unread",
         panelWidths: [20, 35, 45],
@@ -408,7 +363,6 @@ describe("web API validation", () => {
     assert.equal("oauth" in sanitized, false);
     assert.equal("customCliKey" in sanitized, false);
     assert.equal(sanitized.embedding.dimensions, 768);
-    assert.deepEqual(sanitized.notifications.webhooks, []);
     assert.equal("panelWidths" in sanitized.ui, false);
   });
 

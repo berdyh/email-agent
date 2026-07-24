@@ -27,7 +27,7 @@ function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
     body: e.bodyText.slice(0, 2000),
   }));
 
-  return [
+  const parts = [
     action.prompt,
     "",
     "Emails to analyze:",
@@ -36,7 +36,13 @@ function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
     "```",
     "",
     'Respond with a JSON array of objects, each with an "emailId" field matching the email ID plus your analysis fields.',
-  ].join("\n");
+  ];
+
+  if (action.outputSchema) {
+    parts.push("", `Expected output shape per email: ${action.outputSchema}`);
+  }
+
+  return parts.join("\n");
 }
 
 export class ActionRunner {

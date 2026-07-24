@@ -30,8 +30,9 @@ npx email-agent accounts remove <email>  # Remove account
 npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
-npx email-agent serve              # Start web UI
-npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope)
+npx email-agent setup              # Authenticate + configure project + init DB (--project <id>)
+npx email-agent serve              # Start web UI (--port <port>, default 3847)
+npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope, --limit)
 npx email-agent cron status        # Show current crontab entry
 npx email-agent cron remove        # Remove crontab entry
 npx email-agent config get <key>   # Read config value (dotted path, e.g. gmail.syncActions)
@@ -121,9 +122,9 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - Use `execFileSync`/`execFile` (NOT `execSync`/`exec`) in CLI commands — security hook blocks shell injection patterns
 
 ### Other
-- `node-notifier` types are strict — only `title`, `message`, `wait` are valid notification props
 - `setup.sh` hardcodes a `settings.json` template — new config fields must be added there too, or they won't appear for fresh installs running setup
 - `setup.sh` also writes `~/.email-agent/oauth.json` (step 9) — the JSON format must match what `account-manager.ts` reads (`{clientId, clientSecret}`)
+- `createGmailClient` throws for a named account (`accountEmail` set to a non-empty string) with missing/invalid stored credentials — it does NOT fall back to gcloud ADC. ADC fallback only applies to the explicit empty-string account id and to the unscoped/no-accounts-configured path (see `gmail/client.ts`)
 
 ### Agent Executors (Spawning CLIs)
 - Claude CLI: `--system-prompt` (NOT `--system`), `--output-format stream-json` for streaming, NO `--max-tokens` flag (use `--max-budget-usd` instead)

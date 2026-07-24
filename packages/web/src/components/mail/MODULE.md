@@ -3,7 +3,7 @@
 - purpose: Own inbox layout, toolbar, list, reader, content rendering, and AI summary display.
 - product/module functionality: Provide the main three-panel mail workflow and controls for fetch/read/apply actions.
 - scope boundaries: Does not fetch Gmail directly or write DB; uses hooks/API routes.
-- connected modules/submodules: `hooks/use-emails`, `hooks/use-fetch-emails`, `hooks/use-thread`, `store/email-store`, web Gmail routes.
+- connected modules/submodules: `hooks/use-emails`, `hooks/use-fetch-emails`, `store/email-store`, web Gmail routes.
 - allowed change types: Mail layout, rendering, loading/error states, toolbar controls.
 - special operating rules: Sanitized HTML rendering must remain in the content boundary; keep auth/error messages user-friendly; selected email state is account-scoped and must preserve empty-string account ids for legacy/gcloud rows; auto-read should only run for the first loaded unread email in an open cycle and must not undo manual Mark unread actions.
 - current stubs/placeholders: None known.

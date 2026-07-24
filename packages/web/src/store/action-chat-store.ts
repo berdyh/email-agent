@@ -29,7 +29,6 @@ interface ActionChatActions {
   setGenerating: (v: boolean) => void;
   setExtractedCode: (code: string | null) => void;
   setAbortController: (controller: AbortController | null) => void;
-  reset: () => void;
 }
 
 type ActionChatStore = ActionChatState & ActionChatActions;
@@ -106,20 +105,6 @@ export const useActionChatStore = create<ActionChatStore>()(
       setGenerating: (v) => set({ isGenerating: v }),
       setExtractedCode: (code) => set({ extractedCode: code }),
       setAbortController: (controller) => set({ abortController: controller }),
-
-      reset: () => {
-        get().abortController?.abort();
-        set({
-          isOpen: false,
-          mode: "create",
-          editingAction: null,
-          messages: [],
-          isGenerating: false,
-          extractedCode: null,
-          expandedCardId: null,
-          abortController: null,
-        });
-      },
     }),
     {
       name: "action-chat",

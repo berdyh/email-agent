@@ -5,6 +5,7 @@ import ora from "ora";
 import {
   initDb,
   getEmails,
+  recordToGmailMessage,
   ActionRegistry,
   ActionRunner,
   applyOperations,
@@ -45,20 +46,7 @@ export function registerRunAction(program: Command) {
 
       try {
         const emailRecords = await getEmails({ unreadOnly: true, limit, accountId: options.account });
-        const emails = emailRecords.map((e) => ({
-          id: e.id,
-          threadId: e.threadId,
-          from: e.from,
-          to: e.to,
-          subject: e.subject,
-          date: e.date,
-          bodyText: e.bodyText,
-          bodyHtml: e.bodyHtml,
-          labels: JSON.parse(e.labels as string) as string[],
-          isUnread: e.isUnread,
-          senderDomain: e.senderDomain,
-          snippet: e.snippet,
-        }));
+        const emails = emailRecords.map(recordToGmailMessage);
 
         const runner = new ActionRunner();
         const result = await runner.run(

@@ -1,5 +1,5 @@
 import { createGmailClient } from "./client.js";
-import type { GmailMessage, GmailThread } from "./types.js";
+import type { GmailMessage } from "./types.js";
 
 function extractHeader(
   headers: Array<{ name?: string | null; value?: string | null }> | undefined,
@@ -139,42 +139,4 @@ export async function fetchEmailsWithMetadata(
   }
 
   return { messages, exhausted, failedCount };
-}
-
-export async function fetchEmails(
-  options: FetchOptions,
-): Promise<GmailMessage[]> {
-  const result = await fetchEmailsWithMetadata(options);
-  return result.messages;
-}
-
-export async function fetchUnreadEmails(
-  maxResults = 500,
-): Promise<GmailMessage[]> {
-  return fetchEmails({ scope: "unread", maxResults });
-}
-
-export async function fetchEmail(id: string, accountEmail?: string): Promise<GmailMessage> {
-  const gmail = await createGmailClient(accountEmail);
-  const msg = await gmail.users.messages.get({
-    userId: "me",
-    id,
-    format: "full",
-  });
-  return parseGmailMessage(msg.data);
-}
-
-export async function fetchThread(threadId: string, accountEmail?: string): Promise<GmailThread> {
-  const gmail = await createGmailClient(accountEmail);
-  const thread = await gmail.users.threads.get({
-    userId: "me",
-    id: threadId,
-    format: "full",
-  });
-
-  const messages = (thread.data.messages ?? []).map(parseGmailMessage);
-  const subject = messages[0]?.subject ?? "";
-  const snippet = thread.data.snippet ?? "";
-
-  return { id: threadId, messages, subject, snippet };
 }

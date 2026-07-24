@@ -1,6 +1,5 @@
 export type {
   EmailAction,
-  ActionInput,
   ActionOutput,
   ActionRunResult,
   GmailOperationType,

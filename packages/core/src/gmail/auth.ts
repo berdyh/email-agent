@@ -56,17 +56,3 @@ export async function loginGcloud(): Promise<boolean> {
     return false;
   }
 }
-
-export async function setGcloudProject(projectId: string): Promise<boolean> {
-  try {
-    await execFileAsync("gcloud", [
-      "config",
-      "set",
-      "project",
-      projectId,
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
-}

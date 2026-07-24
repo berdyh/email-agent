@@ -36,8 +36,13 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : "Unknown error";
 
     if (message.includes("auth") || message.includes("token")) {
+      // `code` is the typed classification clients branch on, so the UI never
+      // has to re-parse this human-readable message to detect an auth failure.
       return NextResponse.json(
-        { error: "Gmail authentication failed. Reconnect the account or rerun setup." },
+        {
+          error: "Gmail authentication failed. Reconnect the account or rerun setup.",
+          code: "auth",
+        },
         { status: 401 },
       );
     }

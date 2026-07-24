@@ -8,6 +8,7 @@ import {
   useFetchEmails,
   useAutoFetch,
   useFetchSettings,
+  FetchEmailsError,
 } from "@/hooks/use-fetch-emails";
 import { useEmailStore } from "@/store/email-store";
 import { useState, useEffect } from "react";
@@ -94,8 +95,8 @@ export function MailToolbar() {
               { scope: fetchScope, accountEmail: activeAccountEmail ?? undefined },
               {
                 onError: (err) => {
-                  const msg = err.message.toLowerCase();
-                  const isAuthError = /gcloud|auth|token|enoent/.test(msg);
+                  const isAuthError =
+                    err instanceof FetchEmailsError && err.code === "auth";
                   toast.error(
                     isAuthError
                       ? `${err.message}. Go to Settings → Accounts to add a Gmail account.`

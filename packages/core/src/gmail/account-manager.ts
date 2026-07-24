@@ -42,11 +42,6 @@ export async function getOAuthCredentials(): Promise<OAuthCredentials | null> {
   }
 }
 
-export async function saveOAuthCredentials(creds: OAuthCredentials): Promise<void> {
-  await mkdir(BASE_DIR, { recursive: true });
-  await writeFile(OAUTH_PATH, JSON.stringify(creds, null, 2));
-}
-
 // --- Token Storage ---
 
 export async function getStoredTokens(email: string): Promise<StoredTokens | null> {

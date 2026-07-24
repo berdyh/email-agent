@@ -1,18 +1,17 @@
 export { getDb, initDb } from "./connection.js";
-export { emailsTable, threadsTable, actionResultsTable, clustersTable, settingsTable } from "./schema.js";
+export { emailsTable, actionResultsTable, clustersTable } from "./schema.js";
 export {
   upsertEmails,
   getEmails,
   getEmailById,
   countEmails,
-  searchEmails,
   updateEmailReadStatus,
   updateEmailVector,
   markStaleUnreadEmailsRead,
   buildStaleUnreadFilter,
   buildEmailFilters,
 } from "./emails.js";
-export { upsertThread, getThreads, getThreadById } from "./threads.js";
 export { saveActionResult, getActionResults } from "./actions.js";
-export { saveClusters, getClusters } from "./clusters.js";
+export { saveClusters } from "./clusters.js";
 export { generateEmbedding, generateEmbeddings } from "./embeddings.js";
+export { recordToGmailMessage } from "./record-mapper.js";

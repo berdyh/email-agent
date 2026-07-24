@@ -1,12 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { SanitizedSettings } from "@/modules/api/validation";
+
+export type { SanitizedSettings };
 
 export function useSettings() {
-  return useQuery<Record<string, unknown>>({
+  return useQuery<SanitizedSettings>({
     queryKey: ["settings"],
-    queryFn: async (): Promise<Record<string, unknown>> => {
+    queryFn: async (): Promise<SanitizedSettings> => {
       const res = await fetch("/api/settings");
       if (!res.ok) throw new Error("Failed to fetch settings");
-      return res.json() as Promise<Record<string, unknown>>;
+      return res.json() as Promise<SanitizedSettings>;
     },
   });
 }
@@ -14,7 +17,7 @@ export function useSettings() {
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, Error, Record<string, unknown>>({
+  return useMutation<void, Error, Partial<SanitizedSettings>>({
     mutationFn: async (settings) => {
       const res = await fetch("/api/settings", {
         method: "PUT",

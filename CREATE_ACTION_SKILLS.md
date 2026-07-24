@@ -15,7 +15,7 @@ An action is a TypeScript object with a `prompt` field. That prompt is given to 
 This means:
 - Your `prompt` is a system-level instruction for a different AI — write it as clear, structured directions
 - The prompt must **never** include email data (it's appended automatically)
-- The AI's response must be a JSON array — if the output isn't parseable, the action fails silently
+- The AI's response must be a JSON array — if the output isn't parseable, the parser falls back to one result per input email shaped as `{ emailId, rawResult: <raw text> }`, and the run still reports success. That's a degraded, unusable result for the user, not a visible failure — so treat "must produce parseable JSON" as a hard requirement anyway
 - Email bodies are capped at 2000 characters — don't write prompts that depend on full email content
 
 ## EmailAction Interface

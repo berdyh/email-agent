@@ -24,22 +24,3 @@ export async function saveSettings(config: AppConfig): Promise<void> {
   cachedSettings = config;
 }
 
-export async function getSetting<K extends keyof AppConfig>(
-  key: K,
-): Promise<AppConfig[K]> {
-  const settings = await loadSettings();
-  return settings[key];
-}
-
-export async function setSetting<K extends keyof AppConfig>(
-  key: K,
-  value: AppConfig[K],
-): Promise<void> {
-  const settings = await loadSettings();
-  settings[key] = value;
-  await saveSettings(settings);
-}
-
-export function clearSettingsCache(): void {
-  cachedSettings = null;
-}

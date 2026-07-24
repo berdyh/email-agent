@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useActionChatStore, type ChatMessage } from "@/store/action-chat-store";
+import { extractActionId } from "@/lib/action-id";
 import { toast } from "sonner";
 
 interface SaveRequest {
@@ -20,11 +21,8 @@ function extractCode(text: string): string | null {
 
 /** Derive a filename from action ID in code, or from user message. */
 export function deriveFilename(code: string): string {
-  const idMatch = code.match(/id:\s*["'`]([^"'`]+)["'`]/);
-  if (idMatch?.[1]) {
-    return `${idMatch[1]}.action.ts`;
-  }
-  return "new-action.action.ts";
+  const actionId = extractActionId(code);
+  return actionId ? `${actionId}.action.ts` : "new-action.action.ts";
 }
 
 /** Parse SSE events from a text chunk. Returns parsed events and any remaining partial data. */
@@ -207,17 +205,5 @@ export function useSaveAction() {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
       close();
     },
-  });
-}
-
-export function useReadActionSource(filename: string | null) {
-  return useQuery<ActionSourceResponse>({
-    queryKey: ["action-source", filename],
-    queryFn: async (): Promise<ActionSourceResponse> => {
-      const res = await fetch(`/api/actions/user?filename=${encodeURIComponent(filename!)}`);
-      if (!res.ok) throw new Error("Failed to read action source");
-      return res.json() as Promise<ActionSourceResponse>;
-    },
-    enabled: !!filename,
   });
 }

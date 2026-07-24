@@ -54,18 +54,6 @@ const emailSchema = new Schema([
   vectorField("vector"),
 ]);
 
-const threadSchema = new Schema([
-  new Field("id", new Utf8()),
-  new Field("subject", new Utf8()),
-  new Field("messageCount", new Int32()),
-  new Field("lastMessageDate", new Utf8()),
-  new Field("summary", new Utf8()),
-  new Field("summaryData", new Utf8()),
-  new Field("priority", new Utf8()),
-  new Field("category", new Utf8()),
-  vectorField("vector"),
-]);
-
 const actionResultSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("actionId", new Utf8()),
@@ -86,12 +74,6 @@ const clusterSchema = new Schema([
   new Field("emailIds", new Utf8()),
   new Field("method", new Utf8()),
   vectorField("centroid"),
-]);
-
-const settingsSchema = new Schema([
-  new Field("key", new Utf8()),
-  new Field("value", new Utf8()),
-  new Field("updatedAt", new Utf8()),
 ]);
 
 export async function initDb(): Promise<void> {
@@ -116,10 +98,6 @@ export async function initDb(): Promise<void> {
     }
   }
 
-  if (!tableNames.includes("threads")) {
-    await conn.createEmptyTable("threads", threadSchema);
-  }
-
   if (!tableNames.includes("action_results")) {
     await conn.createEmptyTable("action_results", actionResultSchema);
   } else {
@@ -140,9 +118,5 @@ export async function initDb(): Promise<void> {
 
   if (!tableNames.includes("clusters")) {
     await conn.createEmptyTable("clusters", clusterSchema);
-  }
-
-  if (!tableNames.includes("settings")) {
-    await conn.createEmptyTable("settings", settingsSchema);
   }
 }

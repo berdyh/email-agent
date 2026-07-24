@@ -15,25 +15,8 @@ export interface GcpConfig {
   watchExpiration?: string;
 }
 
-export interface NotificationConfig {
-  desktop: {
-    enabled: boolean;
-    priorityOnly: boolean;
-  };
-  webhooks: WebhookConfig[];
-}
-
-export interface WebhookConfig {
-  name: string;
-  url: string;
-  type: "slack" | "discord" | "generic";
-  enabled: boolean;
-}
-
 export interface PromptsConfig {
   summary: string;
-  priority: string;
-  clustering: string;
   digest: string;
 }
 
@@ -48,8 +31,6 @@ export interface GmailSyncConfig {
 }
 
 export interface UiConfig {
-  theme: "light" | "dark" | "system";
-  sidebarCollapsed: boolean;
   fetchInterval: number;
   fetchScope: "unread" | "all";
 }
@@ -69,7 +50,6 @@ export interface AppConfig {
   agentMode: AgentMode;
   preferredAgent: AgentId;
   gcp: GcpConfig;
-  notifications: NotificationConfig;
   prompts: PromptsConfig;
   embedding: EmbeddingConfig;
   gmail: GmailSyncConfig;

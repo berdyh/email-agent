@@ -122,21 +122,6 @@ export async function markStaleUnreadEmailsRead(
   });
 }
 
-export async function searchEmails(
-  queryVector: number[],
-  limit = 10,
-  accountId?: string,
-): Promise<EmailRecord[]> {
-  const db = await getDb();
-  const table = await db.openTable(emailsTable);
-  let query = table.search(queryVector);
-  if (accountId !== undefined) {
-    query = query.where(`\`accountId\` = '${escapeSql(accountId)}'`);
-  }
-  const results = await query.limit(limit).toArray();
-  return results as unknown as EmailRecord[];
-}
-
 export function buildStaleUnreadFilter(
   accountId: string,
   currentUnreadIds: string[],

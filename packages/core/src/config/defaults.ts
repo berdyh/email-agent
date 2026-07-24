@@ -16,20 +16,11 @@ export const defaultConfig: AppConfig = {
     pubsubTopic: "email-agent-notifications",
     pubsubSubscription: "email-agent-sub",
   },
-  notifications: {
-    desktop: {
-      enabled: true,
-      priorityOnly: true,
-    },
-    webhooks: [],
-  },
   prompts: {
     summary: `Summarize the following email concisely. Return a JSON object with:
 - overview: 1-2 sentence summary
 - sections: array of { text, citation: { startOffset, endOffset, previewText } }
 - keyActions: array of action items mentioned`,
-    priority: `Analyze the email and determine its priority level. Consider urgency, sender importance, action required, and deadlines. Return: { level: "high" | "medium" | "low", reason: string, actionRequired: boolean, deadline?: string }`,
-    clustering: `Given these email summaries, group them into semantic clusters. Each cluster should have a name, description, and list of email IDs.`,
     digest: `Create a daily digest from these subscription emails. Group by sender/topic, summarize key points, and highlight anything actionable.`,
   },
   embedding: {
@@ -41,8 +32,6 @@ export const defaultConfig: AppConfig = {
     syncActions: false,
   },
   ui: {
-    theme: "system",
-    sidebarCollapsed: false,
     fetchInterval: 0,
     fetchScope: "unread",
   },

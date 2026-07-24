@@ -8,14 +8,13 @@ import { cn } from "@/lib/utils";
 import { MailToolbar } from "./mail-toolbar";
 
 export function MailList() {
-  const filterUnreadOnly = useEmailStore((s) => s.filterUnreadOnly);
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
   const selectedEmailAccountId = useEmailStore((s) => s.selectedEmailAccountId);
   const selectEmail = useEmailStore((s) => s.selectEmail);
   const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
 
   const { data: emails, isLoading } = useEmails({
-    unreadOnly: filterUnreadOnly,
+    unreadOnly: false,
     limit: 50,
     accountId: activeAccountEmail ?? undefined,
   });

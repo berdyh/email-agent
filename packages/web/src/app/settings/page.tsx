@@ -2,7 +2,7 @@
 
 import { Navbar } from "@/components/shared/navbar";
 import { Sidebar } from "@/components/shared/sidebar";
-import { useSettings, useUpdateSettings } from "@/hooks/use-settings";
+import { useSettings, useUpdateSettings, type SanitizedSettings } from "@/hooks/use-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,14 +25,14 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const activeAccountEmail = useEmailStore((s) => s.activeAccountEmail);
   const setActiveAccount = useEmailStore((s) => s.setActiveAccount);
-  const [local, setLocal] = useState<Record<string, unknown>>({});
+  const [local, setLocal] = useState<Partial<SanitizedSettings>>({});
   const [accountLoading, setAccountLoading] = useState(false);
   // Track whether the form has unsaved edits. Account operations invalidate the
   // ["settings"] query, so unconditionally copying every refetch into local
   // state would wipe in-progress edits. Only sync remote → local while pristine.
   const [dirty, setDirty] = useState(false);
 
-  const editLocal = (next: Record<string, unknown>) => {
+  const editLocal = (next: Partial<SanitizedSettings>) => {
     setDirty(true);
     setLocal(next);
   };
@@ -132,13 +132,10 @@ export default function SettingsPage() {
     );
   }
 
-  const agentMode = (local["agentMode"] as string) ?? "all-agents";
-  const preferredAgent = (local["preferredAgent"] as string) ?? "claude";
-  const prompts = (local["prompts"] ?? {}) as Record<string, string>;
-  const notifications = (local["notifications"] ?? {}) as {
-    desktop?: { enabled?: boolean; priorityOnly?: boolean };
-  };
-  const gmail = (local["gmail"] ?? {}) as { syncActions?: boolean };
+  const agentMode = local.agentMode ?? "all-agents";
+  const preferredAgent = local.preferredAgent ?? "claude";
+  const prompts = (local.prompts ?? {}) as Partial<Record<"summary" | "digest", string>>;
+  const gmail = local.gmail ?? { syncActions: false };
 
   return (
     <div className="flex h-screen flex-col">
@@ -168,7 +165,6 @@ export default function SettingsPage() {
               <TabsTrigger value="accounts">Accounts</TabsTrigger>
               <TabsTrigger value="agents">Agents</TabsTrigger>
               <TabsTrigger value="prompts">Prompts</TabsTrigger>
-              <TabsTrigger value="notifications">Notifications</TabsTrigger>
               <TabsTrigger value="gmail">Gmail</TabsTrigger>
             </TabsList>
 
@@ -247,7 +243,12 @@ export default function SettingsPage() {
                     <label className="mb-1 block text-sm font-medium">Mode</label>
                     <Select
                       value={agentMode}
-                      onChange={(e) => editLocal({ ...local, agentMode: e.target.value })}
+                      onChange={(e) =>
+                        editLocal({
+                          ...local,
+                          agentMode: e.target.value as SanitizedSettings["agentMode"],
+                        })
+                      }
                     >
                       <option value="all-agents">All Agents (try each CLI)</option>
                       <option value="hybrid">Hybrid (CLI + API fallback)</option>
@@ -260,7 +261,12 @@ export default function SettingsPage() {
                     </label>
                     <Select
                       value={preferredAgent}
-                      onChange={(e) => editLocal({ ...local, preferredAgent: e.target.value })}
+                      onChange={(e) =>
+                        editLocal({
+                          ...local,
+                          preferredAgent: e.target.value as SanitizedSettings["preferredAgent"],
+                        })
+                      }
                     >
                       <option value="claude">Claude</option>
                       <option value="claude-sdk">Claude SDK</option>
@@ -275,7 +281,7 @@ export default function SettingsPage() {
             </TabsContent>
 
             <TabsContent value="prompts" className="space-y-4">
-              {["summary", "priority", "clustering", "digest"].map((key) => (
+              {(["summary", "digest"] as const).map((key) => (
                 <Card key={key}>
                   <CardHeader>
                     <CardTitle className="text-base capitalize">{key} Prompt</CardTitle>
@@ -283,71 +289,20 @@ export default function SettingsPage() {
                   <CardContent>
                     <Textarea
                       rows={4}
-                      value={(prompts[key] as string) ?? ""}
+                      value={prompts[key] ?? ""}
                       onChange={(e) =>
                         editLocal({
                           ...local,
-                          prompts: { ...prompts, [key]: e.target.value },
+                          prompts: {
+                            ...prompts,
+                            [key]: e.target.value,
+                          } as SanitizedSettings["prompts"],
                         })
                       }
                     />
                   </CardContent>
                 </Card>
               ))}
-            </TabsContent>
-
-            <TabsContent value="notifications" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Desktop Notifications</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm">Enabled</label>
-                    <Switch
-                      checked={notifications.desktop?.enabled ?? true}
-                      onCheckedChange={(v) =>
-                        editLocal({
-                          ...local,
-                          notifications: {
-                            ...notifications,
-                            desktop: { ...notifications.desktop, enabled: v },
-                          },
-                        })
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm">High priority only</label>
-                    <Switch
-                      checked={notifications.desktop?.priorityOnly ?? true}
-                      onCheckedChange={(v) =>
-                        editLocal({
-                          ...local,
-                          notifications: {
-                            ...notifications,
-                            desktop: { ...notifications.desktop, priorityOnly: v },
-                          },
-                        })
-                      }
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Webhooks</CardTitle>
-                  <CardDescription>
-                    Configure Slack, Discord, or custom webhook notifications
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    Add webhook URLs in your settings.json file at ~/.email-agent/settings.json
-                  </p>
-                </CardContent>
-              </Card>
             </TabsContent>
 
             <TabsContent value="gmail" className="space-y-4">
