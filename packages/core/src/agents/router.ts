@@ -21,6 +21,16 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+/**
+ * Executor order for "direct-api" mode: both API executors are candidates,
+ * with preferredAgent deciding which is tried first.
+ */
+export function apiExecutorOrder(preferredAgent: AgentId): AgentId[] {
+  return preferredAgent === "openrouter"
+    ? ["openrouter", "direct-api"]
+    : ["direct-api", "openrouter"];
+}
+
 const directApi = new DirectApiExecutor();
 
 // direct-api is registered so preferredAgent can select it, but it is kept out
@@ -40,7 +50,8 @@ export class AgentRouter {
    *
    * - "all-agents": tries preferred agent, falls back to others
    * - "hybrid": tries CLI agents first, falls back to direct API
-   * - "direct-api": uses OpenAI-compatible API directly
+   * - "direct-api": API-only — OpenAI-compatible direct API or OpenRouter,
+   *   whichever is configured (preferredAgent picks the order)
    */
   async execute(request: AgentRequest): Promise<AgentResult> {
     const executor = await this.resolveExecutor();
@@ -95,7 +106,15 @@ export class AgentRouter {
     const { agentMode, preferredAgent } = settings;
 
     if (agentMode === "direct-api") {
-      return directApi;
+      for (const id of apiExecutorOrder(preferredAgent)) {
+        const executor = executors[id];
+        if (executor && (await executor.isAvailable())) {
+          return executor;
+        }
+      }
+      throw new Error(
+        "direct-api mode needs an API key: set OPENAI_API_KEY or OPENROUTER_API_KEY.",
+      );
     }
 
     const preferred = executors[preferredAgent];

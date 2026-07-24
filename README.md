@@ -49,12 +49,11 @@ cp .env.example .env
 | Variable | Required | Description |
 |---|---|---|
 | `GCP_PROJECT_ID` | Yes | Google Cloud project with Gmail API enabled |
-| `OPENAI_API_KEY` | For OpenAI embeddings | Powers semantic search and clustering |
+| `OPENAI_API_KEY` | For OpenAI embeddings / direct-api mode | Embeddings, clustering, and the direct LLM API |
 | `OPENROUTER_API_KEY` | For OpenRouter | Embeddings (Qwen3) + LLM access via openrouter.ai |
 | `OPENROUTER_MODEL` | No | OpenRouter LLM model (default: `qwen/qwen3-8b`) |
 | `AGENT_MODE` | No | `all-agents` (default), `hybrid`, or `direct-api` |
 | `PREFERRED_AGENT` | No | `claude` (default), `codex`, `gemini`, or `openrouter` |
-| `ANTHROPIC_API_KEY` | For direct-api mode | When using direct API instead of CLI agents |
 | `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments that need non-local browser writes |
 
 ## Usage
@@ -117,7 +116,7 @@ The agent router tries your preferred CLI agent first, then falls back through o
 |---|---|
 | `all-agents` | Try preferred CLI → other CLIs → OpenRouter → error |
 | `hybrid` | Try preferred CLI → other CLIs → OpenRouter → direct API |
-| `direct-api` | OpenAI-compatible API only |
+| `direct-api` | API only — OpenAI-compatible direct API or OpenRouter, whichever is configured (`PREFERRED_AGENT` picks the order) |
 
 ### Action Plugin System
 
