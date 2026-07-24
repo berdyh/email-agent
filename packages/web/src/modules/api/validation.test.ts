@@ -202,9 +202,6 @@ describe("web API validation", () => {
       preferredAgent: "codex",
       gcp: {
         projectId: "project",
-        pubsubTopic: "topic",
-        pubsubSubscription: "sub",
-        watchExpiration: "2026-06-26T12:00:00Z",
       },
       prompts: {
         summary: "summary",
@@ -263,7 +260,7 @@ describe("web API validation", () => {
       {
         agentMode: "all-agents",
         preferredAgent: "claude",
-        gcp: { projectId: "project", pubsubTopic: "topic", pubsubSubscription: "sub" },
+        gcp: { projectId: "project" },
         prompts: { summary: "s", digest: "d" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
         gmail: { syncActions: false },
@@ -288,7 +285,7 @@ describe("web API validation", () => {
       {
         agentMode: "all-agents",
         preferredAgent: "claude",
-        gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+        gcp: { projectId: "" },
         prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
         gmail: { syncActions: true },
@@ -314,7 +311,7 @@ describe("web API validation", () => {
       {
         agentMode: "all-agents",
         preferredAgent: "claude",
-        gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+        gcp: { projectId: "" },
         prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
         gmail: { syncActions: false },
@@ -345,7 +342,7 @@ describe("web API validation", () => {
     const sanitized = sanitizeSettingsForResponse({
       agentMode: "all-agents",
       preferredAgent: "claude",
-      gcp: { projectId: "", pubsubTopic: "", pubsubSubscription: "" },
+      gcp: { projectId: "" },
       prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
       gmail: { syncActions: false },

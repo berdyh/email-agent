@@ -7,8 +7,6 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "@lancedb/lancedb",
     "apache-arrow",
-    "@google-cloud/pubsub",
-    "node-notifier",
     "@anthropic-ai/claude-agent-sdk",
   ],
   webpack: (config) => {

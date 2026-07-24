@@ -259,7 +259,7 @@ ok "Workspace bins linked"
 # ─── 7. Authenticate with Google Cloud ────────────────────────────────
 progress "Google Cloud authentication..."
 
-SCOPES="https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/pubsub"
+SCOPES="https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify"
 
 if gcloud auth application-default print-access-token &>/dev/null 2>&1; then
   ok "Already authenticated (ADC credentials found)"
@@ -324,9 +324,7 @@ if [ -z "${GCP_PROJECT:-}" ]; then
   "agentMode": "${AGENT_MODE}",
   "preferredAgent": "claude",
   "gcp": {
-    "projectId": "${GCP_PROJECT}",
-    "pubsubTopic": "email-agent-notifications",
-    "pubsubSubscription": "email-agent-sub"
+    "projectId": "${GCP_PROJECT}"
   },
   "embedding": {
     "provider": "${EMBEDDING_PROVIDER}",

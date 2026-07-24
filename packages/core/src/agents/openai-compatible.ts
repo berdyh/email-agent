@@ -7,8 +7,12 @@ export interface OpenAiCompatibleConfig {
   agentUsed: AgentId;
   /** Model name (distinct per executor, env-var-overridable by the caller). */
   model: string;
-  /** Cached OpenAI-compatible client (distinct baseURL/apiKey per executor). */
-  client: OpenAI;
+  /**
+   * Lazily acquires the cached OpenAI-compatible client (distinct
+   * baseURL/apiKey per executor). Invoked after the duration timer starts so
+   * first-call client construction is counted in the reported latency.
+   */
+  getClient: () => OpenAI;
 }
 
 /**
@@ -21,6 +25,7 @@ export async function executeOpenAiCompatible(
   config: OpenAiCompatibleConfig,
 ): Promise<AgentResult> {
   const start = Date.now();
+  const client = config.getClient();
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [];
   if (request.systemPrompt) {
@@ -28,7 +33,7 @@ export async function executeOpenAiCompatible(
   }
   messages.push({ role: "user", content: request.prompt });
 
-  const response = await config.client.chat.completions.create(
+  const response = await client.chat.completions.create(
     {
       model: config.model,
       messages,
@@ -41,11 +46,11 @@ export async function executeOpenAiCompatible(
   const choice = response.choices[0];
   const text = choice?.message?.content ?? "";
   const usage = response.usage;
-  // Standardized as input + output total (not the provider's total_tokens
-  // field, which some OpenAI-compatible providers omit or define
-  // inconsistently, e.g. including reasoning tokens).
+  // Prefer the provider's total_tokens; fall back to prompt + completion for
+  // providers that report only the components. Some providers supply only
+  // total_tokens, so summing the components alone would report 0.
   const tokensUsed = usage
-    ? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)
+    ? (usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0))
     : 0;
 
   return {

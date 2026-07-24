@@ -21,7 +21,6 @@ function safeAccountDir(email: string): string {
 const OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/pubsub",
   "openid",
   "email",
   "profile",

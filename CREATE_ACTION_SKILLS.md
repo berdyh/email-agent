@@ -26,7 +26,7 @@ interface EmailAction {
   name: string;         // Human-readable display name
   description: string;  // One-line summary shown in the UI
   prompt: string;       // Instructions for the runtime AI (see "Writing Good Prompts")
-  outputSchema?: string; // Documents the expected JSON shape (for humans, not validated at runtime)
+  outputSchema?: string; // Appended to the runtime model prompt as output guidance — steers the AI's shape, but the result is NOT validated against it
 }
 ```
 

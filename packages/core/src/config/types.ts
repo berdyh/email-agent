@@ -10,9 +10,6 @@ export type EmbeddingProvider = "openai" | "openrouter" | "local";
 
 export interface GcpConfig {
   projectId: string;
-  pubsubTopic: string;
-  pubsubSubscription: string;
-  watchExpiration?: string;
 }
 
 export interface PromptsConfig {

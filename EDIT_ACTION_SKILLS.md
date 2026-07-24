@@ -12,7 +12,7 @@ Key constraints:
 - `prompt` must never include email data (appended automatically: `id`, `from`, `subject`, `date`, `snippet`, `body` truncated to 2000 chars)
 - End the prompt with "Return ONLY a JSON array. Each object must include `emailId`." — without this, the runtime AI may wrap JSON in prose
 - Keep output fields to 3–6 to avoid inconsistent responses
-- `outputSchema` is documentation only (not validated at runtime) — but keep it in sync with the prompt
+- `outputSchema` is appended to the runtime model prompt as output guidance (it steers the AI's shape but the result is NOT validated against it) — keep it in sync with the prompt
 
 ## Editing Rules
 

@@ -25,7 +25,7 @@ export class OpenRouterExecutor implements AgentExecutor {
     return executeOpenAiCompatible(request, {
       agentUsed: "openrouter",
       model: process.env["OPENROUTER_MODEL"] ?? "qwen/qwen3-8b",
-      client: getClient(),
+      getClient,
     });
   }
 }

@@ -13,8 +13,6 @@ export const defaultConfig: AppConfig = {
   preferredAgent: "claude",
   gcp: {
     projectId: "",
-    pubsubTopic: "email-agent-notifications",
-    pubsubSubscription: "email-agent-sub",
   },
   prompts: {
     summary: `Summarize the following email concisely. Return a JSON object with:

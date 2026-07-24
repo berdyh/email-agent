@@ -22,7 +22,7 @@ export class DirectApiExecutor implements AgentExecutor {
     return executeOpenAiCompatible(request, {
       agentUsed: "direct-api",
       model: process.env["OPENAI_MODEL"] ?? "gpt-4o-mini",
-      client: getClient(),
+      getClient,
     });
   }
 }

@@ -427,13 +427,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     const gcp = asRecord(body["gcp"]);
     const update: Partial<AppConfig["gcp"]> = {};
     if ("projectId" in gcp) update.projectId = optionalString(gcp["projectId"], "gcp.projectId") ?? "";
-    if ("pubsubTopic" in gcp) update.pubsubTopic = optionalString(gcp["pubsubTopic"], "gcp.pubsubTopic") ?? "";
-    if ("pubsubSubscription" in gcp) {
-      update.pubsubSubscription = optionalString(gcp["pubsubSubscription"], "gcp.pubsubSubscription") ?? "";
-    }
-    if ("watchExpiration" in gcp) {
-      update.watchExpiration = optionalString(gcp["watchExpiration"], "gcp.watchExpiration");
-    }
     settings.gcp = update;
   }
 

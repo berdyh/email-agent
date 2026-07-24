@@ -34,10 +34,20 @@ export async function POST(request: NextRequest) {
     if (validation) return validation;
 
     const message = err instanceof Error ? err.message : "Unknown error";
+    const normalized = message.toLowerCase();
 
-    if (message.includes("auth") || message.includes("token")) {
+    if (
+      normalized.includes("auth") ||
+      normalized.includes("token") ||
+      normalized.includes("gcloud") ||
+      normalized.includes("enoent") ||
+      normalized.includes("invalid_grant") ||
+      normalized.includes("credential")
+    ) {
       // `code` is the typed classification clients branch on, so the UI never
       // has to re-parse this human-readable message to detect an auth failure.
+      // Covers gcloud spawn failures (ENOENT), missing ADC, and expired/revoked
+      // OAuth grants in addition to the plain "auth"/"token" wording.
       return NextResponse.json(
         {
           error: "Gmail authentication failed. Reconnect the account or rerun setup.",

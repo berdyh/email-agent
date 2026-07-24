@@ -29,7 +29,7 @@ export function registerSetup(program: Command) {
         );
         console.log(
           chalk.cyan(
-            "  gcloud auth application-default login --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/pubsub\n",
+            "  gcloud auth application-default login --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify\n",
           ),
         );
         const loggedIn = await loginGcloud();
