@@ -35,9 +35,12 @@ if ! command -v node &>/dev/null; then
   fail "Node.js not found. Install v20+: https://nodejs.org"
 fi
 
-NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-if [ "$NODE_VERSION" -lt 20 ]; then
-  fail "Node.js v20+ required (found v$(node -v))"
+# v20.12+ required: the CLI and web server load the root .env via
+# process.loadEnvFile, which was added in Node 20.12.
+NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
+NODE_MINOR=$(node -v | sed 's/v//' | cut -d. -f2)
+if [ "$NODE_MAJOR" -lt 20 ] || { [ "$NODE_MAJOR" -eq 20 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
+  fail "Node.js v20.12+ required (found v$(node -v))"
 fi
 ok "Node.js $(node -v)"
 

@@ -14,7 +14,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
 
 ## Prerequisites
 
-- **Node.js** >= 20
+- **Node.js** >= 20.12 (`process.loadEnvFile` is used to load the root `.env`)
 - **Google Cloud CLI** (`gcloud`) — for Gmail API authentication
 - **At least one AI agent CLI** (optional but recommended):
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
@@ -158,7 +158,7 @@ See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creat
 
 | Layer | Technology |
 |---|---|
-| Runtime | Node.js 20+, TypeScript 5.8 |
+| Runtime | Node.js 20.12+, TypeScript 5.8 |
 | Build | Turbo monorepo, ESM |
 | Database | LanceDB (embedded vector DB) |
 | Embeddings | OpenAI text-embedding-3-small or OpenRouter Qwen3 (768d) |
