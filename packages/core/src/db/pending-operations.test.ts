@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   buildIdListFilter,
   buildPendingOperationFilters,
+  buildPendingResolutionFilter,
 } from "./pending-operations.js";
 
 describe("pending operation DB filters", () => {
@@ -35,6 +36,45 @@ describe("pending operation DB filters", () => {
     assert.equal(
       buildIdListFilter(["op-1", "quote'id"]),
       "id IN ('op-1', 'quote''id')",
+    );
+  });
+
+  it("builds a single-id filter for a row-by-row resolution", () => {
+    // resolvePendingOperations updates each failed row on its own so it can
+    // carry that row's error message.
+    assert.equal(buildIdListFilter(["op-1"]), "id IN ('op-1')");
+  });
+
+  it("keeps a pending status filter separate from an unscoped account", () => {
+    // "" is the gcloud/unscoped sentinel, not "no account filter" — the two
+    // must not collapse, or an unscoped queue row would match every account.
+    assert.deepEqual(
+      buildPendingOperationFilters({ status: "pending", accountId: "" }),
+      ["status = 'pending'", "`accountId` = ''"],
+    );
+    assert.deepEqual(buildPendingOperationFilters({ status: "pending" }), [
+      "status = 'pending'",
+    ]);
+  });
+
+  it("scopes a batch filter without a status", () => {
+    assert.deepEqual(buildPendingOperationFilters({ batchId: "batch-1" }), [
+      "`batchId` = 'batch-1'",
+    ]);
+  });
+
+  it("refuses to build an id filter with no ids", () => {
+    // `id IN ()` is a DataFusion parse error, so this must fail loudly at the
+    // call site rather than reaching LanceDB.
+    assert.throws(() => buildIdListFilter([]), /at least one id/);
+  });
+
+  it("only resolves rows that are still pending", () => {
+    // Without the status guard, a second resolver could flip a row the user
+    // just rejected back to applied.
+    assert.equal(
+      buildPendingResolutionFilter(["op-1"]),
+      "id IN ('op-1') AND status = 'pending'",
     );
   });
 });

@@ -25,8 +25,23 @@ export function buildPendingOperationFilters(options?: {
 }
 
 export function buildIdListFilter(ids: string[]): string {
+  // `id IN ()` is a parse error in DataFusion, so an empty list must never
+  // reach the query builder — callers short-circuit before this point.
+  if (ids.length === 0) {
+    throw new Error("buildIdListFilter requires at least one id");
+  }
   const quoted = ids.map((id) => `'${escapeSql(id)}'`);
   return `id IN (${quoted.join(", ")})`;
+}
+
+/**
+ * Resolution is only ever valid for a row that is still pending. Carrying the
+ * status into the update predicate keeps two concurrent resolvers (two browser
+ * tabs, the CLI racing the web UI) from overwriting each other's decision —
+ * notably from flipping a row the user just rejected back to "applied".
+ */
+export function buildPendingResolutionFilter(ids: string[]): string {
+  return `${buildIdListFilter(ids)} AND status = 'pending'`;
 }
 
 export async function savePendingOperations(
@@ -55,9 +70,16 @@ export async function getPendingOperations(options?: {
   // arbitrary N rows rather than the most recent N.
   const results = await query.toArray();
   const records = results as unknown as PendingOperationRecord[];
-  records.sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
+  // Every row in a batch shares one createdAt, so tie-break on batchId then id
+  // for a total order — otherwise rows from two batches queued in the same
+  // millisecond interleave and the grouped display repeats batch headers.
+  records.sort((a, b) => {
+    const byDate =
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    if (byDate !== 0) return byDate;
+    if (a.batchId !== b.batchId) return a.batchId < b.batchId ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
   return options?.limit ? records.slice(0, options.limit) : records;
 }
 
@@ -109,13 +131,13 @@ export async function resolvePendingOperations(
 
   for (const [status, ids] of idsByStatus) {
     await table.update({
-      where: buildIdListFilter(ids),
+      where: buildPendingResolutionFilter(ids),
       values: { status, error: "", resolvedAt },
     });
   }
   for (const outcome of individual) {
     await table.update({
-      where: buildIdListFilter([outcome.id]),
+      where: buildPendingResolutionFilter([outcome.id]),
       values: {
         status: outcome.status,
         error: outcome.error ?? "",

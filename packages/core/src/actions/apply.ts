@@ -180,15 +180,3 @@ export async function applyOperations(
   return { applied, failed, errors, outcomes };
 }
 
-/**
- * Returns a summary of operations grouped by type for display.
- */
-export function summarizeOperations(
-  operations: GmailOperation[],
-): Record<string, number> {
-  const summary: Record<string, number> = {};
-  for (const op of operations) {
-    summary[op.type] = (summary[op.type] ?? 0) + 1;
-  }
-  return summary;
-}

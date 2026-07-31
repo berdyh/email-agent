@@ -11,6 +11,9 @@ export {
   enqueueOperations,
   toPendingOperationRecords,
   recordToGmailOperation,
+  parseLabelIds,
+  describeGmailOperation,
+  isDestructiveOperation,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
   type EnqueueOperationsInput,
@@ -23,7 +26,6 @@ export {
   mapResultToOperations,
   applyOperations,
   scopeOperationsToAccounts,
-  summarizeOperations,
 } from "./apply.js";
 export { parseActionOutput } from "./output-parser.js";
 export {
