@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { registerSetup } from "./commands/setup.js";
 import { registerFetch } from "./commands/fetch.js";
 import { registerRunAction } from "./commands/run-action.js";
+import { registerApprovals } from "./commands/approvals.js";
 import { registerListActions } from "./commands/list-actions.js";
 import { registerServe } from "./commands/serve.js";
 import { registerCron } from "./commands/cron.js";
@@ -34,6 +35,7 @@ program
 registerSetup(program);
 registerFetch(program);
 registerRunAction(program);
+registerApprovals(program);
 registerListActions(program);
 registerServe(program);
 registerCron(program);
