@@ -67,8 +67,25 @@ export function registerRunAction(program: Command) {
           );
           console.log(chalk.dim(JSON.stringify(result.output, null, 2)));
 
-          // Gmail changes are queued, never auto-applied — ask for approval.
-          if (result.pendingOperations?.length && result.batchId) {
+          // Gmail changes are queued first. They are only applied without a
+          // prompt when the user turned on auto-apply and accepted its
+          // warnings in Settings; otherwise ask for approval here.
+          if (result.applyResult) {
+            const { applied, failed } = result.applyResult;
+            console.log(
+              chalk.yellow(
+                `\nAuto-apply is ON — applied ${applied} Gmail changes without asking`,
+              ) + (failed > 0 ? chalk.red(`, ${failed} failed`) : ""),
+            );
+            for (const err of result.applyResult.errors) {
+              console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
+            }
+            console.log(
+              chalk.dim(
+                "Disable it in the web UI under Settings → Gmail to review changes before they apply.",
+              ),
+            );
+          } else if (result.pendingOperations?.length && result.batchId) {
             await promptApproval(result.batchId);
           }
         } else {

@@ -72,6 +72,32 @@ export function registerConfig(program: Command) {
       const obj = settings as unknown as Record<string, unknown>;
       setNestedValue(obj, key, parseValue(rawValue));
       await saveSettings(obj as unknown as AppConfig);
-      console.log(chalk.green(`${key} = ${rawValue}`));
+
+      // saveSettings normalizes, and auto-apply stays off until the risk
+      // warnings are accepted in the web UI. Report what was actually stored
+      // rather than echoing a value that silently did not take effect.
+      const stored = await loadSettings();
+      const effective = getNestedValue(
+        stored as unknown as Record<string, unknown>,
+        key,
+      );
+      console.log(chalk.green(`${key} = ${String(effective)}`));
+
+      if (
+        key === "gmail.autoApplyActions" &&
+        parseValue(rawValue) === true &&
+        effective !== true
+      ) {
+        console.log(
+          chalk.yellow(
+            "\nAuto-apply was NOT enabled: it lets actions trash, spam, or archive mail with no review.",
+          ),
+        );
+        console.log(
+          chalk.yellow(
+            "Enable it in the web UI under Settings → Gmail, where the cautions must be read and accepted first.",
+          ),
+        );
+      }
     });
 }
