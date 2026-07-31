@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
@@ -25,29 +25,8 @@ interface EmailDetail {
   bodyText: string;
 }
 
-function operationLabel(op: ApprovalOperation): string {
-  switch (op.type) {
-    case "trash":
-      return "Move to Trash";
-    case "spam":
-      return "Mark as Spam";
-    case "markRead":
-      return "Mark as Read";
-    case "markUnread":
-      return "Mark as Unread";
-    case "removeLabels":
-      return op.labelIds.length === 1 && op.labelIds[0] === "INBOX"
-        ? "Archive"
-        : `Remove labels: ${op.labelIds.join(", ")}`;
-    case "addLabels":
-      return `Add labels: ${op.labelIds.join(", ")}`;
-    default:
-      return op.type;
-  }
-}
-
-function operationBadgeVariant(type: string): "destructive" | "secondary" {
-  return type === "trash" || type === "spam" ? "destructive" : "secondary";
+function operationBadgeVariant(op: ApprovalOperation): "destructive" | "secondary" {
+  return op.destructive ? "destructive" : "secondary";
 }
 
 function formatDate(value: string): string {
@@ -62,7 +41,7 @@ function EmailReviewDialog({
   operation: ApprovalOperation | null;
   onClose: () => void;
 }) {
-  const { data: email, isLoading } = useQuery<EmailDetail>({
+  const { data: email, isLoading, isError } = useQuery<EmailDetail>({
     queryKey: ["email", operation?.emailId, operation?.accountId],
     enabled: operation !== null,
     queryFn: async (): Promise<EmailDetail> => {
@@ -82,8 +61,8 @@ function EmailReviewDialog({
         operation && (
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Badge variant={operationBadgeVariant(operation.type)}>
-                {operationLabel(operation)}
+              <Badge variant={operationBadgeVariant(operation)}>
+                {operation.label}
               </Badge>
               <span className="text-xs text-muted-foreground">
                 proposed by “{operation.actionName}”
@@ -102,7 +81,13 @@ function EmailReviewDialog({
           Loading email…
         </div>
       )}
-      {!isLoading && !email && (
+      {!isLoading && isError && (
+        <p className="text-sm text-muted-foreground">
+          Couldn’t load this email. Close and try again — don’t approve a change
+          you haven’t been able to read.
+        </p>
+      )}
+      {!isLoading && !isError && !email && (
         <p className="text-sm text-muted-foreground">
           This email is not in the local database anymore.
         </p>
@@ -134,11 +119,33 @@ export function ApprovalPanel() {
   const { data, isLoading } = useApprovals();
   const approve = useApproveOperations();
   const reject = useRejectOperations();
-  // Track DEselected ids so freshly queued operations default to selected.
-  const [deselected, setDeselected] = useState<Set<string>>(new Set());
+  // Selection is default-DENY: an operation is only actionable once it has been
+  // rendered for the user at least once. Tracking deselected ids instead would
+  // silently include changes that arrived from a background refetch after the
+  // user last looked, widening a bulk approve beyond what they reviewed.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [seen, setSeen] = useState<Set<string>>(new Set());
   const [reviewing, setReviewing] = useState<ApprovalOperation | null>(null);
 
   const operations = useMemo(() => data?.operations ?? [], [data]);
+
+  useEffect(() => {
+    const ids = operations.map((op) => op.id);
+    const idSet = new Set(ids);
+    const fresh = ids.filter((id) => !seen.has(id));
+    if (fresh.length === 0 && idSet.size === seen.size) return;
+
+    // Newly arrived operations start selected — but only from this point on, so
+    // they are visible on screen before any Apply click can include them.
+    setSeen(new Set(ids));
+    setSelected((prev) => {
+      const next = new Set<string>();
+      for (const id of ids) {
+        if (prev.has(id) || !seen.has(id)) next.add(id);
+      }
+      return next;
+    });
+  }, [operations, seen]);
 
   const batches = useMemo(() => {
     const byBatch = new Map<
@@ -163,20 +170,36 @@ export function ApprovalPanel() {
   if (isLoading || operations.length === 0) return null;
 
   const selectedIds = operations
-    .filter((op) => !deselected.has(op.id))
+    .filter((op) => selected.has(op.id))
     .map((op) => op.id);
   const busy = approve.isPending || reject.isPending;
 
   function toggle(id: string, checked: boolean) {
-    setDeselected((prev) => {
+    setSelected((prev) => {
       const next = new Set(prev);
-      if (checked) next.delete(id);
-      else next.add(id);
+      if (checked) next.add(id);
+      else next.delete(id);
       return next;
     });
   }
 
   function handleApprove() {
+    // Trash and spam are the changes a user cannot casually undo, so confirm
+    // the count before writing them — this panel exists to prevent surprise.
+    const destructive = operations.filter(
+      (op) => selected.has(op.id) && op.destructive,
+    );
+    if (
+      destructive.length > 0 &&
+      !window.confirm(
+        `Apply ${selectedIds.length} change${selectedIds.length === 1 ? "" : "s"} to Gmail?\n\n` +
+          `${destructive.length} of them move mail to Trash or mark it as Spam. ` +
+          `Gmail permanently deletes trashed mail after 30 days.`,
+      )
+    ) {
+      return;
+    }
+
     approve.mutate(
       { ids: selectedIds },
       {
@@ -188,20 +211,28 @@ export function ApprovalPanel() {
           } else {
             toast.success(`Applied ${result.applied} changes to Gmail`);
           }
-          setDeselected(new Set());
         },
         onError: (err) => toast.error(err.message),
       },
     );
   }
 
-  function handleReject(ids: string[]) {
+  function handleReject(ids: string[], confirmAll = false) {
+    if (
+      confirmAll &&
+      !window.confirm(
+        `Reject all ${ids.length} pending change${ids.length === 1 ? "" : "s"}? ` +
+          `Nothing is applied to Gmail, and the proposals are discarded.`,
+      )
+    ) {
+      return;
+    }
+
     reject.mutate(
       { ids },
       {
         onSuccess: (result) => {
           toast.success(`Rejected ${result.rejected} pending changes`);
-          setDeselected(new Set());
         },
         onError: (err) => toast.error(err.message),
       },
@@ -209,17 +240,17 @@ export function ApprovalPanel() {
   }
 
   return (
-    <Card className="mb-4 border-amber-500/50">
+    <Card className="mb-4 border-warning/50">
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-amber-500" />
+          <ShieldAlert className="h-4 w-4 text-warning-foreground" />
           <CardTitle className="text-base">
             Pending Gmail changes — approval required
           </CardTitle>
         </div>
         <CardDescription>
-          Nothing is applied to Gmail until you approve it. Review the list,
-          uncheck anything you want to keep, and click an email to read it.
+          Nothing is applied to Gmail until you approve it. Uncheck anything you
+          want to keep, and open a row to read the email first.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -235,29 +266,35 @@ export function ApprovalPanel() {
               {batch.ops.map((op) => (
                 <li
                   key={op.id}
-                  className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-muted/30"
-                  onClick={() => setReviewing(op)}
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30"
                 >
                   <Checkbox
-                    checked={!deselected.has(op.id)}
+                    checked={selected.has(op.id)}
                     onCheckedChange={(checked) => toggle(op.id, checked)}
-                    aria-label={`Select ${op.email?.subject ?? op.emailId}`}
+                    aria-label={`Select ${op.label} for ${op.email?.subject ?? op.emailId}`}
                   />
                   <Badge
-                    variant={operationBadgeVariant(op.type)}
-                    className="shrink-0"
+                    variant={operationBadgeVariant(op)}
+                    className="max-w-[12rem] shrink-0 truncate"
+                    title={op.label}
                   >
-                    {operationLabel(op)}
+                    {op.label}
                   </Badge>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm">
+                  {/* A real button, so reading the email before approving it is
+                      reachable by keyboard — not just by mouse. */}
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => setReviewing(op)}
+                  >
+                    <span className="block truncate text-sm">
                       {op.email?.subject ?? `(not in local DB: ${op.emailId})`}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
                       {op.email?.from}
                       {op.accountId && ` — ${op.accountId}`}
-                    </p>
-                  </div>
+                    </span>
+                  </button>
                   {op.email && (
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {formatDate(op.email.date)}
@@ -296,9 +333,9 @@ export function ApprovalPanel() {
           <Button
             size="sm"
             variant="outline"
-            className="gap-1 text-destructive hover:text-destructive"
+            className="gap-1 text-destructive-text hover:text-destructive-text"
             disabled={busy}
-            onClick={() => handleReject(operations.map((op) => op.id))}
+            onClick={() => handleReject(operations.map((op) => op.id), true)}
           >
             Reject all
           </Button>

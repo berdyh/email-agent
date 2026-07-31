@@ -16,6 +16,10 @@ export interface ApprovalOperation {
   emailId: string;
   type: string;
   labelIds: string[];
+  /** Human-readable description of the change, derived server-side from core. */
+  label: string;
+  /** True for changes that hide or destroy mail (trash/spam). */
+  destructive: boolean;
   createdAt: string;
   email: ApprovalEmailSummary | null;
 }
@@ -29,6 +33,13 @@ export interface ApplyApprovalsResult {
   applied: number;
   failed: number;
   errors: Array<{ emailId: string; error: string }>;
+  /** Per-operation results, in the order the operations were applied. */
+  outcomes: Array<{
+    emailId: string;
+    type: string;
+    ok: boolean;
+    error?: string;
+  }>;
 }
 
 export function useApprovals() {
