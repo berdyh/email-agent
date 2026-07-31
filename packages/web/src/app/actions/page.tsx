@@ -12,16 +12,20 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Play, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Play, Pencil, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { ActionChatCard } from "@/components/actions/action-chat-card";
 import { AppendActionCard } from "@/components/actions/append-action-card";
 import { ApprovalPanel } from "@/components/actions/approval-panel";
 import { useActionChatStore } from "@/store/action-chat-store";
 import { useEmailStore } from "@/store/email-store";
+import { useSettings } from "@/hooks/use-settings";
 
 export default function ActionsPage() {
   const { data: actions, isLoading } = useActions();
+  const { data: settings } = useSettings();
+  const autoApply = settings?.gmail?.autoApplyActions ?? false;
   const runAction = useRunAction();
   const deleteAction = useDeleteAction();
   const { isOpen, expandedCardId, openEdit } = useActionChatStore();
@@ -42,7 +46,13 @@ export default function ActionsPage() {
     try {
       const result = await runAction.mutateAsync({ actionId: action.id, accountEmail });
       if (result.status === "success") {
-        if (result.pendingOperations?.length) {
+        if (result.applyResult) {
+          const { applied, failed } = result.applyResult;
+          toast.warning(
+            `"${action.name}" auto-applied ${applied} Gmail changes` +
+              (failed > 0 ? `, ${failed} failed` : ""),
+          );
+        } else if (result.pendingOperations?.length) {
           toast.success(
             `"${action.name}" completed — ${result.pendingOperations.length} Gmail changes await your approval`,
           );
@@ -96,6 +106,24 @@ export default function ActionsPage() {
               Run AI-powered analysis on your emails
             </p>
           </div>
+
+          {/* The approval gate is off — say so plainly, every time. */}
+          {autoApply && (
+            <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <p className="text-sm">
+                <span className="font-medium text-destructive">
+                  Auto-apply is on.
+                </span>{" "}
+                Running an action changes your Gmail immediately — mail can be
+                trashed, marked as spam, or archived without your review.{" "}
+                <Link href="/settings" className="underline underline-offset-2">
+                  Turn it off in Settings
+                </Link>
+                .
+              </p>
+            </div>
+          )}
 
           {/* Queued Gmail changes awaiting the user's approval */}
           <ApprovalPanel />

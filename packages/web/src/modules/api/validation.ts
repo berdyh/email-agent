@@ -8,6 +8,7 @@ const SETTING_KEYS = new Set([
   "gcp",
   "prompts",
   "embedding",
+  "gmail",
   "ui",
   "dataDir",
   "accounts",
@@ -71,12 +72,13 @@ export interface EmailIdRequest {
 type SettingsUpdate = Partial<
   Omit<
     AppConfig,
-    "gcp" | "prompts" | "embedding" | "ui" | "accounts" | "oauth"
+    "gcp" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
   >
 > & {
   gcp?: Partial<AppConfig["gcp"]>;
   prompts?: Partial<AppConfig["prompts"]>;
   embedding?: Partial<AppConfig["embedding"]>;
+  gmail?: Partial<AppConfig["gmail"]>;
   ui?: Partial<AppConfig["ui"]>;
   accounts?: AppConfig["accounts"];
   oauth?: AppConfig["oauth"];
@@ -372,6 +374,20 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     settings.preferredAgent = body["preferredAgent"];
   }
 
+  if (body["gmail"] !== undefined) {
+    const gmail = asRecord(body["gmail"]);
+    const update: Partial<AppConfig["gmail"]> = {};
+    if ("autoApplyAcknowledged" in gmail) {
+      update.autoApplyAcknowledged =
+        optionalBoolean(gmail["autoApplyAcknowledged"], "gmail.autoApplyAcknowledged") ?? false;
+    }
+    if ("autoApplyActions" in gmail) {
+      update.autoApplyActions =
+        optionalBoolean(gmail["autoApplyActions"], "gmail.autoApplyActions") ?? false;
+    }
+    settings.gmail = update;
+  }
+
   if (body["dataDir"] !== undefined) {
     settings.dataDir = requiredString(body["dataDir"], "dataDir");
   }
@@ -466,6 +482,7 @@ export function mergeSettingsUpdate(
       ...update.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
+    gmail: normalizeGmailConfig({ ...current.gmail, ...update.gmail }),
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
     // Accounts are owned by the dedicated /api/accounts endpoints; a settings
     // PUT must never mutate them, or a stale client snapshot resurrects a
@@ -519,10 +536,26 @@ export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSetti
       ...settings.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
+    gmail: normalizeGmailConfig(settings.gmail),
     prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
     dataDir: settings.dataDir,
     accounts: settings.accounts,
+  };
+}
+
+/**
+ * Mirrors the core `normalizeSettings` invariant at the API boundary: enabling
+ * auto-apply requires a recorded acknowledgement of its warnings, so a client
+ * can never flip the toggle alone (and revoking consent disables it again).
+ */
+function normalizeGmailConfig(
+  gmail: Partial<AppConfig["gmail"]> | undefined,
+): AppConfig["gmail"] {
+  const autoApplyAcknowledged = gmail?.autoApplyAcknowledged === true;
+  return {
+    autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
+    autoApplyAcknowledged,
   };
 }
 

@@ -15,6 +15,12 @@ export interface GmailOperationItem {
   accountEmail?: string;
 }
 
+export interface ActionApplyResultData {
+  applied: number;
+  failed: number;
+  errors: Array<{ emailId: string; error: string }>;
+}
+
 export interface ActionResult {
   actionId: string;
   status: string;
@@ -22,6 +28,9 @@ export interface ActionResult {
   error?: string;
   pendingOperations?: GmailOperationItem[];
   batchId?: string;
+  autoApplied?: boolean;
+  /** Set only when the opt-in auto-apply setting applied the batch immediately. */
+  applyResult?: ActionApplyResultData;
 }
 
 export function useActions() {
@@ -50,10 +59,16 @@ export function useRunAction() {
     },
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
-      // A successful run never touches Gmail directly — it queues operations
-      // for approval, so only the approvals cache goes stale here.
+      // A run queues its Gmail operations for approval, so the approvals cache
+      // always goes stale. With auto-apply on, the batch was also written to
+      // Gmail already, which invalidates every email-derived cache too.
       if (result.pendingOperations?.length) {
         void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+      }
+      if (result.applyResult) {
+        void queryClient.invalidateQueries({ queryKey: ["emails"] });
+        void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
+        void queryClient.invalidateQueries({ queryKey: ["email"] });
       }
     },
   });

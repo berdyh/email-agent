@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { AppConfig } from "@email-agent/core/config";
 import {
   internalErrorResponse,
   mergeSettingsUpdate,
@@ -175,7 +176,14 @@ describe("web API validation", () => {
     });
     assert.throws(() => parseSettingsUpdateRequest([]), /object/);
     assert.throws(() => parseSettingsUpdateRequest({ unknown: true }), /Unknown setting/);
-    assert.throws(() => parseSettingsUpdateRequest({ gmail: { syncActions: true } }), /Unknown setting/);
+    // Legacy nested keys are dropped rather than rejected, like every other section.
+    assert.deepEqual(parseSettingsUpdateRequest({ gmail: { syncActions: true } }), {
+      gmail: {},
+    });
+    assert.throws(
+      () => parseSettingsUpdateRequest({ gmail: { autoApplyActions: "yes" } }),
+      /autoApplyActions/,
+    );
   });
 
   it("validates a full settings update shape", () => {
@@ -244,6 +252,7 @@ describe("web API validation", () => {
         gcp: { projectId: "project" },
         prompts: { summary: "s", digest: "d" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
+        gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "all",
@@ -259,6 +268,43 @@ describe("web API validation", () => {
     assert.equal("panelWidths" in merged.ui, false);
   });
 
+  it("never enables auto-apply without an acknowledgement in the same config", () => {
+    const base: AppConfig = {
+      agentMode: "all-agents",
+      preferredAgent: "claude",
+      gcp: { projectId: "" },
+      prompts: { summary: "", digest: "" },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
+      ui: { fetchInterval: 0, fetchScope: "unread" },
+      dataDir: "/tmp/email-agent",
+      accounts: [],
+    };
+
+    // Toggle alone: rejected.
+    const forced = mergeSettingsUpdate(
+      base,
+      parseSettingsUpdateRequest({ gmail: { autoApplyActions: true } }),
+    );
+    assert.equal(forced.gmail.autoApplyActions, false);
+
+    // Toggle plus acknowledgement: honored.
+    const accepted = mergeSettingsUpdate(
+      base,
+      parseSettingsUpdateRequest({
+        gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
+      }),
+    );
+    assert.equal(accepted.gmail.autoApplyActions, true);
+
+    // Revoking the acknowledgement switches auto-apply back off.
+    const revoked = mergeSettingsUpdate(
+      { ...base, gmail: { autoApplyActions: true, autoApplyAcknowledged: true } },
+      parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: false } }),
+    );
+    assert.equal(revoked.gmail.autoApplyActions, false);
+  });
+
   it("ignores an accounts key in settings updates (managed by account endpoints)", () => {
     const update = parseSettingsUpdateRequest({
       accounts: [{ email: "attacker@example.com", isDefault: true }],
@@ -270,6 +316,7 @@ describe("web API validation", () => {
         gcp: { projectId: "" },
         prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+        gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "unread",
@@ -300,6 +347,7 @@ describe("web API validation", () => {
       gcp: { projectId: "" },
       prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
       ui: {
         fetchInterval: 0,
         fetchScope: "unread",
