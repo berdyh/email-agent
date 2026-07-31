@@ -38,6 +38,8 @@ export interface ActionResultRecord {
 
 export type PendingOperationStatus =
   | "pending"
+  /** Claimed by an in-flight apply. Not pending, so it cannot also be rejected. */
+  | "applying"
   | "applied"
   | "rejected"
   | "failed";
@@ -57,6 +59,11 @@ export interface PendingOperationRecord {
   labelIds: string; // JSON array of label ids ("[]" when not applicable)
   status: string; // PendingOperationStatus
   error: string; // failure message when status === "failed", else ""
+  /**
+   * Identifies the single apply/reject attempt that claimed this row, so a
+   * resolver only ever finalizes rows it actually won. "" while unclaimed.
+   */
+  claimToken: string;
   createdAt: string;
   resolvedAt: string; // "" while pending
 }

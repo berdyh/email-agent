@@ -26,9 +26,13 @@ export {
   getPendingOperations,
   getPendingOperationsByIds,
   countPendingOperations,
+  claimPendingOperations,
+  resolveClaimedOperations,
   resolvePendingOperations,
   buildPendingOperationFilters,
   buildIdListFilter,
+  buildPendingResolutionFilter,
+  buildClaimFilter,
   type PendingOperationOutcome,
 } from "./pending-operations.js";
 export { saveClusters } from "./clusters.js";

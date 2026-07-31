@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  buildClaimFilter,
   buildIdListFilter,
   buildPendingOperationFilters,
   buildPendingResolutionFilter,
@@ -67,6 +68,19 @@ describe("pending operation DB filters", () => {
     // `id IN ()` is a DataFusion parse error, so this must fail loudly at the
     // call site rather than reaching LanceDB.
     assert.throws(() => buildIdListFilter([]), /at least one id/);
+  });
+
+  it("scopes a claim to one attempt and one status", () => {
+    // Resolution is only ever allowed against rows this attempt won, so a
+    // concurrent apply and reject cannot overwrite each other's decision.
+    assert.equal(
+      buildClaimFilter("token-1", "applying"),
+      "`claimToken` = 'token-1' AND status = 'applying'",
+    );
+    assert.equal(
+      buildClaimFilter("quote'token", "rejected"),
+      "`claimToken` = 'quote''token' AND status = 'rejected'",
+    );
   });
 
   it("only resolves rows that are still pending", () => {

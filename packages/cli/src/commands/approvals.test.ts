@@ -17,6 +17,7 @@ function record(
     labelIds: "[]",
     status: "pending",
     error: "",
+    claimToken: "",
     createdAt: "2026-07-31T10:00:00.000Z",
     resolvedAt: "",
     ...overrides,

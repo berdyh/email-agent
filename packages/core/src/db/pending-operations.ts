@@ -44,6 +44,38 @@ export function buildPendingResolutionFilter(ids: string[]): string {
   return `${buildIdListFilter(ids)} AND status = 'pending'`;
 }
 
+export function buildClaimFilter(token: string, status: string): string {
+  return `\`claimToken\` = '${escapeSql(token)}' AND status = '${escapeSql(status)}'`;
+}
+
+/**
+ * Atomically moves rows from `pending` to `status`, stamping them with this
+ * attempt's `token`. LanceDB's update() reports no row count, so the caller
+ * MUST read back by token to learn which rows it actually won — a concurrent
+ * apply or reject may have taken some of them first.
+ */
+export async function claimPendingOperations(
+  ids: string[],
+  token: string,
+  status: Exclude<PendingOperationStatus, "pending">,
+  resolvedAt = "",
+): Promise<PendingOperationRecord[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+
+  await table.update({
+    where: buildPendingResolutionFilter(ids),
+    values: { status, claimToken: token, resolvedAt },
+  });
+
+  const results = await table
+    .query()
+    .where(buildClaimFilter(token, status))
+    .toArray();
+  return results as unknown as PendingOperationRecord[];
+}
+
 export async function savePendingOperations(
   records: PendingOperationRecord[],
 ): Promise<void> {
@@ -105,6 +137,50 @@ export interface PendingOperationOutcome {
   id: string;
   status: Exclude<PendingOperationStatus, "pending">;
   error?: string;
+}
+
+/**
+ * Finalizes rows this attempt claimed. Every predicate is scoped to the claim
+ * token, so a resolver can only ever write rows it owns.
+ */
+export async function resolveClaimedOperations(
+  outcomes: PendingOperationOutcome[],
+  token: string,
+  resolvedAt: string,
+): Promise<void> {
+  if (outcomes.length === 0) return;
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+
+  const claimScope = buildClaimFilter(token, "applying");
+  const idsByStatus = new Map<string, string[]>();
+  const individual: PendingOperationOutcome[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.error) {
+      individual.push(outcome);
+    } else {
+      const ids = idsByStatus.get(outcome.status) ?? [];
+      ids.push(outcome.id);
+      idsByStatus.set(outcome.status, ids);
+    }
+  }
+
+  for (const [status, ids] of idsByStatus) {
+    await table.update({
+      where: `${buildIdListFilter(ids)} AND ${claimScope}`,
+      values: { status, error: "", resolvedAt },
+    });
+  }
+  for (const outcome of individual) {
+    await table.update({
+      where: `${buildIdListFilter([outcome.id])} AND ${claimScope}`,
+      values: {
+        status: outcome.status,
+        error: outcome.error ?? "",
+        resolvedAt,
+      },
+    });
+  }
 }
 
 export async function resolvePendingOperations(

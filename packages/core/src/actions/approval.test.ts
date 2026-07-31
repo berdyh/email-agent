@@ -78,6 +78,7 @@ describe("pending operation records", () => {
     assert.equal(first.actionName, "Junk Detector");
     assert.equal(first.accountId, "me@example.com");
     assert.equal(first.status, "pending");
+    assert.equal(first.claimToken, "");
     assert.equal(first.labelIds, "[]");
     assert.equal(first.resolvedAt, "");
     assert.equal(first.createdAt, "2026-07-31T10:00:00.000Z");

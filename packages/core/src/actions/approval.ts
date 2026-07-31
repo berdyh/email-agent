@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   savePendingOperations,
-  getPendingOperationsByIds,
-  resolvePendingOperations,
+  claimPendingOperations,
+  resolveClaimedOperations,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
 import type { PendingOperationRecord } from "../db/schema.js";
@@ -38,6 +38,7 @@ export function toPendingOperationRecords(
     labelIds: JSON.stringify(op.labelIds ?? []),
     status: "pending",
     error: "",
+    claimToken: "",
     createdAt,
     resolvedAt: "",
   }));
@@ -127,9 +128,19 @@ export async function enqueueOperations(
 export async function applyPendingOperationsByIds(
   ids: string[],
 ): Promise<ActionApplyResult> {
-  const rows = (await getPendingOperationsByIds(ids)).filter(
-    (row) => row.status === "pending",
-  );
+  // CLAIM BEFORE MUTATING. Rows are moved out of `pending` and stamped with
+  // this attempt's token *before* any Gmail call, and only the rows we actually
+  // won come back. Without this, a Reject issued while an apply was in flight
+  // would succeed against still-pending rows, be reported to the user as
+  // honored, and then be silently overwritten as the apply completed — mail
+  // destroyed after the user personally refused it, which is the exact failure
+  // this whole feature exists to prevent.
+  const token = randomUUID();
+  const rows = await claimPendingOperations(ids, token, "applying");
+  if (rows.length === 0) {
+    return { applied: 0, failed: 0, errors: [], outcomes: [] };
+  }
+
   const result = await applyOperations(rows.map(recordToGmailOperation));
 
   const resolvedAt = new Date().toISOString();
@@ -149,7 +160,7 @@ export async function applyPendingOperationsByIds(
     if (outcome.ok) return { id: row.id, status: "applied" };
     return { id: row.id, status: "failed", error: outcome.error ?? "" };
   });
-  await resolvePendingOperations(outcomes, resolvedAt);
+  await resolveClaimedOperations(outcomes, token, resolvedAt);
 
   return result;
 }
@@ -161,12 +172,16 @@ export async function applyPendingOperationsByIds(
 export async function rejectPendingOperationsByIds(
   ids: string[],
 ): Promise<number> {
-  const rows = (await getPendingOperationsByIds(ids)).filter(
-    (row) => row.status === "pending",
-  );
-  await resolvePendingOperations(
-    rows.map((row) => ({ id: row.id, status: "rejected" as const })),
+  // Same claim discipline: only rows still `pending` are rejected, and the
+  // count is the number actually won — never a pre-read count that might
+  // include rows an in-flight apply already claimed. Telling a user their
+  // rejection covered a change that was concurrently being applied would be
+  // the same lie from the other direction.
+  const claimed = await claimPendingOperations(
+    ids,
+    randomUUID(),
+    "rejected",
     new Date().toISOString(),
   );
-  return rows.length;
+  return claimed.length;
 }
