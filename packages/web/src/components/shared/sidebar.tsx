@@ -35,9 +35,11 @@ export function Sidebar() {
   const unreadCount = unreadData?.count ?? 0;
 
   const { data: approvalsData } = useQuery<{ pendingCount: number }>({
+    // Shares the ["approvals"] prefix so the approve/reject mutations
+    // invalidate this badge too.
     queryKey: ["approvals", "count"],
     queryFn: async () => {
-      const res = await fetch("/api/approvals");
+      const res = await fetch("/api/approvals/count");
       if (!res.ok) throw new Error("Failed to fetch pending approvals");
       return res.json() as Promise<{ pendingCount: number }>;
     },
@@ -77,11 +79,17 @@ export function Sidebar() {
                   className={cn(
                     "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-semibold",
                     item.href === "/actions"
-                      ? "bg-amber-500 text-black"
+                      ? "bg-warning text-warning-foreground"
                       : "bg-primary text-primary-foreground",
                   )}
                 >
                   {badgeCount > 99 ? "99+" : badgeCount}
+                  {/* Colour alone can't carry "approvals" vs "unread". */}
+                  <span className="sr-only">
+                    {item.href === "/actions"
+                      ? " Gmail changes awaiting approval"
+                      : " unread emails"}
+                  </span>
                 </span>
               )}
             </Link>
