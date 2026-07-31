@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AgentRouter } from "../agents/router.js";
 import { saveActionResult } from "../db/actions.js";
-import { loadSettings } from "../config/settings.js";
 import type { GmailMessage } from "../gmail/types.js";
 import type {
   EmailAction,
@@ -9,10 +8,10 @@ import type {
 } from "./types.js";
 import {
   mapResultToOperations,
-  applyOperations,
   scopeOperationsToAccounts,
   type OperationAccountLookup,
 } from "./apply.js";
+import { enqueueOperations } from "./approval.js";
 import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
@@ -89,6 +88,7 @@ export class ActionRunner {
 
       const output = parseActionOutput(agentResult.text, emailIds);
 
+      const resultId = randomUUID();
       const result: ActionRunResult = {
         actionId: action.id,
         status: "success",
@@ -105,18 +105,31 @@ export class ActionRunner {
         accountEmailByMessageId,
       );
 
+      // Gmail mutations are NEVER applied here: every operation is queued for
+      // the user's explicit approval (web approval panel or CLI prompt). The
+      // batch id ties queue rows to the persisted action result.
       if (pendingOps.length > 0) {
-        const settings = await loadSettings();
-        if (settings.gmail.syncActions) {
-          result.applyResult = await applyOperations(pendingOps, accountEmail);
-        } else {
-          result.pendingOperations = pendingOps;
+        result.pendingOperations = pendingOps;
+        result.batchId = resultId;
+        try {
+          await enqueueOperations({
+            batchId: resultId,
+            actionId: action.id,
+            actionName: action.name,
+            operations: pendingOps,
+          });
+        } catch (queueErr) {
+          const message =
+            queueErr instanceof Error ? queueErr.message : String(queueErr);
+          console.error(
+            `Failed to queue pending operations for "${action.id}": ${message}`,
+          );
         }
       }
 
-      // Persist to DB in its own try/catch: the Gmail mutations in applyResult
-      // are already real, so a persistence failure must not be reported to the
-      // caller as a failed run.
+      // Persist to DB in its own try/catch: the run itself succeeded and its
+      // operations are already queued, so a persistence failure must not be
+      // reported to the caller as a failed run.
       try {
         // An explicit accountEmail is authoritative. Otherwise (an "all
         // accounts" run) derive the account from the per-message lookup so a
@@ -127,7 +140,7 @@ export class ActionRunner {
           deriveResultAccountId(emailIds, accountEmailByMessageId);
 
         await saveActionResult({
-          id: randomUUID(),
+          id: resultId,
           actionId: action.id,
           accountId: resultAccountId,
           status: "success",

@@ -35,10 +35,19 @@ export interface GmailOperation {
   accountEmail?: string;
 }
 
+export interface OperationOutcome {
+  emailId: string;
+  type: GmailOperationType;
+  ok: boolean;
+  error?: string;
+}
+
 export interface ActionApplyResult {
   applied: number;
   failed: number;
   errors: Array<{ emailId: string; error: string }>;
+  /** Per-operation outcomes, in the same order as the input operations. */
+  outcomes: OperationOutcome[];
 }
 
 export interface ActionRunResult {
@@ -50,5 +59,6 @@ export interface ActionRunResult {
   tokensUsed: number;
   durationMs: number;
   pendingOperations?: GmailOperation[];
-  applyResult?: ActionApplyResult;
+  /** Approval batch id (the action_results row id) when operations were enqueued. */
+  batchId?: string;
 }

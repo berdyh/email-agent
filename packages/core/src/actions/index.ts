@@ -5,7 +5,16 @@ export type {
   GmailOperationType,
   GmailOperation,
   ActionApplyResult,
+  OperationOutcome,
 } from "./types.js";
+export {
+  enqueueOperations,
+  toPendingOperationRecords,
+  recordToGmailOperation,
+  applyPendingOperationsByIds,
+  rejectPendingOperationsByIds,
+  type EnqueueOperationsInput,
+} from "./approval.js";
 export { ActionRegistry } from "./registry.js";
 export { ActionRunner } from "./runner.js";
 export { builtInActions } from "./built-in/index.js";

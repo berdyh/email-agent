@@ -10,6 +10,7 @@ import type {
   ActionEmailResult,
   GmailOperation,
   ActionApplyResult,
+  OperationOutcome,
 } from "./types.js";
 
 export type OperationAccountLookup = ReadonlyMap<string, string | null>;
@@ -137,6 +138,7 @@ export async function applyOperations(
   let applied = 0;
   let failed = 0;
   const errors: Array<{ emailId: string; error: string }> = [];
+  const outcomes: OperationOutcome[] = [];
 
   for (const op of operations) {
     const operationAccountEmail = op.accountEmail ?? accountEmail;
@@ -166,16 +168,16 @@ export async function applyOperations(
           break;
       }
       applied++;
+      outcomes.push({ emailId: op.emailId, type: op.type, ok: true });
     } catch (err) {
       failed++;
-      errors.push({
-        emailId: op.emailId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const error = err instanceof Error ? err.message : String(err);
+      errors.push({ emailId: op.emailId, error });
+      outcomes.push({ emailId: op.emailId, type: op.type, ok: false, error });
     }
   }
 
-  return { applied, failed, errors };
+  return { applied, failed, errors, outcomes };
 }
 
 /**
