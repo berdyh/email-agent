@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentRouter } from "../agents/router.js";
 import { saveActionResult } from "../db/actions.js";
+import { loadSettings } from "../config/settings.js";
 import type { GmailMessage } from "../gmail/types.js";
 import type {
   EmailAction,
@@ -11,7 +12,10 @@ import {
   scopeOperationsToAccounts,
   type OperationAccountLookup,
 } from "./apply.js";
-import { enqueueOperations } from "./approval.js";
+import {
+  applyPendingOperationsByIds,
+  enqueueOperations,
+} from "./approval.js";
 import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
@@ -105,19 +109,27 @@ export class ActionRunner {
         accountEmailByMessageId,
       );
 
-      // Gmail mutations are NEVER applied here: every operation is queued for
-      // the user's explicit approval (web approval panel or CLI prompt). The
-      // batch id ties queue rows to the persisted action result.
+      // Gmail mutations always go through the approval queue first, so every
+      // proposed change is recorded before anything touches Gmail. They are
+      // applied here only when the user opted into auto-apply AND accepted its
+      // warnings in Settings; otherwise they wait for an explicit approval in
+      // the web panel or CLI. The batch id ties queue rows to the action result.
       if (pendingOps.length > 0) {
         result.pendingOperations = pendingOps;
         result.batchId = resultId;
         try {
-          await enqueueOperations({
+          const queuedIds = await enqueueOperations({
             batchId: resultId,
             actionId: action.id,
             actionName: action.name,
             operations: pendingOps,
           });
+
+          const settings = await loadSettings();
+          if (settings.gmail.autoApplyActions) {
+            result.autoApplied = true;
+            result.applyResult = await applyPendingOperationsByIds(queuedIds);
+          }
         } catch (queueErr) {
           const message =
             queueErr instanceof Error ? queueErr.message : String(queueErr);

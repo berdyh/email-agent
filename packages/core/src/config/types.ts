@@ -23,6 +23,22 @@ export interface EmbeddingConfig {
   dimensions: number;
 }
 
+export interface GmailSyncConfig {
+  /**
+   * Apply AI-proposed Gmail changes (trash, spam, archive, labels) immediately
+   * instead of queueing them for approval. Opt-in and off by default; it only
+   * takes effect while `autoApplyAcknowledged` is also true.
+   */
+  autoApplyActions: boolean;
+  /**
+   * Records that the user read and accepted the auto-apply risk warnings in
+   * Settings. `normalizeSettings` forces `autoApplyActions` back to false
+   * whenever this is false, so no config path can enable unattended Gmail
+   * mutations without an explicit acknowledgement.
+   */
+  autoApplyAcknowledged: boolean;
+}
+
 export interface UiConfig {
   fetchInterval: number;
   fetchScope: "unread" | "all";
@@ -45,6 +61,7 @@ export interface AppConfig {
   gcp: GcpConfig;
   prompts: PromptsConfig;
   embedding: EmbeddingConfig;
+  gmail: GmailSyncConfig;
   ui: UiConfig;
   dataDir: string;
   accounts: AccountConfig[];

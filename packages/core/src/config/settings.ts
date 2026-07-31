@@ -32,7 +32,17 @@ export function normalizeSettings(
   const gcp = asRecord(input["gcp"]);
   const prompts = asRecord(input["prompts"]);
   const embedding = asRecord(input["embedding"]);
+  const gmail = asRecord(input["gmail"]);
   const ui = asRecord(input["ui"]);
+
+  const autoApplyAcknowledged =
+    "autoApplyAcknowledged" in gmail
+      ? (gmail["autoApplyAcknowledged"] as boolean)
+      : defaults.gmail.autoApplyAcknowledged;
+  const autoApplyRequested =
+    "autoApplyActions" in gmail
+      ? (gmail["autoApplyActions"] as boolean)
+      : defaults.gmail.autoApplyActions;
 
   const normalized: AppConfig = {
     agentMode:
@@ -58,6 +68,14 @@ export function normalizeSettings(
         "dimensions" in embedding
           ? (embedding["dimensions"] as number)
           : defaults.embedding.dimensions,
+    },
+    gmail: {
+      // Auto-apply performs irreversible-feeling Gmail writes (trash, spam)
+      // with no further prompt, so the acknowledgement gates the toggle here —
+      // the one chokepoint every writer (web PUT, CLI config set, hand-edited
+      // settings.json) passes through via saveSettings/loadSettings.
+      autoApplyActions: autoApplyAcknowledged === true && autoApplyRequested === true,
+      autoApplyAcknowledged: autoApplyAcknowledged === true,
     },
     ui: {
       fetchInterval:

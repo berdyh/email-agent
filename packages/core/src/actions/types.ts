@@ -61,4 +61,8 @@ export interface ActionRunResult {
   pendingOperations?: GmailOperation[];
   /** Approval batch id (the action_results row id) when operations were enqueued. */
   batchId?: string;
+  /** True when the user's opt-in auto-apply setting applied the batch immediately. */
+  autoApplied?: boolean;
+  /** Present only for an auto-applied batch; approvals report their own result. */
+  applyResult?: ActionApplyResult;
 }

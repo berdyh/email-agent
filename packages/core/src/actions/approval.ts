@@ -56,11 +56,16 @@ export function recordToGmailOperation(
   return operation;
 }
 
-/** Persist a batch of Gmail operations awaiting the user's approval. */
+/**
+ * Persist a batch of Gmail operations awaiting the user's approval.
+ * Returns the queue row ids, in operation order.
+ */
 export async function enqueueOperations(
   input: EnqueueOperationsInput,
-): Promise<void> {
-  await savePendingOperations(toPendingOperationRecords(input));
+): Promise<string[]> {
+  const records = toPendingOperationRecords(input);
+  await savePendingOperations(records);
+  return records.map((record) => record.id);
 }
 
 /**

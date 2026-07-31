@@ -307,6 +307,10 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "summary": "Summarize the following email concisely. Return a JSON object with:\n- overview: 1-2 sentence summary\n- sections: array of { text, citation: { startOffset, endOffset, previewText } }\n- keyActions: array of action items mentioned",
     "digest": "Create a daily digest from these subscription emails. Group by sender/topic, summarize key points, and highlight anything actionable."
   },
+  "gmail": {
+    "autoApplyActions": false,
+    "autoApplyAcknowledged": false
+  },
   "ui": {
     "fetchInterval": 0,
     "fetchScope": "unread"

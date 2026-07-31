@@ -26,6 +26,10 @@ export const defaultConfig: AppConfig = {
     model: "text-embedding-3-small",
     dimensions: VECTOR_DIMENSION,
   },
+  gmail: {
+    autoApplyActions: false,
+    autoApplyAcknowledged: false,
+  },
   ui: {
     fetchInterval: 0,
     fetchScope: "unread",

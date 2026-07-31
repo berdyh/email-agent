@@ -5,7 +5,7 @@
 - scope boundaries: Does not own setup UX, Gmail OAuth implementation, or per-route request validation.
 - connected modules/submodules: All core modules, web settings API, CLI config/setup, `setup.sh`.
 - allowed change types: Config type additions, defaults, settings persistence helpers.
-- special operating rules: New config fields must be added to `setup.sh` templates if fresh installs need them.
+- special operating rules: New config fields must be added to `setup.sh` templates if fresh installs need them. `normalizeSettings` enforces the auto-apply consent invariant — `gmail.autoApplyActions` is forced false unless `gmail.autoApplyAcknowledged` is true — and every writer must go through `loadSettings`/`saveSettings` so no path can enable unattended Gmail mutations without acknowledgement.
 - current stubs/placeholders: None known.
 - irrelevant or incomplete code to remove/rework: Arbitrary dotted-path writes in CLI config should move behind typed validation before broad settings expansion.
 - docs that must stay aligned: README environment/setup sections, `setup.sh`, CLI config docs.
