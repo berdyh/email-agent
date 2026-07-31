@@ -70,7 +70,14 @@ export function registerRunAction(program: Command) {
           // Gmail changes are queued first. They are only applied without a
           // prompt when the user turned on auto-apply and accepted its
           // warnings in Settings; otherwise ask for approval here.
-          if (result.applyResult) {
+          if (result.queueError) {
+            console.log(
+              chalk.red(
+                `\nThe action proposed Gmail changes but they could not be queued for approval — nothing was applied.`,
+              ),
+            );
+            console.log(chalk.dim(`  ${result.queueError}`));
+          } else if (result.applyResult) {
             const { applied, failed } = result.applyResult;
             console.log(
               chalk.yellow(

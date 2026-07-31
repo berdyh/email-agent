@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
@@ -116,7 +116,7 @@ function EmailReviewDialog({
 }
 
 export function ApprovalPanel() {
-  const { data, isLoading } = useApprovals();
+  const { data, isLoading, isError, error } = useApprovals();
   const approve = useApproveOperations();
   const reject = useRejectOperations();
   // Selection is default-DENY: an operation is only actionable once it has been
@@ -126,22 +126,29 @@ export function ApprovalPanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [seen, setSeen] = useState<Set<string>>(new Set());
   const [reviewing, setReviewing] = useState<ApprovalOperation | null>(null);
+  // Stable identity: the Dialog's focus effect depends on onClose, so a new
+  // arrow each render would re-run it on every background refetch and yank
+  // focus out of the email the user is reading.
+  const closeReview = useCallback(() => setReviewing(null), []);
 
   const operations = useMemo(() => data?.operations ?? [], [data]);
 
   useEffect(() => {
     const ids = operations.map((op) => op.id);
     const idSet = new Set(ids);
+    const isFirstLoad = seen.size === 0;
     const fresh = ids.filter((id) => !seen.has(id));
     if (fresh.length === 0 && idSet.size === seen.size) return;
 
-    // Newly arrived operations start selected — but only from this point on, so
-    // they are visible on screen before any Apply click can include them.
     setSeen(new Set(ids));
     setSelected((prev) => {
       const next = new Set<string>();
       for (const id of ids) {
-        if (prev.has(id) || !seen.has(id)) next.add(id);
+        // The first render of the queue arrives ticked, so the common case is
+        // still one click. Anything that shows up LATER — a background refetch
+        // after another action run, a window-focus refetch — arrives unticked,
+        // so a bulk Apply can never reach a change the user has not looked at.
+        if (prev.has(id) || (isFirstLoad && !seen.has(id))) next.add(id);
       }
       return next;
     });
@@ -166,6 +173,26 @@ export function ApprovalPanel() {
     }
     return [...byBatch.values()];
   }, [operations]);
+
+  // Never fail silent: the sidebar badge is served by a separate endpoint, so
+  // rendering nothing here would tell the user "N changes await approval" while
+  // giving them no way to see or act on them.
+  if (isError) {
+    return (
+      <Card className="mb-4 border-destructive/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">
+            Couldn’t load pending Gmail changes
+          </CardTitle>
+          <CardDescription>
+            Any queued changes are still queued — nothing has been applied.
+            Reload to try again.
+            {error?.message ? ` (${error.message})` : ""}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
 
   if (isLoading || operations.length === 0) return null;
 
@@ -344,7 +371,7 @@ export function ApprovalPanel() {
 
       <EmailReviewDialog
         operation={reviewing}
-        onClose={() => setReviewing(null)}
+        onClose={closeReview}
       />
     </Card>
   );
