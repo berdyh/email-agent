@@ -1,7 +1,8 @@
 # TODOS
 
 Deferred work, grouped by component then priority (P0 highest). Completed items
-move to the bottom section with the version that shipped them.
+move to the bottom section with the branch and date that shipped them (this repo
+does not version its packages independently).
 
 ## Core actions / approval queue
 

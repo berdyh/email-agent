@@ -2,6 +2,8 @@
 
 This index is the first context layer for agents. Load this file, then the local `MODULE.md` for the area you will touch, then any linked source/tests needed for the task.
 
+For a visual view of the same map (areas and their dependencies), open [`module-map.html`](module-map.html) in a browser.
+
 ## Project Areas
 
 | Area | Purpose | Local card |
