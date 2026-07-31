@@ -34,13 +34,31 @@ export function Sidebar() {
 
   const unreadCount = unreadData?.count ?? 0;
 
+  const { data: approvalsData } = useQuery<{ pendingCount: number }>({
+    queryKey: ["approvals", "count"],
+    queryFn: async () => {
+      const res = await fetch("/api/approvals");
+      if (!res.ok) throw new Error("Failed to fetch pending approvals");
+      return res.json() as Promise<{ pendingCount: number }>;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const pendingApprovals = approvalsData?.pendingCount ?? 0;
+
   return (
     <aside className="flex w-52 flex-col border-r bg-sidebar transition-all">
       <nav className="flex flex-1 flex-col gap-1 p-2">
         {navItems.map((item) => {
           const active = pathname.startsWith(item.href);
           const Icon = item.icon;
-          const showBadge = item.href === "/mail" && unreadCount > 0;
+          const badgeCount =
+            item.href === "/mail"
+              ? unreadCount
+              : item.href === "/actions"
+                ? pendingApprovals
+                : 0;
+          const showBadge = badgeCount > 0;
           return (
             <Link
               key={item.href}
@@ -55,8 +73,15 @@ export function Sidebar() {
               <Icon className="h-4 w-4 shrink-0" />
               <span className="flex-1">{item.label}</span>
               {showBadge && (
-                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
-                  {unreadCount > 99 ? "99+" : unreadCount}
+                <span
+                  className={cn(
+                    "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-semibold",
+                    item.href === "/actions"
+                      ? "bg-amber-500 text-black"
+                      : "bg-primary text-primary-foreground",
+                  )}
+                >
+                  {badgeCount > 99 ? "99+" : badgeCount}
                 </span>
               )}
             </Link>

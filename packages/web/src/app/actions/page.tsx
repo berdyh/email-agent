@@ -7,38 +7,25 @@ import {
   useActions,
   useRunAction,
   useDeleteAction,
-  useApplyOperations,
   type ActionItem,
-  type GmailOperationItem,
 } from "@/hooks/use-actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Play, Pencil, Trash2, Check, X } from "lucide-react";
+import { Loader2, Play, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ActionChatCard } from "@/components/actions/action-chat-card";
 import { AppendActionCard } from "@/components/actions/append-action-card";
+import { ApprovalPanel } from "@/components/actions/approval-panel";
 import { useActionChatStore } from "@/store/action-chat-store";
 import { useEmailStore } from "@/store/email-store";
-
-function formatOperationSummary(operations: GmailOperationItem[]): string {
-  const counts: Record<string, number> = {};
-  for (const op of operations) {
-    counts[op.type] = (counts[op.type] ?? 0) + 1;
-  }
-  return Object.entries(counts)
-    .map(([type, count]) => `${count} ${type}`)
-    .join(", ");
-}
 
 export default function ActionsPage() {
   const { data: actions, isLoading } = useActions();
   const runAction = useRunAction();
   const deleteAction = useDeleteAction();
-  const applyOps = useApplyOperations();
   const { isOpen, expandedCardId, openEdit } = useActionChatStore();
   const accountEmail = useEmailStore((s) => s.activeAccountEmail) ?? undefined;
-  const [pendingOps, setPendingOps] = useState<GmailOperationItem[] | null>(null);
   // Track per-card in-flight runs/deletes by id. The shared mutation only exposes
   // the most recent variables and detaches per-invocation callbacks when a second
   // call starts, so we track progress locally and drive result handling inline via
@@ -55,15 +42,12 @@ export default function ActionsPage() {
     try {
       const result = await runAction.mutateAsync({ actionId: action.id, accountEmail });
       if (result.status === "success") {
-        if (result.applyResult) {
+        if (result.pendingOperations?.length) {
           toast.success(
-            `"${action.name}" completed — auto-applied ${result.applyResult.applied} operations`,
+            `"${action.name}" completed — ${result.pendingOperations.length} Gmail changes await your approval`,
           );
         } else {
           toast.success(`Action "${action.name}" completed`);
-        }
-        if (result.pendingOperations?.length) {
-          setPendingOps(result.pendingOperations);
         }
       } else {
         toast.error(result.error ?? "Action failed");
@@ -100,17 +84,6 @@ export default function ActionsPage() {
     }
   }
 
-  function handleApply() {
-    if (!pendingOps) return;
-    applyOps.mutate({ operations: pendingOps, accountEmail }, {
-      onSuccess: (result) => {
-        toast.success(`Applied ${result.applied} operations${result.failed ? `, ${result.failed} failed` : ""}`);
-        setPendingOps(null);
-      },
-      onError: (err) => toast.error(err.message),
-    });
-  }
-
   return (
     <div className="flex h-screen flex-col">
       <Navbar />
@@ -124,44 +97,8 @@ export default function ActionsPage() {
             </p>
           </div>
 
-          {/* Pending operations confirmation */}
-          {pendingOps && pendingOps.length > 0 && (
-            <Card className="mb-4 border-amber-500/50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Apply Gmail Changes?</CardTitle>
-                <CardDescription>
-                  {formatOperationSummary(pendingOps)}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    className="gap-1"
-                    disabled={applyOps.isPending}
-                    onClick={handleApply}
-                  >
-                    {applyOps.isPending ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Check className="h-3.5 w-3.5" />
-                    )}
-                    Apply
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1"
-                    disabled={applyOps.isPending}
-                    onClick={() => setPendingOps(null)}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    Skip
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Queued Gmail changes awaiting the user's approval */}
+          <ApprovalPanel />
 
           {isLoading && (
             <div className="flex items-center gap-2 text-muted-foreground">

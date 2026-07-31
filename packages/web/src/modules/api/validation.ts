@@ -1,6 +1,5 @@
 import { defaultConfig, type AppConfig } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
-import type { GmailOperation } from "@email-agent/core/actions";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const SETTING_KEYS = new Set([
@@ -9,7 +8,6 @@ const SETTING_KEYS = new Set([
   "gcp",
   "prompts",
   "embedding",
-  "gmail",
   "ui",
   "dataDir",
   "accounts",
@@ -73,13 +71,12 @@ export interface EmailIdRequest {
 type SettingsUpdate = Partial<
   Omit<
     AppConfig,
-    "gcp" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
+    "gcp" | "prompts" | "embedding" | "ui" | "accounts" | "oauth"
   >
 > & {
   gcp?: Partial<AppConfig["gcp"]>;
   prompts?: Partial<AppConfig["prompts"]>;
   embedding?: Partial<AppConfig["embedding"]>;
-  gmail?: Partial<AppConfig["gmail"]>;
   ui?: Partial<AppConfig["ui"]>;
   accounts?: AppConfig["accounts"];
   oauth?: AppConfig["oauth"];
@@ -328,51 +325,16 @@ export function parseSnapshotRestoreRequest(input: unknown): SnapshotRestoreRequ
   };
 }
 
-export function parseApplyActionsRequest(input: unknown): {
-  operations: GmailOperation[];
-  accountEmail?: string;
-} {
+export function parseApprovalIdsRequest(input: unknown): { ids: string[] } {
   const body = asRecord(input);
-  if (!Array.isArray(body["operations"]) || body["operations"].length === 0) {
-    throw new RequestValidationError("operations array is required");
+  if (!Array.isArray(body["ids"]) || body["ids"].length === 0) {
+    throw new RequestValidationError("ids array is required");
   }
 
-  const operations: GmailOperation[] = body["operations"].map((operation, index) => {
-    const record = asRecord(operation);
-    const emailId = requiredString(record["emailId"], `operations[${index}].emailId`);
-    const type = record["type"];
-    if (
-      type !== "trash" &&
-      type !== "spam" &&
-      type !== "markRead" &&
-      type !== "markUnread" &&
-      type !== "addLabels" &&
-      type !== "removeLabels"
-    ) {
-      throw new RequestValidationError(`operations[${index}].type is invalid`);
-    }
-
-    const labels = record["labelIds"];
-    if ((type === "addLabels" || type === "removeLabels") && (!Array.isArray(labels) || labels.some((label) => typeof label !== "string"))) {
-      throw new RequestValidationError(`operations[${index}].labelIds must be a string array`);
-    }
-    const operationType: GmailOperation["type"] = type;
-
-    return {
-      emailId,
-      type: operationType,
-      labelIds: Array.isArray(labels) ? labels as string[] : undefined,
-      accountEmail: optionalPresentString(
-        record["accountEmail"],
-        `operations[${index}].accountEmail`,
-      ),
-    };
-  });
-
-  return {
-    operations,
-    accountEmail: optionalPresentString(body["accountEmail"], "accountEmail"),
-  };
+  const ids = body["ids"].map((id, index) =>
+    requiredString(id, `ids[${index}]`),
+  );
+  return { ids };
 }
 
 export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
@@ -408,15 +370,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
       throw new RequestValidationError("preferredAgent is invalid");
     }
     settings.preferredAgent = body["preferredAgent"];
-  }
-
-  if (body["gmail"] !== undefined) {
-    const gmail = asRecord(body["gmail"]);
-    const update: Partial<AppConfig["gmail"]> = {};
-    if ("syncActions" in gmail) {
-      update.syncActions = optionalBoolean(gmail["syncActions"], "gmail.syncActions") ?? false;
-    }
-    settings.gmail = update;
   }
 
   if (body["dataDir"] !== undefined) {
@@ -513,7 +466,6 @@ export function mergeSettingsUpdate(
       ...update.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
-    gmail: { ...current.gmail, ...update.gmail },
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
     // Accounts are owned by the dedicated /api/accounts endpoints; a settings
     // PUT must never mutate them, or a stale client snapshot resurrects a
@@ -567,7 +519,6 @@ export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSetti
       ...settings.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
-    gmail: settings.gmail,
     prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
     dataDir: settings.dataDir,

@@ -8,7 +8,7 @@ import {
   parseActionRunRequest,
   parseAccountDeleteRequest,
   parseAccountPostRequest,
-  parseApplyActionsRequest,
+  parseApprovalIdsRequest,
   parseEmailIdRequest,
   parseEmailIdentityQuery,
   parseEmailListQuery,
@@ -129,19 +129,10 @@ describe("web API validation", () => {
     assert.throws(() => parseEmailIdentityQuery(new URLSearchParams()), /accountId/);
   });
 
-  it("validates apply-actions and snapshot restore requests", () => {
-    assert.equal(
-      parseApplyActionsRequest({
-        operations: [{ emailId: "m1", type: "trash" }],
-      }).operations[0]?.type,
-      "trash",
-    );
-    assert.equal(
-      parseApplyActionsRequest({
-        operations: [{ emailId: "m1", type: "trash", accountEmail: "" }],
-      }).operations[0]?.accountEmail,
-      "",
-    );
+  it("validates approval-ids and snapshot restore requests", () => {
+    assert.deepEqual(parseApprovalIdsRequest({ ids: ["op-1", "op-2"] }), {
+      ids: ["op-1", "op-2"],
+    });
     assert.equal(
       parseSnapshotRestoreRequest({
         snapshotFilename: "custom.action.ts.2026-06-26T10-00-00-000Z.ts",
@@ -149,18 +140,9 @@ describe("web API validation", () => {
       }).originalFilename,
       "custom.action.ts",
     );
-    assert.throws(() => parseApplyActionsRequest({ operations: [] }), /operations/);
-    assert.throws(
-      () => parseApplyActionsRequest({ operations: [{ emailId: "m1", type: "archive" }] }),
-      /type/,
-    );
-    assert.throws(
-      () =>
-        parseApplyActionsRequest({
-          operations: [{ emailId: "m1", type: "addLabels", labelIds: "INBOX" }],
-        }),
-      /labelIds/,
-    );
+    assert.throws(() => parseApprovalIdsRequest({ ids: [] }), /ids/);
+    assert.throws(() => parseApprovalIdsRequest({}), /ids/);
+    assert.throws(() => parseApprovalIdsRequest({ ids: ["op-1", 7] }), /ids\[1\]/);
     assert.throws(
       () =>
         parseSnapshotRestoreRequest({
@@ -188,12 +170,12 @@ describe("web API validation", () => {
   });
 
   it("accepts only object settings updates", () => {
-    assert.deepEqual(parseSettingsUpdateRequest({ gmail: { syncActions: true } }), {
-      gmail: { syncActions: true },
+    assert.deepEqual(parseSettingsUpdateRequest({ ui: { fetchInterval: 10 } }), {
+      ui: { fetchInterval: 10 },
     });
     assert.throws(() => parseSettingsUpdateRequest([]), /object/);
     assert.throws(() => parseSettingsUpdateRequest({ unknown: true }), /Unknown setting/);
-    assert.throws(() => parseSettingsUpdateRequest({ gmail: { syncActions: "yes" } }), /syncActions/);
+    assert.throws(() => parseSettingsUpdateRequest({ gmail: { syncActions: true } }), /Unknown setting/);
   });
 
   it("validates a full settings update shape", () => {
@@ -212,7 +194,6 @@ describe("web API validation", () => {
         model: "qwen/qwen3-embedding-0.6b",
         dimensions: 768,
       },
-      gmail: { syncActions: true },
       ui: {
         panelWidths: [25, 35, 40],
         fetchInterval: 15,
@@ -263,7 +244,6 @@ describe("web API validation", () => {
         gcp: { projectId: "project" },
         prompts: { summary: "s", digest: "d" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
-        gmail: { syncActions: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "all",
@@ -279,30 +259,6 @@ describe("web API validation", () => {
     assert.equal("panelWidths" in merged.ui, false);
   });
 
-  it("keeps omitted gmail settings during partial updates", () => {
-    const update = parseSettingsUpdateRequest({ gmail: {} });
-    const merged = mergeSettingsUpdate(
-      {
-        agentMode: "all-agents",
-        preferredAgent: "claude",
-        gcp: { projectId: "" },
-        prompts: { summary: "", digest: "" },
-        embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
-        gmail: { syncActions: true },
-        ui: {
-          fetchInterval: 0,
-          fetchScope: "unread",
-        },
-        dataDir: "/tmp/email-agent",
-        accounts: [],
-      },
-      update,
-    );
-
-    assert.equal(merged.gmail.syncActions, true);
-    assert.equal(merged.embedding.dimensions, 768);
-  });
-
   it("ignores an accounts key in settings updates (managed by account endpoints)", () => {
     const update = parseSettingsUpdateRequest({
       accounts: [{ email: "attacker@example.com", isDefault: true }],
@@ -314,7 +270,6 @@ describe("web API validation", () => {
         gcp: { projectId: "" },
         prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
-        gmail: { syncActions: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "unread",
@@ -345,7 +300,6 @@ describe("web API validation", () => {
       gcp: { projectId: "" },
       prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
-      gmail: { syncActions: false },
       ui: {
         fetchInterval: 0,
         fetchScope: "unread",

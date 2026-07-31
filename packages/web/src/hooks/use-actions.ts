@@ -15,19 +15,13 @@ export interface GmailOperationItem {
   accountEmail?: string;
 }
 
-export interface ActionApplyResultData {
-  applied: number;
-  failed: number;
-  errors: Array<{ emailId: string; error: string }>;
-}
-
 export interface ActionResult {
   actionId: string;
   status: string;
   output?: unknown;
   error?: string;
   pendingOperations?: GmailOperationItem[];
-  applyResult?: ActionApplyResultData;
+  batchId?: string;
 }
 
 export function useActions() {
@@ -56,12 +50,10 @@ export function useRunAction() {
     },
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
-      // When gmail.syncActions is on, a successful run auto-applies Gmail
-      // operations (trash/spam/markRead), so email-derived caches go stale.
-      if (result.applyResult) {
-        void queryClient.invalidateQueries({ queryKey: ["emails"] });
-        void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
-        void queryClient.invalidateQueries({ queryKey: ["email"] });
+      // A successful run never touches Gmail directly — it queues operations
+      // for approval, so only the approvals cache goes stale here.
+      if (result.pendingOperations?.length) {
+        void queryClient.invalidateQueries({ queryKey: ["approvals"] });
       }
     },
   });
@@ -82,26 +74,6 @@ export function useDeleteAction() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
-    },
-  });
-}
-
-export function useApplyOperations() {
-  const queryClient = useQueryClient();
-
-  return useMutation<ActionApplyResultData, Error, { operations: GmailOperationItem[]; accountEmail?: string }>({
-    mutationFn: async ({ operations, accountEmail }) => {
-      const res = await fetch("/api/gmail/apply-actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operations, accountEmail }),
-      });
-      if (!res.ok) throw new Error("Failed to apply operations");
-      return res.json() as Promise<ActionApplyResultData>;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["emails"] });
-      void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
     },
   });
 }
