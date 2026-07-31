@@ -45,22 +45,18 @@ export async function getEmails(options?: {
   const limit = options?.limit ?? 0;
   const offset = options?.offset ?? 0;
 
-  if (offset > 0) {
-    // Fetch all matching records, sort, then slice — prevents limit+offset from
-    // truncating before sort, which breaks pagination ordering
-    const results = await query.toArray();
-    const emails = results as unknown as EmailRecord[];
-    emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    return limit > 0 ? emails.slice(offset, offset + limit) : emails.slice(offset);
-  }
-
-  if (limit > 0) {
-    query = query.limit(limit);
-  }
+  // Fetch all matching records, sort by date desc, then slice. LanceDB applies
+  // limit before this JS date-sort, so limiting in-query would return an
+  // arbitrary N rows rather than the newest N. The table is local, so paging
+  // in memory keeps ordering correct for every limit/offset combination.
   const results = await query.toArray();
   const emails = results as unknown as EmailRecord[];
   emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return emails;
+
+  if (offset > 0) {
+    return limit > 0 ? emails.slice(offset, offset + limit) : emails.slice(offset);
+  }
+  return limit > 0 ? emails.slice(0, limit) : emails;
 }
 
 export async function countEmails(options?: {
@@ -124,21 +120,6 @@ export async function markStaleUnreadEmailsRead(
     where: buildStaleUnreadFilter(accountId, currentUnreadIds),
     values: { isUnread: false },
   });
-}
-
-export async function searchEmails(
-  queryVector: number[],
-  limit = 10,
-  accountId?: string,
-): Promise<EmailRecord[]> {
-  const db = await getDb();
-  const table = await db.openTable(emailsTable);
-  let query = table.search(queryVector);
-  if (accountId !== undefined) {
-    query = query.where(`\`accountId\` = '${escapeSql(accountId)}'`);
-  }
-  const results = await query.limit(limit).toArray();
-  return results as unknown as EmailRecord[];
 }
 
 export function buildStaleUnreadFilter(

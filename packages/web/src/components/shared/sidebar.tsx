@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { Inbox, Zap, Network, Newspaper, Settings } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { useUiStore } from "@/store/ui-store";
+import { useEmailStore } from "@/store/email-store";
 
 const navItems = [
   { href: "/mail", label: "Inbox", icon: Inbox },
@@ -17,12 +17,15 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const accountEmail = useEmailStore((s) => s.activeAccountEmail);
 
   const { data: unreadData } = useQuery<{ count: number }>({
-    queryKey: ["unreadCount"],
+    queryKey: ["unreadCount", accountEmail ?? null],
     queryFn: async () => {
-      const res = await fetch("/api/gmail/unread-count");
+      const url = accountEmail
+        ? `/api/gmail/unread-count?accountId=${encodeURIComponent(accountEmail)}`
+        : "/api/gmail/unread-count";
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to fetch unread count");
       return res.json() as Promise<{ count: number }>;
     },
@@ -32,12 +35,7 @@ export function Sidebar() {
   const unreadCount = unreadData?.count ?? 0;
 
   return (
-    <aside
-      className={cn(
-        "flex flex-col border-r bg-sidebar transition-all",
-        collapsed ? "w-14" : "w-52",
-      )}
-    >
+    <aside className="flex w-52 flex-col border-r bg-sidebar transition-all">
       <nav className="flex flex-1 flex-col gap-1 p-2">
         {navItems.map((item) => {
           const active = pathname.startsWith(item.href);
@@ -55,14 +53,9 @@ export function Sidebar() {
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              {!collapsed && <span className="flex-1">{item.label}</span>}
+              <span className="flex-1">{item.label}</span>
               {showBadge && (
-                <span
-                  className={cn(
-                    "inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-semibold",
-                    collapsed ? "ml-auto h-4 min-w-4 px-1" : "h-5 min-w-5 px-1.5",
-                  )}
-                >
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
                   {unreadCount > 99 ? "99+" : unreadCount}
                 </span>
               )}

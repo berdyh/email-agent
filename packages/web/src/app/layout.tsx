@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { QueryProvider } from "@/providers/query-provider";
+import { ErrorBoundary } from "@/components/shared/error-boundary";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -22,7 +23,7 @@ export default function RootLayout({
       <body className={`${inter.variable} font-sans antialiased`}>
         <ThemeProvider>
           <QueryProvider>
-            {children}
+            <ErrorBoundary>{children}</ErrorBoundary>
             <Toaster richColors position="bottom-right" />
           </QueryProvider>
         </ThemeProvider>

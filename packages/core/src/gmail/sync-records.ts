@@ -2,7 +2,7 @@ import type { EmailRecord } from "../db/schema.js";
 import { createLocalEmbeddingVector } from "../shared/vector.js";
 import type { GmailMessage } from "./types.js";
 
-function emailEmbeddingText(email: GmailMessage): string {
+export function emailEmbeddingText(email: GmailMessage): string {
   return `${email.subject}\n${email.from}\n${email.bodyText.slice(0, 500)}`;
 }
 

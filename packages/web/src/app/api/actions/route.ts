@@ -7,7 +7,7 @@ import {
   listUserActions,
   loadUserAction,
 } from "@email-agent/core/actions";
-import { getEmails, initDb } from "@email-agent/core/db";
+import { getEmails, initDb, recordToGmailMessage } from "@email-agent/core/db";
 import {
   internalErrorResponse,
   mutationGuardResponse,
@@ -69,20 +69,7 @@ export async function POST(request: NextRequest) {
     await initDb();
     const emailRecords = await getEmails({ unreadOnly: true, limit: 20, accountId: body.accountEmail });
     const accountEmailByMessageId = buildOperationAccountLookup(emailRecords);
-    const emails = emailRecords.map((e) => ({
-      id: e.id,
-      threadId: e.threadId,
-      from: e.from,
-      to: e.to,
-      subject: e.subject,
-      date: e.date,
-      bodyText: e.bodyText,
-      bodyHtml: e.bodyHtml,
-      labels: JSON.parse(e.labels) as string[],
-      isUnread: e.isUnread,
-      senderDomain: e.senderDomain,
-      snippet: e.snippet,
-    }));
+    const emails = emailRecords.map(recordToGmailMessage);
 
     const result = await runner.run(action, emails, body.accountEmail, accountEmailByMessageId);
     return NextResponse.json(result);

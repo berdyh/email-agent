@@ -7,7 +7,6 @@ const SETTING_KEYS = new Set([
   "agentMode",
   "preferredAgent",
   "gcp",
-  "notifications",
   "prompts",
   "embedding",
   "gmail",
@@ -74,14 +73,10 @@ export interface EmailIdRequest {
 type SettingsUpdate = Partial<
   Omit<
     AppConfig,
-    "gcp" | "notifications" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
+    "gcp" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
   >
 > & {
   gcp?: Partial<AppConfig["gcp"]>;
-  notifications?: {
-    desktop?: Partial<AppConfig["notifications"]["desktop"]>;
-    webhooks?: AppConfig["notifications"]["webhooks"];
-  };
   prompts?: Partial<AppConfig["prompts"]>;
   embedding?: Partial<AppConfig["embedding"]>;
   gmail?: Partial<AppConfig["gmail"]>;
@@ -89,6 +84,13 @@ type SettingsUpdate = Partial<
   accounts?: AppConfig["accounts"];
   oauth?: AppConfig["oauth"];
 };
+
+/**
+ * Settings shape returned to clients: the full runtime config minus secrets.
+ * Shared with web hooks so consumers get a real type instead of
+ * `Record<string, unknown>`.
+ */
+export type SanitizedSettings = Omit<AppConfig, "oauth">;
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -400,7 +402,8 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
       body["preferredAgent"] !== "codex" &&
       body["preferredAgent"] !== "gemini" &&
       body["preferredAgent"] !== "openrouter" &&
-      body["preferredAgent"] !== "claude-sdk"
+      body["preferredAgent"] !== "claude-sdk" &&
+      body["preferredAgent"] !== "direct-api"
     ) {
       throw new RequestValidationError("preferredAgent is invalid");
     }
@@ -424,13 +427,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     const gcp = asRecord(body["gcp"]);
     const update: Partial<AppConfig["gcp"]> = {};
     if ("projectId" in gcp) update.projectId = optionalString(gcp["projectId"], "gcp.projectId") ?? "";
-    if ("pubsubTopic" in gcp) update.pubsubTopic = optionalString(gcp["pubsubTopic"], "gcp.pubsubTopic") ?? "";
-    if ("pubsubSubscription" in gcp) {
-      update.pubsubSubscription = optionalString(gcp["pubsubSubscription"], "gcp.pubsubSubscription") ?? "";
-    }
-    if ("watchExpiration" in gcp) {
-      update.watchExpiration = optionalString(gcp["watchExpiration"], "gcp.watchExpiration");
-    }
     settings.gcp = update;
   }
 
@@ -438,8 +434,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     const prompts = asRecord(body["prompts"]);
     const update: Partial<AppConfig["prompts"]> = {};
     if ("summary" in prompts) update.summary = optionalString(prompts["summary"], "prompts.summary") ?? "";
-    if ("priority" in prompts) update.priority = optionalString(prompts["priority"], "prompts.priority") ?? "";
-    if ("clustering" in prompts) update.clustering = optionalString(prompts["clustering"], "prompts.clustering") ?? "";
     if ("digest" in prompts) update.digest = optionalString(prompts["digest"], "prompts.digest") ?? "";
     settings.prompts = update;
   }
@@ -467,13 +461,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
   if (body["ui"] !== undefined) {
     const ui = asRecord(body["ui"]);
     const update: Partial<AppConfig["ui"]> = {};
-    if ("theme" in ui) {
-      const theme = ui["theme"];
-      if (theme !== "light" && theme !== "dark" && theme !== "system") {
-        throw new RequestValidationError("ui.theme is invalid");
-      }
-      update.theme = theme;
-    }
     if ("fetchScope" in ui) {
       const fetchScope = ui["fetchScope"];
       if (fetchScope !== "unread" && fetchScope !== "all") {
@@ -481,51 +468,10 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
       }
       update.fetchScope = fetchScope;
     }
-    if ("sidebarCollapsed" in ui) {
-      update.sidebarCollapsed = optionalBoolean(ui["sidebarCollapsed"], "ui.sidebarCollapsed") ?? false;
-    }
     if ("fetchInterval" in ui) {
       update.fetchInterval = optionalNumber(ui["fetchInterval"], "ui.fetchInterval") ?? 0;
     }
     settings.ui = update;
-  }
-
-  if (body["notifications"] !== undefined) {
-    const notifications = asRecord(body["notifications"]);
-    const update: NonNullable<SettingsUpdate["notifications"]> = {};
-    if ("desktop" in notifications) {
-      const desktop = asRecord(notifications["desktop"]);
-      update.desktop = {};
-      if ("enabled" in desktop) {
-        update.desktop.enabled = optionalBoolean(desktop["enabled"], "notifications.desktop.enabled") ?? false;
-      }
-      if ("priorityOnly" in desktop) {
-        update.desktop.priorityOnly = optionalBoolean(desktop["priorityOnly"], "notifications.desktop.priorityOnly") ?? false;
-      }
-    }
-    if ("webhooks" in notifications) {
-      const webhooksValue = notifications["webhooks"];
-      if (webhooksValue === null) {
-        update.webhooks = [];
-      } else if (!Array.isArray(webhooksValue)) {
-        throw new RequestValidationError("notifications.webhooks must be an array");
-      } else {
-        update.webhooks = webhooksValue.map((webhook, index) => {
-          const record = asRecord(webhook);
-          const type = record["type"];
-          if (type !== "slack" && type !== "discord" && type !== "generic") {
-            throw new RequestValidationError(`notifications.webhooks[${index}].type is invalid`);
-          }
-          return {
-            name: requiredString(record["name"], `notifications.webhooks[${index}].name`),
-            url: requiredString(record["url"], `notifications.webhooks[${index}].url`),
-            type,
-            enabled: optionalBoolean(record["enabled"], `notifications.webhooks[${index}].enabled`) ?? false,
-          };
-        });
-      }
-    }
-    settings.notifications = update;
   }
 
   if (body["accounts"] !== undefined) {
@@ -561,13 +507,6 @@ export function mergeSettingsUpdate(
     ...current,
     ...update,
     gcp: { ...current.gcp, ...update.gcp },
-    notifications: {
-      desktop: {
-        ...current.notifications.desktop,
-        ...update.notifications?.desktop,
-      },
-      webhooks: update.notifications?.webhooks ?? normalizeWebhooks(current.notifications.webhooks),
-    },
     prompts: { ...current.prompts, ...update.prompts },
     embedding: {
       ...current.embedding,
@@ -576,7 +515,10 @@ export function mergeSettingsUpdate(
     },
     gmail: { ...current.gmail, ...update.gmail },
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
-    accounts: update.accounts ?? current.accounts,
+    // Accounts are owned by the dedicated /api/accounts endpoints; a settings
+    // PUT must never mutate them, or a stale client snapshot resurrects a
+    // removed account. Ignore any accounts key in the update.
+    accounts: current.accounts,
     oauth: update.oauth ?? current.oauth,
   };
 }
@@ -616,7 +558,7 @@ export function mutationGuardResponse(request: Request): Response | undefined {
   return undefined;
 }
 
-export function sanitizeSettingsForResponse(settings: AppConfig): Omit<AppConfig, "oauth"> {
+export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSettings {
   return {
     agentMode: settings.agentMode,
     preferredAgent: settings.preferredAgent,
@@ -626,10 +568,6 @@ export function sanitizeSettingsForResponse(settings: AppConfig): Omit<AppConfig
       dimensions: defaultConfig.embedding.dimensions,
     },
     gmail: settings.gmail,
-    notifications: {
-      desktop: settings.notifications.desktop,
-      webhooks: normalizeWebhooks(settings.notifications.webhooks),
-    },
     prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
     dataDir: settings.dataDir,
@@ -639,17 +577,9 @@ export function sanitizeSettingsForResponse(settings: AppConfig): Omit<AppConfig
 
 function normalizeUiConfig(ui: AppConfig["ui"]): AppConfig["ui"] {
   return {
-    theme: ui.theme,
-    sidebarCollapsed: ui.sidebarCollapsed,
     fetchInterval: ui.fetchInterval,
     fetchScope: ui.fetchScope,
   };
-}
-
-function normalizeWebhooks(
-  webhooks: AppConfig["notifications"]["webhooks"] | null | undefined,
-): AppConfig["notifications"]["webhooks"] {
-  return Array.isArray(webhooks) ? webhooks : [];
 }
 
 export function internalErrorResponse(

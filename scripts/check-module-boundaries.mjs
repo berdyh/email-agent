@@ -11,7 +11,6 @@ const requiredCards = [
   "packages/core/src/config/MODULE.md",
   "packages/core/src/db/MODULE.md",
   "packages/core/src/gmail/MODULE.md",
-  "packages/core/src/notifications/MODULE.md",
   "packages/core/src/shared/MODULE.md",
   "packages/web/src/app/MODULE.md",
   "packages/web/src/components/actions/MODULE.md",

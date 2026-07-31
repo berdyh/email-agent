@@ -17,6 +17,35 @@ import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
 
+/**
+ * Derives the accountId to persist on an action result row.
+ *
+ * When an explicit account scoped the run, that account is authoritative and
+ * is used directly by the caller. This helper covers the "all accounts" run
+ * (no explicit accountEmail): it inspects the per-message account lookup for
+ * the processed emails and returns the single distinct account id if the whole
+ * batch resolves to exactly one account. If several accounts are involved, any
+ * message is ambiguous (null), any id is missing from the lookup, or there is
+ * no lookup at all, it returns "" — the legacy/unscoped-OR-mixed sentinel.
+ */
+export function deriveResultAccountId(
+  emailIds: string[],
+  accountEmailByMessageId?: OperationAccountLookup,
+): string {
+  if (!accountEmailByMessageId) return "";
+
+  const accountIds = new Set<string>();
+  for (const emailId of emailIds) {
+    const accountId = accountEmailByMessageId.get(emailId);
+    // undefined = not in lookup, null = message exists in multiple accounts.
+    if (accountId === undefined || accountId === null) return "";
+    accountIds.add(accountId);
+  }
+
+  const [only] = accountIds;
+  return accountIds.size === 1 && only !== undefined ? only : "";
+}
+
 function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
   const emailSummaries = emails.map((e) => ({
     id: e.id,
@@ -27,7 +56,7 @@ function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
     body: e.bodyText.slice(0, 2000),
   }));
 
-  return [
+  const parts = [
     action.prompt,
     "",
     "Emails to analyze:",
@@ -36,7 +65,13 @@ function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
     "```",
     "",
     'Respond with a JSON array of objects, each with an "emailId" field matching the email ID plus your analysis fields.',
-  ].join("\n");
+  ];
+
+  if (action.outputSchema) {
+    parts.push("", `Expected output shape per email: ${action.outputSchema}`);
+  }
+
+  return parts.join("\n");
 }
 
 export class ActionRunner {
@@ -79,18 +114,37 @@ export class ActionRunner {
         }
       }
 
-      // Persist to DB
-      await saveActionResult({
-        id: randomUUID(),
-        actionId: action.id,
-        status: "success",
-        emailIds: JSON.stringify(emailIds),
-        resultData: JSON.stringify(output),
-        agentUsed: agentResult.agentUsed,
-        tokensUsed: agentResult.tokensUsed,
-        durationMs: agentResult.durationMs,
-        createdAt: new Date().toISOString(),
-      });
+      // Persist to DB in its own try/catch: the Gmail mutations in applyResult
+      // are already real, so a persistence failure must not be reported to the
+      // caller as a failed run.
+      try {
+        // An explicit accountEmail is authoritative. Otherwise (an "all
+        // accounts" run) derive the account from the per-message lookup so a
+        // single-account batch is still attributed correctly, rather than
+        // collapsing to the unscoped "" sentinel.
+        const resultAccountId =
+          accountEmail ??
+          deriveResultAccountId(emailIds, accountEmailByMessageId);
+
+        await saveActionResult({
+          id: randomUUID(),
+          actionId: action.id,
+          accountId: resultAccountId,
+          status: "success",
+          emailIds: JSON.stringify(emailIds),
+          resultData: JSON.stringify(output),
+          agentUsed: agentResult.agentUsed,
+          tokensUsed: agentResult.tokensUsed,
+          durationMs: agentResult.durationMs,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (persistErr) {
+        const message =
+          persistErr instanceof Error ? persistErr.message : String(persistErr);
+        console.error(
+          `Failed to persist action result for "${action.id}": ${message}`,
+        );
+      }
 
       return result;
     } catch (err) {

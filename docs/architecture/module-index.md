@@ -11,8 +11,7 @@ This index is the first context layer for agents. Load this file, then the local
 | Core analysis | Summaries, digests, clusters, and citation extraction | `packages/core/src/analysis/MODULE.md` |
 | Core config | Runtime settings, defaults, paths, account config, and prompt templates | `packages/core/src/config/MODULE.md` |
 | Core DB | LanceDB schema, tables, query helpers, and embeddings | `packages/core/src/db/MODULE.md` |
-| Core Gmail | Gmail auth/accounts, fetch, sync, write operations, and Pub/Sub | `packages/core/src/gmail/MODULE.md` |
-| Core notifications | Desktop and webhook notification dispatch | `packages/core/src/notifications/MODULE.md` |
+| Core Gmail | Gmail auth/accounts, fetch, sync, and write operations | `packages/core/src/gmail/MODULE.md` |
 | Core shared | Cross-module constants and pure helpers | `packages/core/src/shared/MODULE.md` |
 | Web app/API | Next pages and route adapters | `packages/web/src/app/MODULE.md` |
 | Web API module | Request validation and API-local contracts | `packages/web/src/modules/api/MODULE.md` |

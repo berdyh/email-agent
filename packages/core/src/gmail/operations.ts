@@ -63,22 +63,3 @@ export async function removeLabels(
     requestBody: { removeLabelIds: labelIds },
   });
 }
-
-export async function batchModify(
-  params: {
-    messageIds: string[];
-    addLabelIds?: string[];
-    removeLabelIds?: string[];
-  },
-  accountEmail?: string,
-): Promise<void> {
-  const gmail = await createGmailClient(accountEmail);
-  await gmail.users.messages.batchModify({
-    userId: "me",
-    requestBody: {
-      ids: params.messageIds,
-      addLabelIds: params.addLabelIds,
-      removeLabelIds: params.removeLabelIds,
-    },
-  });
-}

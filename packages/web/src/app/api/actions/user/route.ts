@@ -13,6 +13,7 @@ import {
   parseUserActionSaveRequest,
   validationResponse,
 } from "@/modules/api/validation";
+import { extractActionId } from "@/lib/action-id";
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,12 +47,12 @@ export async function POST(request: NextRequest) {
     const body = parseUserActionSaveRequest(await request.json());
 
     // Check for ID conflict with built-in actions
-    const idMatch = body.content.match(/id:\s*["'`]([^"'`]+)["'`]/);
-    if (idMatch?.[1]) {
-      const conflicting = builtInActions.find((a) => a.id === idMatch[1]);
+    const actionId = extractActionId(body.content);
+    if (actionId) {
+      const conflicting = builtInActions.find((a) => a.id === actionId);
       if (conflicting) {
         return NextResponse.json(
-          { error: `Action ID "${idMatch[1]}" conflicts with built-in action "${conflicting.name}"` },
+          { error: `Action ID "${actionId}" conflicts with built-in action "${conflicting.name}"` },
           { status: 409 },
         );
       }

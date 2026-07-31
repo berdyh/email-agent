@@ -1,7 +1,7 @@
 # Module Card: Web Hooks
 
 - purpose: Own client data-fetching and mutation hooks.
-- product/module functionality: Wrap API calls for emails, accounts, actions, settings, threads, and fetch operations.
+- product/module functionality: Wrap API calls for emails, accounts, actions, settings, and fetch operations.
 - scope boundaries: Hooks call web API routes, not core runtime directly.
 - connected modules/submodules: Web feature components, API routes, Zustand stores.
 - allowed change types: Query keys, fetch wrappers, mutation invalidation, typed API return handling.

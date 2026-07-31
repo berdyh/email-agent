@@ -104,7 +104,16 @@ export class ClaudeExecutor implements AgentExecutor {
       ? `${request.systemPrompt}\n\n---\n\n${request.prompt}`
       : request.prompt;
 
-    const args = ["-p", fullPrompt, "--output-format", "stream-json"];
+    // stream-json requires --verbose; --include-partial-messages makes the CLI
+    // emit incremental content_block_delta events so text streams token-by-token.
+    const args = [
+      "-p",
+      fullPrompt,
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--verbose",
+    ];
 
     const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
     let buffer = "";
@@ -114,11 +123,26 @@ export class ClaudeExecutor implements AgentExecutor {
     let resolve: (() => void) | null = null;
     let done = false;
     let exitCode: number | null = null;
+    let aborted = false;
+    // Track whether any incremental text was emitted so the terminal `assistant`
+    // and `result` events don't re-emit the full message and duplicate output.
+    let emittedText = false;
 
     // Kill the process if it runs longer than 180s
     const timeout = setTimeout(() => {
       child.kill();
     }, 180_000);
+
+    // Kill child immediately if the request is aborted (client disconnect) so an
+    // abandoned chat doesn't keep the subprocess alive until the timeout fires.
+    const onAbort = () => {
+      aborted = true;
+      clearTimeout(timeout);
+      child.kill();
+      done = true;
+      resolve?.();
+    };
+    request.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stderr.on("data", (data: Buffer) => {
       stderrBuf += data.toString();
@@ -133,17 +157,48 @@ export class ClaudeExecutor implements AgentExecutor {
         if (!trimmed) continue;
         try {
           const event = JSON.parse(trimmed) as Record<string, unknown>;
-          if (event["type"] === "content_block_delta") {
+          const type = event["type"];
+          if (type === "stream_event") {
+            // --include-partial-messages wraps deltas in a stream_event envelope.
+            const inner = event["event"] as
+              | { type?: string; delta?: { type?: string; text?: string } }
+              | undefined;
+            if (
+              inner?.type === "content_block_delta" &&
+              inner.delta?.type === "text_delta" &&
+              inner.delta.text
+            ) {
+              emittedText = true;
+              chunks.push({ text: inner.delta.text, done: false });
+            }
+          } else if (type === "content_block_delta") {
             const delta = event["delta"] as
               | { type?: string; text?: string }
               | undefined;
             if (delta?.type === "text_delta" && delta.text) {
+              emittedText = true;
               chunks.push({ text: delta.text, done: false });
             }
-          } else if (event["type"] === "assistant" && typeof event["content"] === "string") {
-            chunks.push({ text: event["content"] as string, done: false });
-          } else if (event["type"] === "result" && typeof event["result"] === "string") {
-            chunks.push({ text: event["result"] as string, done: true });
+          } else if (type === "assistant") {
+            // The CLI puts text blocks in an array under message.content.
+            const message = event["message"] as
+              | { content?: Array<{ type?: string; text?: string }> }
+              | undefined;
+            if (!emittedText && Array.isArray(message?.content)) {
+              for (const block of message!.content) {
+                if (block?.type === "text" && block.text) {
+                  emittedText = true;
+                  chunks.push({ text: block.text, done: false });
+                }
+              }
+            }
+          } else if (type === "result" && typeof event["result"] === "string") {
+            // If deltas already streamed, only signal completion — don't repeat
+            // the full text.
+            chunks.push({
+              text: emittedText ? "" : (event["result"] as string),
+              done: true,
+            });
           }
         } catch {
           chunks.push({ text: trimmed, done: false });
@@ -154,6 +209,7 @@ export class ClaudeExecutor implements AgentExecutor {
 
     child.on("close", (code) => {
       clearTimeout(timeout);
+      request.signal?.removeEventListener("abort", onAbort);
       exitCode = code;
       done = true;
       resolve?.();
@@ -161,6 +217,7 @@ export class ClaudeExecutor implements AgentExecutor {
 
     child.on("error", (err) => {
       clearTimeout(timeout);
+      request.signal?.removeEventListener("abort", onAbort);
       stderrBuf += err.message;
       done = true;
       resolve?.();
@@ -179,11 +236,20 @@ export class ClaudeExecutor implements AgentExecutor {
         }
       }
     } finally {
+      request.signal?.removeEventListener("abort", onAbort);
       // Kill child process if consumer abandons the generator (e.g. client disconnect)
       if (!done) {
         clearTimeout(timeout);
         child.kill();
       }
+    }
+
+    // Surface aborts as an AbortError so the router can distinguish a cancelled
+    // stream from a genuine failure and avoid a duplicate execute() fallback.
+    if (aborted || request.signal?.aborted) {
+      const err = new Error("Request aborted");
+      err.name = "AbortError";
+      throw err;
     }
 
     if (exitCode !== 0 && chunks.length === 0) {
