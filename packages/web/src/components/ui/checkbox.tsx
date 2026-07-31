@@ -21,7 +21,11 @@ export function Checkbox({
       aria-checked={checked}
       aria-label={ariaLabel}
       className={cn(
-        "flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        // The 16px box stays visually small, but `before:` widens the hit area
+        // to ~40px so a near-miss tap doesn't land on the row behind it.
+        "relative flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary transition-colors",
+        "before:absolute before:-inset-3 before:content-['']",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         checked ? "bg-primary text-primary-foreground" : "bg-background",
         className,
       )}
