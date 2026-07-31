@@ -30,12 +30,16 @@ npx email-agent accounts remove <email>  # Remove account
 npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
+npx email-agent approvals          # List Gmail changes queued for approval
+npx email-agent approvals review   # Approve/reject each queued change interactively (--batch <id>)
+npx email-agent approvals apply    # Approve and apply queued changes in bulk (--batch <id>)
+npx email-agent approvals reject   # Reject queued changes without applying (--batch <id>)
 npx email-agent setup              # Authenticate + configure project + init DB (--project <id>)
 npx email-agent serve              # Start web UI (--port <port>, default 3847)
 npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope, --limit)
 npx email-agent cron status        # Show current crontab entry
 npx email-agent cron remove        # Remove crontab entry
-npx email-agent config get <key>   # Read config value (dotted path, e.g. gmail.syncActions)
+npx email-agent config get <key>   # Read config value (dotted path, e.g. ui.fetchScope)
 npx email-agent config set <key> <value>  # Set config value
 ```
 
@@ -55,6 +59,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - **Multi-account Gmail**: OAuth2 per-account auth in `gmail/account-manager.ts`, tokens at `~/.email-agent/accounts/{email}/token.json`, OAuth creds at `~/.email-agent/oauth.json`. `client.ts` routing: explicit account → default account → gcloud ADC fallback. `accountEmail?: string` threaded through all Gmail operations. Account removal/default-change calls `resetGmailClient()` to invalidate cached clients.
 - **Agent system**: Strategy pattern executors (Claude SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
+- **Approval gate**: Action runs NEVER mutate Gmail directly. `ActionRunner` maps results to Gmail operations and enqueues them in the LanceDB `pending_operations` table (`actions/approval.ts`, batchId = action_results row id). Mutations only happen via `applyPendingOperationsByIds()` after explicit user approval: web `ApprovalPanel` on `/actions` (per-email checkboxes + review dialog, `/api/approvals*` routes) or CLI (`run-action` prompt, `approvals` command). Rejected/applied rows are kept as an audit trail. Manual per-email actions the user clicks in the mail UI stay immediate — the click is the approval.
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
   - `CREATE_ACTION_SKILLS.md` (CREATE skill) — system prompt teaching the AI to generate new `.action.ts` files from scratch (template, interface, examples)
   - `EDIT_ACTION_SKILLS.md` (EDIT skill) — system prompt for modifying existing actions; current action code is appended to the prompt
@@ -77,6 +82,9 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - `packages/core/src/gmail/sync.ts` — Shared fetch→embed→store pipeline (used by CLI + web)
 - `packages/core/src/gmail/operations.ts` — Gmail write operations (trash, spam, labels, read/unread)
 - `packages/core/src/actions/apply.ts` — Maps action results → Gmail operations, applies them
+- `packages/core/src/actions/approval.ts` — Approval queue: enqueue, apply/reject by queue row id
+- `packages/core/src/db/pending-operations.ts` — LanceDB helpers for the `pending_operations` table
+- `packages/web/src/components/actions/approval-panel.tsx` — Approval UI (checkboxes, review dialog)
 - `packages/web/src/app/api/` — All Next.js API routes
 - `packages/core/src/actions/built-in/` — Built-in actions
 - `~/.email-agent/actions/` — User-created actions (auto-discovered)

@@ -25,7 +25,8 @@ This index is the first context layer for agents. Load this file, then the local
 ## Cross-Module Flows
 
 - Gmail sync: web/CLI fetch adapters -> `core/gmail/sync` -> Gmail fetcher -> embedding generation -> DB email records keyed by `accountId` + Gmail `id`.
-- Action execution: web/CLI action adapters -> `core/actions` registry/runner -> `core/agents` -> optional Gmail write operations -> DB action results.
+- Action execution: web/CLI action adapters -> `core/actions` registry/runner -> `core/agents` -> proposed Gmail write operations queued in DB `pending_operations` -> DB action results.
+- Approval gate: web `/api/approvals*` panel or CLI `approvals`/run-action prompt -> `core/actions/approval` apply/reject by queue row id -> `core/gmail/operations` writes. Gmail is never mutated by an action run without the user's explicit approval.
 - Action generation: web action chat -> `/api/actions/generate` -> skill docs -> `core/agents`.
 - Analysis: web analysis routes -> `core/analysis` -> `core/agents` or `core/db`.
 - Settings: web settings route and CLI config command -> `core/config`.
