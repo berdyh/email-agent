@@ -8,29 +8,13 @@ import {
   getPendingOperations,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
+  describeGmailOperation,
+  parseLabelIds,
 } from "@email-agent/core";
 import type { PendingOperationRecord } from "@email-agent/core";
 
 export function describeOperation(op: PendingOperationRecord): string {
-  const labels = JSON.parse(op.labelIds) as string[];
-  switch (op.type) {
-    case "trash":
-      return "Move to Trash";
-    case "spam":
-      return "Mark as Spam";
-    case "markRead":
-      return "Mark as Read";
-    case "markUnread":
-      return "Mark as Unread";
-    case "removeLabels":
-      return labels.length === 1 && labels[0] === "INBOX"
-        ? "Archive"
-        : `Remove labels: ${labels.join(", ")}`;
-    case "addLabels":
-      return `Add labels: ${labels.join(", ")}`;
-    default:
-      return op.type;
-  }
+  return describeGmailOperation(op.type, parseLabelIds(op.labelIds));
 }
 
 interface OperationDisplay {
@@ -236,5 +220,20 @@ async function loadPendingBatch(
   if (!batchPrefix) return loadPending();
   // Allow the short batch prefix shown by `approvals list`.
   const all = await loadPending();
-  return all.filter((op) => op.batchId.startsWith(batchPrefix));
+  const matched = all.filter((op) => op.batchId.startsWith(batchPrefix));
+
+  // An ambiguous prefix on a bulk apply/reject would silently act on more
+  // batches than the user named, so refuse rather than guess.
+  const batchIds = new Set(matched.map((op) => op.batchId));
+  if (batchIds.size > 1) {
+    console.error(
+      chalk.red(
+        `Batch prefix "${batchPrefix}" matches ${batchIds.size} batches:`,
+      ),
+    );
+    for (const id of batchIds) console.error(chalk.dim(`  ${id}`));
+    console.error(chalk.yellow("Re-run with a longer prefix."));
+    process.exit(1);
+  }
+  return matched;
 }
