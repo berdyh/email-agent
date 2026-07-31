@@ -36,6 +36,31 @@ export interface ActionResultRecord {
   createdAt: string;
 }
 
+export type PendingOperationStatus =
+  | "pending"
+  | "applied"
+  | "rejected"
+  | "failed";
+
+export interface PendingOperationRecord {
+  [key: string]: unknown;
+  id: string;
+  /** Groups all operations produced by one action run (the action_results row id). */
+  batchId: string;
+  actionId: string;
+  /** Denormalized for display — the action may be deleted before the batch is reviewed. */
+  actionName: string;
+  // "" is the unscoped sentinel, mirroring action_results.accountId.
+  accountId: string;
+  emailId: string;
+  type: string; // GmailOperationType
+  labelIds: string; // JSON array of label ids ("[]" when not applicable)
+  status: string; // PendingOperationStatus
+  error: string; // failure message when status === "failed", else ""
+  createdAt: string;
+  resolvedAt: string; // "" while pending
+}
+
 export interface ClusterRecord {
   [key: string]: unknown;
   id: string;
@@ -50,3 +75,4 @@ export interface ClusterRecord {
 export const emailsTable = "emails";
 export const actionResultsTable = "action_results";
 export const clustersTable = "clusters";
+export const pendingOperationsTable = "pending_operations";

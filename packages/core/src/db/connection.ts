@@ -67,6 +67,21 @@ const actionResultSchema = new Schema([
   new Field("createdAt", new Utf8()),
 ]);
 
+const pendingOperationSchema = new Schema([
+  new Field("id", new Utf8()),
+  new Field("batchId", new Utf8()),
+  new Field("actionId", new Utf8()),
+  new Field("actionName", new Utf8()),
+  new Field("accountId", new Utf8()),
+  new Field("emailId", new Utf8()),
+  new Field("type", new Utf8()),
+  new Field("labelIds", new Utf8()),
+  new Field("status", new Utf8()),
+  new Field("error", new Utf8()),
+  new Field("createdAt", new Utf8()),
+  new Field("resolvedAt", new Utf8()),
+]);
+
 const clusterSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("name", new Utf8()),
@@ -147,5 +162,9 @@ async function runInit(): Promise<void> {
 
   if (!tableNames.includes("clusters")) {
     await conn.createEmptyTable("clusters", clusterSchema);
+  }
+
+  if (!tableNames.includes("pending_operations")) {
+    await conn.createEmptyTable("pending_operations", pendingOperationSchema);
   }
 }
