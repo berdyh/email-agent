@@ -53,7 +53,7 @@ export function registerConfig(program: Command) {
 
   config
     .command("get <key>")
-    .description("Read a config value (e.g. gmail.syncActions)")
+    .description("Read a config value (e.g. ui.fetchScope)")
     .action(async (key: string) => {
       const settings = await loadSettings();
       const value = getNestedValue(settings as unknown as Record<string, unknown>, key);
@@ -66,7 +66,7 @@ export function registerConfig(program: Command) {
 
   config
     .command("set <key> <value>")
-    .description("Set a config value (e.g. gmail.syncActions true)")
+    .description("Set a config value (e.g. ui.fetchScope all)")
     .action(async (key: string, rawValue: string) => {
       const settings = await loadSettings();
       const obj = settings as unknown as Record<string, unknown>;

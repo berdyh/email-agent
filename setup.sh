@@ -170,23 +170,6 @@ esac
 # not to .env, which is only loaded for API keys / embedding provider.
 ok "Agent mode: ${AGENT_MODE}"
 
-# ── Gmail sync ──
-echo ""
-echo -e "  ${BOLD}Gmail sync:${RESET}"
-echo -e "  ${DIM}When enabled, action recommendations (trash, spam, etc.) are auto-applied to Gmail.${RESET}"
-echo -e "  ${DIM}When disabled, you'll be prompted before each change.${RESET}"
-echo ""
-read -rp "  Enable auto-sync of action results? [y/N] " sync_choice
-sync_choice=${sync_choice:-N}
-
-if [[ "$sync_choice" =~ ^[Yy]$ ]]; then
-  GMAIL_SYNC_ACTIONS="true"
-  ok "Gmail sync: enabled (auto-apply)"
-else
-  GMAIL_SYNC_ACTIONS="false"
-  ok "Gmail sync: disabled (prompt before applying)"
-fi
-
 # ── API keys for direct-api / hybrid ──
 if [ "$AGENT_MODE" = "direct-api" ] || [ "$AGENT_MODE" = "hybrid" ]; then
   echo ""
@@ -319,9 +302,6 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "provider": "${EMBEDDING_PROVIDER}",
     "model": "${EMBEDDING_MODEL:-text-embedding-3-small}",
     "dimensions": 768
-  },
-  "gmail": {
-    "syncActions": ${GMAIL_SYNC_ACTIONS:-false}
   },
   "prompts": {
     "summary": "Summarize the following email concisely. Return a JSON object with:\n- overview: 1-2 sentence summary\n- sections: array of { text, citation: { startOffset, endOffset, previewText } }\n- keyActions: array of action items mentioned",

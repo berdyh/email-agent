@@ -48,7 +48,6 @@ describe("config settings normalization", () => {
       gcp: { projectId: "my-project" },
       prompts: { summary: "custom summary", digest: "custom digest" },
       embedding: { provider: "openrouter", model: "qwen", dimensions: 768 },
-      gmail: { syncActions: true },
       ui: { fetchInterval: 15, fetchScope: "all" },
       dataDir: "/tmp/data",
       accounts: [{ email: "me@example.com", isDefault: true }],
@@ -59,7 +58,6 @@ describe("config settings normalization", () => {
     assert.equal(normalized.preferredAgent, "codex");
     assert.equal(normalized.gcp.projectId, "my-project");
     assert.equal(normalized.prompts.summary, "custom summary");
-    assert.equal(normalized.gmail.syncActions, true);
     assert.equal(normalized.ui.fetchInterval, 15);
     assert.equal(normalized.dataDir, "/tmp/data");
     assert.equal(normalized.accounts[0]?.email, "me@example.com");

@@ -32,7 +32,6 @@ export function normalizeSettings(
   const gcp = asRecord(input["gcp"]);
   const prompts = asRecord(input["prompts"]);
   const embedding = asRecord(input["embedding"]);
-  const gmail = asRecord(input["gmail"]);
   const ui = asRecord(input["ui"]);
 
   const normalized: AppConfig = {
@@ -59,12 +58,6 @@ export function normalizeSettings(
         "dimensions" in embedding
           ? (embedding["dimensions"] as number)
           : defaults.embedding.dimensions,
-    },
-    gmail: {
-      syncActions:
-        "syncActions" in gmail
-          ? (gmail["syncActions"] as boolean)
-          : defaults.gmail.syncActions,
     },
     ui: {
       fetchInterval:

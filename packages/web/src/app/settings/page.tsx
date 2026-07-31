@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -135,7 +134,6 @@ export default function SettingsPage() {
   const agentMode = local.agentMode ?? "all-agents";
   const preferredAgent = local.preferredAgent ?? "claude";
   const prompts = (local.prompts ?? {}) as Partial<Record<"summary" | "digest", string>>;
-  const gmail = local.gmail ?? { syncActions: false };
 
   return (
     <div className="flex h-screen flex-col">
@@ -165,7 +163,6 @@ export default function SettingsPage() {
               <TabsTrigger value="accounts">Accounts</TabsTrigger>
               <TabsTrigger value="agents">Agents</TabsTrigger>
               <TabsTrigger value="prompts">Prompts</TabsTrigger>
-              <TabsTrigger value="gmail">Gmail</TabsTrigger>
             </TabsList>
 
             <TabsContent value="accounts" className="space-y-4">
@@ -305,35 +302,6 @@ export default function SettingsPage() {
               ))}
             </TabsContent>
 
-            <TabsContent value="gmail" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Gmail Sync</CardTitle>
-                  <CardDescription>
-                    Control how action results are applied to Gmail
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="text-sm font-medium">Auto-apply actions</label>
-                      <p className="text-xs text-muted-foreground">
-                        Automatically apply action recommendations (trash, spam, labels) to Gmail without confirmation
-                      </p>
-                    </div>
-                    <Switch
-                      checked={gmail.syncActions ?? false}
-                      onCheckedChange={(v) =>
-                        editLocal({
-                          ...local,
-                          gmail: { ...gmail, syncActions: v },
-                        })
-                      }
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
           </Tabs>
         </main>
       </div>

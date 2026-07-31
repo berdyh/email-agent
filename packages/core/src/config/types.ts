@@ -23,10 +23,6 @@ export interface EmbeddingConfig {
   dimensions: number;
 }
 
-export interface GmailSyncConfig {
-  syncActions: boolean;
-}
-
 export interface UiConfig {
   fetchInterval: number;
   fetchScope: "unread" | "all";
@@ -49,7 +45,6 @@ export interface AppConfig {
   gcp: GcpConfig;
   prompts: PromptsConfig;
   embedding: EmbeddingConfig;
-  gmail: GmailSyncConfig;
   ui: UiConfig;
   dataDir: string;
   accounts: AccountConfig[];
