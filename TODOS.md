@@ -4,18 +4,66 @@ Deferred work, grouped by component then priority (P0 highest). Completed items
 move to the bottom section with the branch and date that shipped them (this repo
 does not version its packages independently).
 
+## Approval gate — enforcement boundaries
+
+These are the gate's known limits. It stops the AI action pipeline from
+mutating Gmail without approval; it is not a sandbox against local code.
+
+### User actions can bypass the gate entirely
+**Priority:** P1
+`applyOperations` is still exported from the core barrel, and
+`trashMessage`/`markAsSpam` from `gmail/index.ts`. User actions are arbitrary
+`.action.ts` modules dynamically imported from `~/.email-agent/actions/` — and
+they are written by the AI via `POST /api/actions/generate`. A generated action
+that imports `applyOperations` directly mutates Gmail with no queue row, no
+approval, and no audit trail. The gate currently rests on `ActionRunner` being
+the only caller, which does not bind plugin code. Options: drop the export from
+the public barrel, rename it so a bypass is visible at the call site, or lint
+generated action source for direct Gmail imports.
+Found by: adversarial review during /ship.
+
+### The consent flag records consent, it does not prove the warnings were seen
+**Priority:** P3
+`normalizeSettings` checks only that `autoApplyAcknowledged` is `true`, never
+where it came from. `config set` refuses both keys and the web UI shows the
+cautions before recording it, but hand-editing `~/.email-agent/settings.json`
+to set both booleans arms unattended mutation with no warning displayed. That
+is arguably fine (the local user owns the file), but it should be stated as the
+threat model rather than implied away. Docs now say "consent recorded", not
+"UI only". Separately, `setNestedValue` should reject `__proto__`/`constructor`
+/`prototype` path segments as hygiene — the prototype-pollution route was
+probed and does not currently work, because `saveSettings` always writes both
+keys as own properties.
+
+### The mutation guard trusts the Host header
+**Priority:** P2
+`mutationGuardResponse` derives "is local" from `new URL(request.url).hostname`,
+and `Origin`/`Sec-Fetch-Site` are simply absent on non-browser clients. Any
+process that can reach port 3847 with `Host: localhost` can bulk-approve the
+whole queue. `GET /api/approvals` has no guard at all and returns subjects,
+senders, and snippets. Pre-existing, but this change points it at the endpoint
+that represents the user's personal consent.
+
 ## Core actions / approval queue
 
-### Resolve queue rows as each Gmail mutation lands
-**Priority:** P1
-`applyPendingOperationsByIds` applies the whole batch (`applyOperations`) before
-persisting any row status. A crash or LanceDB failure in that window leaves rows
-whose Gmail side effect already happened still marked `pending`, so the next
-approval pass re-applies them — re-trashing mail the user may have restored by
-hand. Needs per-row (or chunked) resolution, or an `in_progress` marker written
-before the Gmail call so a resumed batch can tell "never attempted" from
-"attempted, outcome unknown".
-Found by: data-migration specialist during /ship pre-landing review.
+### Recover rows stranded in `applying`
+**Priority:** P2
+The claim/lease means a crash mid-batch now leaves rows in `applying` rather
+than `pending`, so a later pass will NOT silently re-apply them (only `pending`
+rows can be claimed) — the dangerous half of this is fixed. What remains is
+that such rows are stranded: nothing surfaces them, nothing retries them, and
+`getPendingOperations({status:"pending"})` hides them from every UI. Needs a
+recovery path — surface stale `applying` rows past some age, and let the user
+decide whether the Gmail mutation actually landed.
+Found by: data-migration specialist and adversarial review during /ship.
+
+### Resolve rows per operation rather than per batch
+**Priority:** P3
+Status is still written once for the whole batch after every Gmail call
+completes, so the window above exists at all. Per-row (or chunked) resolution
+would shrink it to a single operation, at the cost of one LanceDB update per
+row — LanceDB updates rewrite the table, so this is a real tradeoff at batch
+sizes above a few dozen.
 
 ### Write the action_results row before enqueueing its operations
 **Priority:** P2
