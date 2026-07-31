@@ -43,7 +43,8 @@
     <h2>Primary Flows</h2>
     <ul>
       <li>Fetch: CLI/web -> Gmail sync -> embeddings -> LanceDB.</li>
-      <li>Run action: CLI/web -> actions runner -> agent router -> optional Gmail writes -> action results table.</li>
+      <li>Run action: CLI/web -> actions runner -> agent router -> proposed Gmail writes queued in pending_operations -> action results table.</li>
+      <li>Approval gate: web approvals panel or CLI approvals command -> apply/reject by queue row id -> Gmail write operations.</li>
       <li>Generate action: web chat -> skill docs -> agent router -> user action source persisted under <code>~/.email-agent/actions</code>.</li>
       <li>Analyze: web route -> analysis module -> agent router or DB clusters.</li>
     </ul>
