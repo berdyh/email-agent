@@ -115,27 +115,48 @@ export class ActionRunner {
       // warnings in Settings; otherwise they wait for an explicit approval in
       // the web panel or CLI. The batch id ties queue rows to the action result.
       if (pendingOps.length > 0) {
-        result.pendingOperations = pendingOps;
-        result.batchId = resultId;
+        let queuedIds: string[] = [];
         try {
-          const queuedIds = await enqueueOperations({
+          queuedIds = await enqueueOperations({
             batchId: resultId,
             actionId: action.id,
             actionName: action.name,
             operations: pendingOps,
           });
-
-          const settings = await loadSettings();
-          if (settings.gmail.autoApplyActions) {
-            result.autoApplied = true;
-            result.applyResult = await applyPendingOperationsByIds(queuedIds);
-          }
+          // Only claim the batch is awaiting approval once it is actually
+          // persisted. Reporting pendingOperations for a batch that failed to
+          // queue tells the UI to show "N changes await your approval" for
+          // changes no approval surface can ever find.
+          result.pendingOperations = pendingOps;
+          result.batchId = resultId;
         } catch (queueErr) {
           const message =
             queueErr instanceof Error ? queueErr.message : String(queueErr);
           console.error(
             `Failed to queue pending operations for "${action.id}": ${message}`,
           );
+          result.queueError = message;
+        }
+
+        if (queuedIds.length > 0) {
+          try {
+            const settings = await loadSettings();
+            if (settings.gmail.autoApplyActions) {
+              result.applyResult =
+                await applyPendingOperationsByIds(queuedIds);
+              // Set only after the apply resolves, so `autoApplied` never
+              // claims a batch was applied when the attempt threw.
+              result.autoApplied = true;
+            }
+          } catch (applyErr) {
+            const message =
+              applyErr instanceof Error ? applyErr.message : String(applyErr);
+            console.error(
+              `Failed to auto-apply operations for "${action.id}": ${message}`,
+            );
+            // The rows stay queued, so the user can still approve them by hand.
+            result.queueError = message;
+          }
         }
       }
 

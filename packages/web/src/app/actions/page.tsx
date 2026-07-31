@@ -46,7 +46,11 @@ export default function ActionsPage() {
     try {
       const result = await runAction.mutateAsync({ actionId: action.id, accountEmail });
       if (result.status === "success") {
-        if (result.applyResult) {
+        if (result.queueError) {
+          toast.error(
+            `"${action.name}" ran, but its Gmail changes could not be queued for approval — nothing was applied.`,
+          );
+        } else if (result.applyResult) {
           const { applied, failed } = result.applyResult;
           toast.warning(
             `"${action.name}" auto-applied ${applied} Gmail changes` +
@@ -110,9 +114,9 @@ export default function ActionsPage() {
           {/* The approval gate is off — say so plainly, every time. */}
           {autoApply && (
             <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/5 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive-text" />
               <p className="text-sm">
-                <span className="font-medium text-destructive">
+                <span className="font-medium text-destructive-text">
                   Auto-apply is on.
                 </span>{" "}
                 Running an action changes your Gmail immediately — mail can be

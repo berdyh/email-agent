@@ -63,6 +63,12 @@ export interface ActionRunResult {
   batchId?: string;
   /** True when the user's opt-in auto-apply setting applied the batch immediately. */
   autoApplied?: boolean;
+  /**
+   * Set when the proposed operations could not be queued (or auto-applied).
+   * The run itself succeeded, but the Gmail changes did not reach the approval
+   * queue, so callers must not report them as awaiting approval.
+   */
+  queueError?: string;
   /** Present only for an auto-applied batch; approvals report their own result. */
   applyResult?: ActionApplyResult;
 }

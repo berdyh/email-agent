@@ -19,6 +19,12 @@ export interface ActionApplyResultData {
   applied: number;
   failed: number;
   errors: Array<{ emailId: string; error: string }>;
+  outcomes: Array<{
+    emailId: string;
+    type: string;
+    ok: boolean;
+    error?: string;
+  }>;
 }
 
 export interface ActionResult {
@@ -31,6 +37,8 @@ export interface ActionResult {
   autoApplied?: boolean;
   /** Set only when the opt-in auto-apply setting applied the batch immediately. */
   applyResult?: ActionApplyResultData;
+  /** Set when the proposed changes never reached the approval queue. */
+  queueError?: string;
 }
 
 export function useActions() {
