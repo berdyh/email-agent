@@ -156,16 +156,24 @@ export async function applyOperations(
         case "markUnread":
           await markAsUnread(op.emailId, operationAccountEmail);
           break;
+        // A label operation with no labels, or an operation type this build
+        // does not know, must NOT count as applied: the queue would retire the
+        // row as a completed Gmail mutation that never happened. Approved
+        // instructions are only ever discarded loudly.
         case "addLabels":
-          if (op.labelIds?.length) {
-            await addLabels(op.emailId, op.labelIds, operationAccountEmail);
+          if (!op.labelIds?.length) {
+            throw new Error("addLabels operation carries no label ids");
           }
+          await addLabels(op.emailId, op.labelIds, operationAccountEmail);
           break;
         case "removeLabels":
-          if (op.labelIds?.length) {
-            await removeLabels(op.emailId, op.labelIds, operationAccountEmail);
+          if (!op.labelIds?.length) {
+            throw new Error("removeLabels operation carries no label ids");
           }
+          await removeLabels(op.emailId, op.labelIds, operationAccountEmail);
           break;
+        default:
+          throw new Error(`Unsupported Gmail operation type "${op.type}"`);
       }
       applied++;
       outcomes.push({ emailId: op.emailId, type: op.type, ok: true });
