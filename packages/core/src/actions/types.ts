@@ -1,5 +1,3 @@
-import type { GmailMessage } from "../gmail/types.js";
-
 export interface EmailAction {
   id: string;
   name: string;
@@ -9,11 +7,6 @@ export interface EmailAction {
   outputSchema?: string;
   /** Whether this is a built-in action */
   builtIn?: boolean;
-}
-
-export interface ActionInput {
-  action: EmailAction;
-  emails: GmailMessage[];
 }
 
 export interface ActionOutput {
@@ -39,6 +32,7 @@ export interface GmailOperation {
   emailId: string;
   type: GmailOperationType;
   labelIds?: string[];
+  accountEmail?: string;
 }
 
 export interface ActionApplyResult {

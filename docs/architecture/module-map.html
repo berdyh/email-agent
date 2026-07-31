@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email Agent Module Map</title>
+  <style>
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: #f7f8fb; color: #20242c; }
+    main { max-width: 1100px; margin: 0 auto; padding: 32px 20px; }
+    h1 { font-size: 32px; margin: 0 0 8px; }
+    h2 { margin-top: 28px; font-size: 18px; }
+    p { color: #566070; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+    .card { background: #fff; border: 1px solid #d9dee8; border-radius: 8px; padding: 14px; }
+    .card strong { display: block; margin-bottom: 6px; }
+    code { background: #eef1f6; padding: 2px 5px; border-radius: 4px; }
+    ul { padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Email Agent Module Map</h1>
+    <p>Human review map for the module/submodule architecture. Agent context starts in <code>module-index.md</code>, then local cards.</p>
+
+    <h2>Core Runtime</h2>
+    <section class="grid">
+      <div class="card"><strong>actions</strong>Action definitions, registry, runner, user action files, and Gmail operation mapping.</div>
+      <div class="card"><strong>agents</strong>Provider executors and fallback routing for Claude, Codex, Gemini, OpenRouter, and direct API.</div>
+      <div class="card"><strong>gmail</strong>Auth, accounts, fetch, sync, and write operations.</div>
+      <div class="card"><strong>db</strong>LanceDB schemas, table helpers, filters, and embeddings.</div>
+      <div class="card"><strong>analysis</strong>Summaries, digests, clusters, and citations.</div>
+      <div class="card"><strong>config/shared</strong>Settings, defaults, paths, prompts, vector constants.</div>
+    </section>
+
+    <h2>Interfaces</h2>
+    <section class="grid">
+      <div class="card"><strong>web app/API</strong>Next App Router pages and thin API adapters over core.</div>
+      <div class="card"><strong>web modules/api</strong>Request validation contracts shared by route handlers.</div>
+      <div class="card"><strong>web UI</strong>Actions, mail, shared chrome, primitives, hooks, and stores.</div>
+      <div class="card"><strong>cli</strong>Commander commands that call the core barrel export only.</div>
+    </section>
+
+    <h2>Primary Flows</h2>
+    <ul>
+      <li>Fetch: CLI/web -> Gmail sync -> embeddings -> LanceDB.</li>
+      <li>Run action: CLI/web -> actions runner -> agent router -> optional Gmail writes -> action results table.</li>
+      <li>Generate action: web chat -> skill docs -> agent router -> user action source persisted under <code>~/.email-agent/actions</code>.</li>
+      <li>Analyze: web route -> analysis module -> agent router or DB clusters.</li>
+    </ul>
+  </main>
+</body>
+</html>

@@ -20,23 +20,13 @@ export interface EmailRecord {
   vector: number[];
 }
 
-export interface ThreadRecord {
-  [key: string]: unknown;
-  id: string;
-  subject: string;
-  messageCount: number;
-  lastMessageDate: string;
-  summary: string;
-  summaryData: string; // JSON string of structured summary
-  priority: string;
-  category: string;
-  vector: number[];
-}
-
 export interface ActionResultRecord {
   [key: string]: unknown;
   id: string;
   actionId: string;
+  // "" is the unscoped sentinel: a legacy/ADC row OR a mixed multi-account run
+  // whose processed emails did not resolve to a single account.
+  accountId: string;
   status: string;
   emailIds: string; // JSON array
   resultData: string; // JSON string
@@ -51,21 +41,12 @@ export interface ClusterRecord {
   id: string;
   name: string;
   description: string;
-  emailIds: string; // JSON array
+  emailIds: string; // JSON array of account-scoped email keys
   method: string;
   centroid: number[];
 }
 
-export interface SettingsRecord {
-  [key: string]: unknown;
-  key: string;
-  value: string;
-  updatedAt: string;
-}
-
 // Table name constants
 export const emailsTable = "emails";
-export const threadsTable = "threads";
 export const actionResultsTable = "action_results";
 export const clustersTable = "clusters";
-export const settingsTable = "settings";

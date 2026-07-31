@@ -1,6 +1,5 @@
 export type {
   EmailAction,
-  ActionInput,
   ActionOutput,
   ActionRunResult,
   GmailOperationType,
@@ -10,7 +9,20 @@ export type {
 export { ActionRegistry } from "./registry.js";
 export { ActionRunner } from "./runner.js";
 export { builtInActions } from "./built-in/index.js";
-export { mapResultToOperations, applyOperations, summarizeOperations } from "./apply.js";
+export {
+  buildOperationAccountLookup,
+  mapResultToOperations,
+  applyOperations,
+  scopeOperationsToAccounts,
+  summarizeOperations,
+} from "./apply.js";
+export { parseActionOutput } from "./output-parser.js";
+export {
+  extractActionIdFromSource,
+  normalizeSnapshotFilename,
+  normalizeUserActionFilename,
+  resolveUserActionFilePath,
+} from "./user-action-paths.js";
 export type { UserActionMeta, SnapshotEntry } from "./user-actions.js";
 export {
   listUserActions,

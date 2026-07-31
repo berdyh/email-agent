@@ -3,6 +3,12 @@ import { join, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ACTIONS_DIR } from "../config/defaults.js";
 import type { EmailAction } from "./types.js";
+import {
+  extractActionIdFromSource,
+  normalizeSnapshotFilename,
+  normalizeUserActionFilename,
+  resolveUserActionFilePath,
+} from "./user-action-paths.js";
 
 export interface UserActionMeta {
   id: string;
@@ -31,14 +37,19 @@ export async function listUserActions(): Promise<UserActionMeta[]> {
   const results: UserActionMeta[] = [];
 
   for (const entry of entries) {
-    if (!entry.endsWith(".action.ts") && !entry.endsWith(".action.js")) continue;
+    let filename: string;
+    try {
+      filename = normalizeUserActionFilename(entry);
+    } catch {
+      continue;
+    }
 
     try {
-      const content = await readFile(join(ACTIONS_DIR, entry), "utf-8");
-      const id = content.match(/id:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? entry.replace(/\.action\.[tj]s$/, "");
+      const content = await readFile(resolveUserActionFilePath(ACTIONS_DIR, filename), "utf-8");
+      const id = extractActionIdFromSource(content) ?? filename.replace(/\.action\.[tj]s$/, "");
       const name = content.match(/name:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? id;
       const description = content.match(/description:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? "";
-      results.push({ id, name, description, filename: entry });
+      results.push({ id, name, description, filename });
     } catch {
       // Skip unreadable files
     }
@@ -51,14 +62,15 @@ export async function listUserActions(): Promise<UserActionMeta[]> {
 export async function saveUserAction(filename: string, content: string): Promise<void> {
   await mkdir(ACTIONS_DIR, { recursive: true });
 
-  const filePath = join(ACTIONS_DIR, filename);
+  const safeFilename = normalizeUserActionFilename(filename);
+  const filePath = resolveUserActionFilePath(ACTIONS_DIR, safeFilename);
 
   // Snapshot existing file before overwrite
   try {
     await readFile(filePath, "utf-8");
     await mkdir(SNAPSHOTS_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const snapshotName = `${filename}.${ts}.ts`;
+    const snapshotName = `${safeFilename}.${ts}.ts`;
     await copyFile(filePath, join(SNAPSHOTS_DIR, snapshotName));
   } catch {
     // No existing file to snapshot
@@ -69,8 +81,7 @@ export async function saveUserAction(filename: string, content: string): Promise
 
 /** Delete a user action file. */
 export async function deleteUserAction(filename: string): Promise<void> {
-  const filePath = join(ACTIONS_DIR, filename);
-  await unlink(filePath);
+  await unlink(resolveUserActionFilePath(ACTIONS_DIR, filename));
 }
 
 // Bypass webpack's static analysis of dynamic import — defers to Node's native
@@ -87,14 +98,19 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
   }
 
   for (const entry of entries) {
-    if (!entry.endsWith(".action.ts") && !entry.endsWith(".action.js")) continue;
+    let filename: string;
+    try {
+      filename = normalizeUserActionFilename(entry);
+    } catch {
+      continue;
+    }
 
     try {
-      const content = await readFile(join(ACTIONS_DIR, entry), "utf-8");
-      const fileId = content.match(/id:\s*["'`]([^"'`]+)["'`]/)?.[1];
+      const content = await readFile(resolveUserActionFilePath(ACTIONS_DIR, filename), "utf-8");
+      const fileId = extractActionIdFromSource(content);
       if (fileId !== id) continue;
 
-      const fileUrl = pathToFileURL(join(ACTIONS_DIR, entry));
+      const fileUrl = pathToFileURL(resolveUserActionFilePath(ACTIONS_DIR, filename));
       const mod = (await nativeImport(fileUrl.href)) as {
         default?: EmailAction;
         action?: EmailAction;
@@ -114,11 +130,12 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
 
 /** Read raw source code of a user action file. */
 export async function readUserActionSource(filename: string): Promise<string> {
-  return readFile(join(ACTIONS_DIR, filename), "utf-8");
+  return readFile(resolveUserActionFilePath(ACTIONS_DIR, filename), "utf-8");
 }
 
 /** List snapshots for a given action filename. */
 export async function listSnapshots(filename: string): Promise<SnapshotEntry[]> {
+  const safeFilename = normalizeUserActionFilename(filename);
   let entries: string[];
   try {
     entries = await readdir(SNAPSHOTS_DIR);
@@ -126,10 +143,15 @@ export async function listSnapshots(filename: string): Promise<SnapshotEntry[]> 
     return [];
   }
 
-  const prefix = `${filename}.`;
+  const prefix = `${safeFilename}.`;
   const snapshots: SnapshotEntry[] = [];
 
   for (const entry of entries) {
+    try {
+      normalizeSnapshotFilename(entry);
+    } catch {
+      continue;
+    }
     if (!entry.startsWith(prefix)) continue;
     // Format: filename.action.ts.2026-02-28T12-00-00-000Z.ts
     const tsMatch = entry.slice(prefix.length).replace(/\.ts$/, "");
@@ -140,7 +162,7 @@ export async function listSnapshots(filename: string): Promise<SnapshotEntry[]> 
         if (offset <= 9) return m; // Date dashes
         return ":";
       }),
-      snapshotPath: join(SNAPSHOTS_DIR, entry),
+      snapshotPath: basename(entry),
     });
   }
 
@@ -149,6 +171,12 @@ export async function listSnapshots(filename: string): Promise<SnapshotEntry[]> 
 
 /** Restore a snapshot — copies snapshot file back to ACTIONS_DIR, snapshotting current first. */
 export async function restoreSnapshot(snapshotFilename: string, originalFilename: string): Promise<void> {
-  const snapshotContent = await readFile(join(SNAPSHOTS_DIR, snapshotFilename), "utf-8");
-  await saveUserAction(originalFilename, snapshotContent);
+  const safeSnapshotFilename = normalizeSnapshotFilename(snapshotFilename);
+  const safeOriginalFilename = normalizeUserActionFilename(originalFilename);
+  if (!safeSnapshotFilename.startsWith(`${safeOriginalFilename}.`)) {
+    throw new Error("Snapshot does not belong to the requested action");
+  }
+
+  const snapshotContent = await readFile(join(SNAPSHOTS_DIR, safeSnapshotFilename), "utf-8");
+  await saveUserAction(safeOriginalFilename, snapshotContent);
 }

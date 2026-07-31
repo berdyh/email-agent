@@ -1,11 +1,27 @@
 import OpenAI from "openai";
 import { loadSettings } from "../config/settings.js";
+import {
+  VECTOR_DIMENSION,
+  createLocalEmbeddingVector,
+  createLocalEmbeddingVectors,
+} from "../shared/vector.js";
 
 let openaiClient: OpenAI | null = null;
 let openrouterClient: OpenAI | null = null;
 
+function requireEnvVar(name: string, provider: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Embedding provider "${provider}" requires the ${name} environment variable to be set`,
+    );
+  }
+  return value;
+}
+
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
+    requireEnvVar("OPENAI_API_KEY", "openai");
     openaiClient = new OpenAI();
   }
   return openaiClient;
@@ -13,40 +29,18 @@ function getOpenAI(): OpenAI {
 
 function getOpenRouter(): OpenAI {
   if (!openrouterClient) {
+    const apiKey = requireEnvVar("OPENROUTER_API_KEY", "openrouter");
     openrouterClient = new OpenAI({
       baseURL: "https://openrouter.ai/api/v1",
-      apiKey: process.env["OPENROUTER_API_KEY"],
+      apiKey,
     });
   }
   return openrouterClient;
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const settings = await loadSettings();
-  const { provider, model, dimensions } = settings.embedding;
-
-  if (provider === "openai") {
-    const openai = getOpenAI();
-    const response = await openai.embeddings.create({
-      model,
-      input: text,
-      dimensions,
-    });
-    return response.data[0]!.embedding;
-  }
-
-  if (provider === "openrouter") {
-    const openrouter = getOpenRouter();
-    const response = await openrouter.embeddings.create({
-      model,
-      input: text,
-      dimensions,
-    });
-    return response.data[0]!.embedding;
-  }
-
-  // Local fallback: zero vector (to be replaced with local embedding model)
-  return Array(dimensions).fill(0);
+  const [vector] = await generateEmbeddings([text]);
+  return vector ?? createLocalEmbeddingVector(text, VECTOR_DIMENSION);
 }
 
 export async function generateEmbeddings(
@@ -55,7 +49,8 @@ export async function generateEmbeddings(
   if (texts.length === 0) return [];
 
   const settings = await loadSettings();
-  const { provider, model, dimensions } = settings.embedding;
+  const { provider, model } = settings.embedding;
+  const dimensions = VECTOR_DIMENSION;
 
   if (provider === "openai") {
     const openai = getOpenAI();
@@ -77,5 +72,5 @@ export async function generateEmbeddings(
     return response.data.map((d) => d.embedding);
   }
 
-  return texts.map(() => Array(dimensions).fill(0));
+  return createLocalEmbeddingVectors(texts, dimensions);
 }

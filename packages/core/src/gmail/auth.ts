@@ -45,25 +45,10 @@ export async function loginGcloud(): Promise<boolean> {
       [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/pubsub",
         "openid",
         "email",
         "profile",
       ].join(","),
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function setGcloudProject(projectId: string): Promise<boolean> {
-  try {
-    await execFileAsync("gcloud", [
-      "config",
-      "set",
-      "project",
-      projectId,
     ]);
     return true;
   } catch {

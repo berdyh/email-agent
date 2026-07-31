@@ -5,9 +5,11 @@ import ora from "ora";
 import {
   initDb,
   getEmails,
+  recordToGmailMessage,
   ActionRegistry,
   ActionRunner,
   applyOperations,
+  buildOperationAccountLookup,
   summarizeOperations,
 } from "@email-agent/core";
 import type { GmailOperation } from "@email-agent/core";
@@ -19,7 +21,11 @@ export function registerRunAction(program: Command) {
     .option("-l, --limit <n>", "Maximum emails to process", "20")
     .option("-a, --account <email>", "Account to run action on")
     .action(async (actionId: string, options: { limit: string; account?: string }) => {
-      const limit = parseInt(options.limit, 10);
+      if (!/^[0-9]+$/.test(options.limit) || Number(options.limit) <= 0) {
+        console.error(chalk.red(`Invalid --limit "${options.limit}": must be a positive integer`));
+        process.exit(1);
+      }
+      const limit = Number(options.limit);
 
       await initDb();
 
@@ -40,23 +46,15 @@ export function registerRunAction(program: Command) {
 
       try {
         const emailRecords = await getEmails({ unreadOnly: true, limit, accountId: options.account });
-        const emails = emailRecords.map((e) => ({
-          id: e.id,
-          threadId: e.threadId,
-          from: e.from,
-          to: e.to,
-          subject: e.subject,
-          date: e.date,
-          bodyText: e.bodyText,
-          bodyHtml: e.bodyHtml,
-          labels: JSON.parse(e.labels as string) as string[],
-          isUnread: e.isUnread,
-          senderDomain: e.senderDomain,
-          snippet: e.snippet,
-        }));
+        const emails = emailRecords.map(recordToGmailMessage);
 
         const runner = new ActionRunner();
-        const result = await runner.run(action, emails, options.account);
+        const result = await runner.run(
+          action,
+          emails,
+          options.account,
+          buildOperationAccountLookup(emailRecords),
+        );
 
         if (result.status === "success") {
           spinner.succeed(

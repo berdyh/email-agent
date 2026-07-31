@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 export interface EmailListItem {
   id: string;
+  accountId: string;
   threadId: string;
   from: string;
   subject: string;
@@ -11,7 +12,12 @@ export interface EmailListItem {
   labels: string;
 }
 
-export function useEmails(options?: { unreadOnly?: boolean; limit?: number; offset?: number; accountId?: string }) {
+export function useEmails(options?: {
+  unreadOnly?: boolean;
+  limit?: number;
+  offset?: number;
+  accountId?: string;
+}) {
   return useQuery<EmailListItem[]>({
     queryKey: ["emails", options],
     queryFn: async (): Promise<EmailListItem[]> => {
@@ -19,7 +25,9 @@ export function useEmails(options?: { unreadOnly?: boolean; limit?: number; offs
       if (options?.unreadOnly) params.set("unreadOnly", "true");
       if (options?.limit) params.set("limit", String(options.limit));
       if (options?.offset) params.set("offset", String(options.offset));
-      if (options?.accountId) params.set("accountId", options.accountId);
+      if (options?.accountId !== undefined) {
+        params.set("accountId", options.accountId);
+      }
       const res = await fetch(`/api/gmail?${params}`);
       if (!res.ok) throw new Error("Failed to fetch emails");
       return res.json() as Promise<EmailListItem[]>;

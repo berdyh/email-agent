@@ -14,6 +14,9 @@ interface ActionChatState {
   isGenerating: boolean;
   extractedCode: string | null;
   expandedCardId: string | null;
+  // Controls the in-flight generation request. Not persisted — a reloaded page
+  // has no live request to abort.
+  abortController: AbortController | null;
 }
 
 interface ActionChatActions {
@@ -25,14 +28,14 @@ interface ActionChatActions {
   removeLastMessage: () => void;
   setGenerating: (v: boolean) => void;
   setExtractedCode: (code: string | null) => void;
-  reset: () => void;
+  setAbortController: (controller: AbortController | null) => void;
 }
 
 type ActionChatStore = ActionChatState & ActionChatActions;
 
 export const useActionChatStore = create<ActionChatStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       isOpen: false,
       mode: "create",
       editingAction: null,
@@ -40,28 +43,38 @@ export const useActionChatStore = create<ActionChatStore>()(
       isGenerating: false,
       extractedCode: null,
       expandedCardId: null,
+      abortController: null,
 
-      openCreate: () =>
+      openCreate: () => {
+        get().abortController?.abort();
         set({
           isOpen: true,
           mode: "create",
           editingAction: null,
           messages: [],
+          isGenerating: false,
           extractedCode: null,
           expandedCardId: "__create__",
-        }),
+          abortController: null,
+        });
+      },
 
-      openEdit: (action) =>
+      openEdit: (action) => {
+        get().abortController?.abort();
         set({
           isOpen: true,
           mode: "edit",
           editingAction: action,
           messages: [],
+          isGenerating: false,
           extractedCode: null,
           expandedCardId: action.id,
-        }),
+          abortController: null,
+        });
+      },
 
-      close: () =>
+      close: () => {
+        get().abortController?.abort();
         set({
           isOpen: false,
           editingAction: null,
@@ -69,7 +82,9 @@ export const useActionChatStore = create<ActionChatStore>()(
           isGenerating: false,
           extractedCode: null,
           expandedCardId: null,
-        }),
+          abortController: null,
+        });
+      },
 
       addMessage: (message) =>
         set((state) => ({ messages: [...state.messages, message] })),
@@ -89,17 +104,7 @@ export const useActionChatStore = create<ActionChatStore>()(
 
       setGenerating: (v) => set({ isGenerating: v }),
       setExtractedCode: (code) => set({ extractedCode: code }),
-
-      reset: () =>
-        set({
-          isOpen: false,
-          mode: "create",
-          editingAction: null,
-          messages: [],
-          isGenerating: false,
-          extractedCode: null,
-          expandedCardId: null,
-        }),
+      setAbortController: (controller) => set({ abortController: controller }),
     }),
     {
       name: "action-chat",

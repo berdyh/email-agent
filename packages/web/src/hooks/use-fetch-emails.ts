@@ -12,6 +12,21 @@ interface FetchParams {
   accountEmail?: string;
 }
 
+/**
+ * Error thrown when the fetch route rejects a request. `code` carries the typed
+ * classification from the server (e.g. "auth"), so the UI does not have to
+ * re-parse the human-readable message to decide how to react.
+ */
+export class FetchEmailsError extends Error {
+  code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "FetchEmailsError";
+    this.code = code;
+  }
+}
+
 export function useFetchEmails() {
   const queryClient = useQueryClient();
 
@@ -24,8 +39,8 @@ export function useFetchEmails() {
         body: JSON.stringify(params),
       });
       if (!res.ok) {
-        const data = (await res.json()) as { error: string };
-        throw new Error(data.error);
+        const data = (await res.json()) as { error: string; code?: string };
+        throw new FetchEmailsError(data.error, data.code);
       }
       return res.json() as Promise<FetchResponse>;
     },
@@ -44,15 +59,19 @@ export function useAutoFetch(
   const { data: settings } = useSettings();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const ui = ((settings as Record<string, unknown> | undefined)?.ui ?? {}) as Record<string, unknown>;
-  const fetchInterval = (ui.fetchInterval as number) ?? 0;
-  const fetchScope = (ui.fetchScope as string) ?? "unread";
+  // Keep the latest isFetching in a ref so doFetch (and thus the interval)
+  // stays referentially stable and does not reset on every fetch.
+  const isFetchingRef = useRef(isFetching);
+  isFetchingRef.current = isFetching;
+
+  const fetchInterval = settings?.ui.fetchInterval ?? 0;
+  const fetchScope = settings?.ui.fetchScope ?? "unread";
 
   const doFetch = useCallback(() => {
-    if (!isFetching) {
+    if (!isFetchingRef.current) {
       fetchFn({ scope: fetchScope === "all" ? "all" : "unread", accountEmail });
     }
-  }, [fetchFn, fetchScope, isFetching, accountEmail]);
+  }, [fetchFn, fetchScope, accountEmail]);
 
   useEffect(() => {
     if (intervalRef.current) {
@@ -78,17 +97,15 @@ export function useFetchSettings() {
   const { data: settings } = useSettings();
   const { mutate: updateSettings } = useUpdateSettings();
 
-  const ui = ((settings as Record<string, unknown> | undefined)?.ui ?? {}) as Record<string, unknown>;
-
-  const fetchInterval = (ui.fetchInterval as number) ?? 0;
-  const fetchScope = ((ui.fetchScope as string) ?? "unread") as "unread" | "all";
+  const fetchInterval = settings?.ui.fetchInterval ?? 0;
+  const fetchScope = settings?.ui.fetchScope ?? "unread";
 
   const setFetchInterval = (interval: number) => {
-    updateSettings({ ui: { ...ui, fetchInterval: interval } });
+    updateSettings({ ui: { fetchScope, fetchInterval: interval } });
   };
 
   const setFetchScope = (scope: "unread" | "all") => {
-    updateSettings({ ui: { ...ui, fetchScope: scope } });
+    updateSettings({ ui: { fetchInterval, fetchScope: scope } });
   };
 
   return { fetchInterval, fetchScope, setFetchInterval, setFetchScope };

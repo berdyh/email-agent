@@ -12,6 +12,55 @@ import type {
   ActionApplyResult,
 } from "./types.js";
 
+export type OperationAccountLookup = ReadonlyMap<string, string | null>;
+
+export function buildOperationAccountLookup(
+  emails: Array<{ id: string; accountId: string }>,
+): OperationAccountLookup {
+  const accountByEmailId = new Map<string, string | null>();
+
+  for (const email of emails) {
+    const existing = accountByEmailId.get(email.id);
+    if (existing === undefined) {
+      accountByEmailId.set(email.id, email.accountId);
+    } else if (existing !== email.accountId) {
+      accountByEmailId.set(email.id, null);
+    }
+  }
+
+  return accountByEmailId;
+}
+
+export function scopeOperationsToAccounts(
+  operations: GmailOperation[],
+  accountEmail?: string,
+  accountEmailByMessageId?: OperationAccountLookup,
+): GmailOperation[] {
+  return operations.map((op) => {
+    if (accountEmailByMessageId) {
+      if (!accountEmailByMessageId.has(op.emailId)) {
+        throw new Error(
+          `Cannot apply Gmail operation for message ${op.emailId}; the message id was not in the action batch`,
+        );
+      }
+
+      const lookupAccountEmail = accountEmailByMessageId.get(op.emailId);
+      if (lookupAccountEmail === null) {
+        throw new Error(
+          `Cannot apply Gmail operation for message ${op.emailId}; the message id exists in multiple accounts`,
+        );
+      }
+
+      if (op.accountEmail !== undefined) return op;
+      return { ...op, accountEmail: accountEmail ?? lookupAccountEmail };
+    }
+
+    if (op.accountEmail !== undefined) return op;
+    if (accountEmail !== undefined) return { ...op, accountEmail };
+    return op;
+  });
+}
+
 /**
  * Maps action output results to concrete Gmail operations.
  * Each action type has its own mapping logic based on the AI's output fields.
@@ -90,28 +139,29 @@ export async function applyOperations(
   const errors: Array<{ emailId: string; error: string }> = [];
 
   for (const op of operations) {
+    const operationAccountEmail = op.accountEmail ?? accountEmail;
     try {
       switch (op.type) {
         case "trash":
-          await trashMessage(op.emailId, accountEmail);
+          await trashMessage(op.emailId, operationAccountEmail);
           break;
         case "spam":
-          await markAsSpam(op.emailId, accountEmail);
+          await markAsSpam(op.emailId, operationAccountEmail);
           break;
         case "markRead":
-          await markAsRead(op.emailId, accountEmail);
+          await markAsRead(op.emailId, operationAccountEmail);
           break;
         case "markUnread":
-          await markAsUnread(op.emailId, accountEmail);
+          await markAsUnread(op.emailId, operationAccountEmail);
           break;
         case "addLabels":
           if (op.labelIds?.length) {
-            await addLabels(op.emailId, op.labelIds, accountEmail);
+            await addLabels(op.emailId, op.labelIds, operationAccountEmail);
           }
           break;
         case "removeLabels":
           if (op.labelIds?.length) {
-            await removeLabels(op.emailId, op.labelIds, accountEmail);
+            await removeLabels(op.emailId, op.labelIds, operationAccountEmail);
           }
           break;
       }

@@ -1,22 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { applyOperations } from "@email-agent/core/actions";
-import type { GmailOperation } from "@email-agent/core/actions";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseApplyActionsRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = (await request.json()) as { operations: GmailOperation[]; accountEmail?: string };
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
 
-    if (!Array.isArray(body.operations) || body.operations.length === 0) {
-      return NextResponse.json(
-        { error: "operations array is required" },
-        { status: 400 },
-      );
-    }
+  try {
+    const body = parseApplyActionsRequest(await request.json());
 
     const result = await applyOperations(body.operations, body.accountEmail);
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to apply Gmail operations");
   }
 }

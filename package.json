@@ -10,7 +10,10 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "setup": "npm run -w @email-agent/cli setup",
+    "test": "npm run -w @email-agent/core build && node --import tsx --test \"packages/**/*.test.ts\"",
+    "test:coverage": "npm run -w @email-agent/core build && node --import tsx --test --experimental-test-coverage \"packages/**/*.test.ts\"",
+    "check:boundaries": "node scripts/check-module-boundaries.mjs",
+    "setup": "./setup.sh",
     "start": "npm run -w @email-agent/web dev"
   },
   "devDependencies": {
@@ -19,7 +22,7 @@
     "typescript": "^5.8.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.12.0"
   },
   "packageManager": "npm@10.9.0",
   "dependencies": {

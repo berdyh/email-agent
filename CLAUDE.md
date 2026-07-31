@@ -9,6 +9,8 @@ Local AI-powered email analysis tool. Monorepo with Turbo.
 ```bash
 npm install              # Install all dependencies
 npm run build            # Build all packages (core must build first)
+npm test                 # Run Node test suite through tsx
+npm run check:boundaries # Verify module cards and import boundaries
 npm run dev              # Start all dev servers
 npm run start            # Start web UI on port 3847
 npm run setup            # Interactive setup wizard (gcloud auth + DB init)
@@ -28,8 +30,9 @@ npx email-agent accounts remove <email>  # Remove account
 npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
-npx email-agent serve              # Start web UI
-npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope)
+npx email-agent setup              # Authenticate + configure project + init DB (--project <id>)
+npx email-agent serve              # Start web UI (--port <port>, default 3847)
+npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope, --limit)
 npx email-agent cron status        # Show current crontab entry
 npx email-agent cron remove        # Remove crontab entry
 npx email-agent config get <key>   # Read config value (dotted path, e.g. gmail.syncActions)
@@ -44,6 +47,8 @@ packages/
   web/    @email-agent/web     — Next.js 15 App Router UI (port 3847)
   cli/    @email-agent/cli     — Commander.js CLI tool
 ```
+
+For module/submodule work, load `docs/architecture/module-index.md` first, then the local `MODULE.md` card beside the area being changed.
 
 ## Key Patterns
 
@@ -104,6 +109,7 @@ packages/
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`
 - Dynamic filesystem patterns (`readdir`, `import.meta.url` dirs) in core don't work in webpack — use static imports in web routes (e.g. `ActionRegistry.loadStatic()`)
 - For runtime `import()` of files outside the bundle (e.g. user plugins in `~/.email-agent/actions/`), use the `new Function("p", "return import(p)")` escape hatch — webpack can't statically trace it, so Node's native loader handles the call. See `loadUserAction()` in `actions/user-actions.ts`. Without this, the import silently fails inside webpack and the route returns 404
+- State-changing API routes reject non-local or cross-site browser requests unless `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`; keep this guard aligned with `packages/web/src/modules/api/validation.ts`
 - `packages/web/package-lock.json` is a **symlink** to `../../package-lock.json` — do NOT delete it. Next.js uses it to detect npm as the package manager; without it, it falls back to globally-installed pnpm and fails with `ENOWORKSPACES`
 - `packages/web/next.config.ts` has `outputFileTracingRoot` set to monorepo root — prevents Next.js from walking up to stray lockfiles in parent directories
 - `fetch().json()` needs explicit return type annotations with strict TS + TanStack Query generics
@@ -116,9 +122,9 @@ packages/
 - Use `execFileSync`/`execFile` (NOT `execSync`/`exec`) in CLI commands — security hook blocks shell injection patterns
 
 ### Other
-- `node-notifier` types are strict — only `title`, `message`, `wait` are valid notification props
 - `setup.sh` hardcodes a `settings.json` template — new config fields must be added there too, or they won't appear for fresh installs running setup
 - `setup.sh` also writes `~/.email-agent/oauth.json` (step 9) — the JSON format must match what `account-manager.ts` reads (`{clientId, clientSecret}`)
+- `createGmailClient` throws for a named account (`accountEmail` set to a non-empty string) with missing/invalid stored credentials — it does NOT fall back to gcloud ADC. ADC fallback only applies to the explicit empty-string account id and to the unscoped/no-accounts-configured path (see `gmail/client.ts`)
 
 ### Agent Executors (Spawning CLIs)
 - Claude CLI: `--system-prompt` (NOT `--system`), `--output-format stream-json` for streaming, NO `--max-tokens` flag (use `--max-budget-usd` instead)

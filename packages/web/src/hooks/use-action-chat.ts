@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useActionChatStore, type ChatMessage } from "@/store/action-chat-store";
+import { extractActionId } from "@/lib/action-id";
 import { toast } from "sonner";
 
 interface SaveRequest {
@@ -20,11 +21,8 @@ function extractCode(text: string): string | null {
 
 /** Derive a filename from action ID in code, or from user message. */
 export function deriveFilename(code: string): string {
-  const idMatch = code.match(/id:\s*["'`]([^"'`]+)["'`]/);
-  if (idMatch?.[1]) {
-    return `${idMatch[1]}.action.ts`;
-  }
-  return "new-action.action.ts";
+  const actionId = extractActionId(code);
+  return actionId ? `${actionId}.action.ts` : "new-action.action.ts";
 }
 
 /** Parse SSE events from a text chunk. Returns parsed events and any remaining partial data. */
@@ -57,92 +55,131 @@ function parseSSEEvents(
   return { events, remaining };
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
 export function useSendMessage() {
-  const {
-    messages,
-    mode,
-    editingAction,
-    addMessage,
-    appendToLastMessage,
-    removeLastMessage,
-    setGenerating,
-    setExtractedCode,
-  } = useActionChatStore();
+  const { messages, mode, editingAction } = useActionChatStore();
 
-  return useMutation<void, Error, string>({
+  return useMutation<void, Error, string, { controller: AbortController }>({
     mutationFn: async (userMessage) => {
-      const newMessages: ChatMessage[] = [...messages, { role: "user", content: userMessage }];
+      // onMutate created and stored a fresh controller for this generation.
+      const controller = useActionChatStore.getState().abortController;
+      const signal = controller?.signal;
+      const store = useActionChatStore.getState();
 
-      let currentCode: string | undefined;
-      if (mode === "edit" && editingAction) {
-        const res = await fetch(
-          `/api/actions/user?filename=${encodeURIComponent(editingAction.filename)}`,
-        );
-        if (res.ok) {
-          const data = (await res.json()) as ActionSourceResponse;
+      // Stop writing into whatever conversation is now open once this
+      // generation is no longer the active one (chat closed / another opened).
+      const isCurrent = () =>
+        useActionChatStore.getState().abortController === controller;
+
+      try {
+        const newMessages: ChatMessage[] = [...messages, { role: "user", content: userMessage }];
+
+        let currentCode: string | undefined;
+        if (mode === "edit" && editingAction) {
+          const srcRes = await fetch(
+            `/api/actions/user?filename=${encodeURIComponent(editingAction.filename)}`,
+            { signal },
+          );
+          // The agent must see the existing source to edit it; failing loudly
+          // routes through onError instead of silently rewriting from scratch.
+          if (!srcRes.ok) {
+            throw new Error("Failed to read action source for editing");
+          }
+          const data = (await srcRes.json()) as ActionSourceResponse;
           currentCode = data.source;
         }
-      }
 
-      const res = await fetch("/api/actions/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages, mode, currentCode }),
-      });
+        const res = await fetch("/api/actions/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: newMessages, mode, currentCode }),
+          signal,
+        });
 
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(errBody?.error ?? "Failed to generate action");
-      }
-      if (!res.body) throw new Error("No response body");
+        if (!res.ok) {
+          const errBody = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(errBody?.error ?? "Failed to generate action");
+        }
+        if (!res.body) throw new Error("No response body");
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let fullText = "";
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let fullText = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!isCurrent()) return;
 
-        buffer += decoder.decode(value, { stream: true });
-        const { events, remaining } = parseSSEEvents(buffer);
-        buffer = remaining;
+          buffer += decoder.decode(value, { stream: true });
+          const { events, remaining } = parseSSEEvents(buffer);
+          buffer = remaining;
 
-        for (const evt of events) {
-          if (evt.event === "chunk") {
-            const parsed = JSON.parse(evt.data) as { text: string };
-            fullText += parsed.text;
-            appendToLastMessage(parsed.text);
-          } else if (evt.event === "done") {
-            const parsed = JSON.parse(evt.data) as { message: string };
-            fullText = parsed.message;
-          } else if (evt.event === "error") {
-            const parsed = JSON.parse(evt.data) as { error: string };
-            throw new Error(parsed.error);
+          for (const evt of events) {
+            if (evt.event === "chunk") {
+              const parsed = JSON.parse(evt.data) as { text: string };
+              fullText += parsed.text;
+              store.appendToLastMessage(parsed.text);
+            } else if (evt.event === "done") {
+              const parsed = JSON.parse(evt.data) as { message: string };
+              fullText = parsed.message;
+            } else if (evt.event === "error") {
+              const parsed = JSON.parse(evt.data) as { error: string };
+              throw new Error(parsed.error);
+            }
           }
         }
-      }
 
-      // Extract code from the complete response
-      const code = extractCode(fullText);
-      if (code) {
-        setExtractedCode(code);
+        if (!isCurrent()) return;
+        // Extract code from the complete response
+        const code = extractCode(fullText);
+        if (code) {
+          store.setExtractedCode(code);
+        }
+      } catch (err) {
+        // Aborts are intentional (chat closed / superseded) — swallow them
+        // without touching state so the newer conversation is left untouched.
+        if (isAbortError(err)) return;
+        throw err;
       }
     },
     onMutate: (userMessage) => {
-      addMessage({ role: "user", content: userMessage });
+      const store = useActionChatStore.getState();
+      // Abort any in-flight generation before starting a new one.
+      store.abortController?.abort();
+      const controller = new AbortController();
+      store.setAbortController(controller);
+      store.addMessage({ role: "user", content: userMessage });
       // Add empty assistant message that will be progressively filled
-      addMessage({ role: "assistant", content: "" });
-      setGenerating(true);
+      store.addMessage({ role: "assistant", content: "" });
+      store.setGenerating(true);
+      return { controller };
     },
-    onError: (err) => {
-      // Remove the empty assistant placeholder on error
-      removeLastMessage();
+    onError: (err, _userMessage, context) => {
+      const store = useActionChatStore.getState();
+      // Only touch state if this generation is still the active one.
+      if (context && store.abortController !== context.controller) return;
+      const last = store.messages[store.messages.length - 1];
+      if (last?.role === "assistant" && last.content.trim().length > 0) {
+        // Some output already streamed in and rendered — keep it rather than
+        // discarding the user's partial result, but flag the interruption.
+        store.appendToLastMessage("\n\n[generation interrupted]");
+      } else {
+        // Nothing arrived; drop the empty assistant placeholder.
+        store.removeLastMessage();
+      }
       toast.error(err.message || "Failed to generate response");
     },
-    onSettled: () => {
-      setGenerating(false);
+    onSettled: (_data, _err, _userMessage, context) => {
+      const store = useActionChatStore.getState();
+      // A newer generation may have replaced this one; don't clobber its state.
+      if (!context || store.abortController !== context.controller) return;
+      store.setGenerating(false);
+      store.setAbortController(null);
     },
   });
 }
@@ -168,17 +205,5 @@ export function useSaveAction() {
       void queryClient.invalidateQueries({ queryKey: ["actions"] });
       close();
     },
-  });
-}
-
-export function useReadActionSource(filename: string | null) {
-  return useQuery<ActionSourceResponse>({
-    queryKey: ["action-source", filename],
-    queryFn: async (): Promise<ActionSourceResponse> => {
-      const res = await fetch(`/api/actions/user?filename=${encodeURIComponent(filename!)}`);
-      if (!res.ok) throw new Error("Failed to read action source");
-      return res.json() as Promise<ActionSourceResponse>;
-    },
-    enabled: !!filename,
   });
 }

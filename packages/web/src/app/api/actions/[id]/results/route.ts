@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getActionResults, initDb } from "@email-agent/core/db";
+import { internalErrorResponse } from "@/modules/api/validation";
 
 export async function GET(
   _request: NextRequest,
@@ -12,7 +13,6 @@ export async function GET(
     const results = await getActionResults({ actionId: id, limit: 50 });
     return NextResponse.json(results);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to load action results");
   }
 }

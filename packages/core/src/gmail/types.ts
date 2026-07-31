@@ -19,14 +19,3 @@ export interface GmailThread {
   subject: string;
   snippet: string;
 }
-
-export interface GmailLabel {
-  id: string;
-  name: string;
-  type: "system" | "user";
-}
-
-export interface WatchResponse {
-  historyId: string;
-  expiration: string;
-}

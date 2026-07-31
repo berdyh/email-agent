@@ -19,26 +19,30 @@ export function registerSetup(program: Command) {
 
       // Step 1: Check gcloud
       const spinner = ora("Checking gcloud CLI...").start();
-      try {
-        const authed = await checkGcloudAuth();
-        if (authed) {
-          spinner.succeed("gcloud CLI authenticated");
+      const authed = await checkGcloudAuth();
+      if (authed.authenticated) {
+        spinner.succeed("gcloud CLI authenticated");
+      } else {
+        spinner.warn("gcloud CLI not authenticated");
+        console.log(
+          chalk.yellow("\nRun the following to authenticate:"),
+        );
+        console.log(
+          chalk.cyan(
+            "  gcloud auth application-default login --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify\n",
+          ),
+        );
+        const loggedIn = await loginGcloud();
+        if (loggedIn) {
+          console.log(chalk.green("Authentication complete.\n"));
         } else {
-          spinner.warn("gcloud CLI not authenticated");
-          console.log(
-            chalk.yellow("\nRun the following to authenticate:"),
-          );
-          console.log(
-            chalk.cyan(
-              "  gcloud auth application-default login --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/pubsub\n",
+          console.error(
+            chalk.red(
+              "gcloud authentication failed. Install: https://cloud.google.com/sdk/docs/install",
             ),
           );
-          await loginGcloud();
-          console.log(chalk.green("Authentication complete.\n"));
+          process.exit(1);
         }
-      } catch {
-        spinner.fail("gcloud CLI not found. Install: https://cloud.google.com/sdk/docs/install");
-        process.exit(1);
       }
 
       // Step 2: Set project

@@ -15,7 +15,16 @@ export function registerFetch(program: Command) {
     )
     .option("-a, --account <email>", "Email account to fetch from")
     .action(async (options: { limit: string; scope: string; account?: string }) => {
-      const limit = parseInt(options.limit, 10);
+      if (!/^[0-9]+$/.test(options.limit) || Number(options.limit) <= 0) {
+        console.error(chalk.red(`Invalid --limit "${options.limit}": must be a positive integer`));
+        process.exit(1);
+      }
+      const limit = Number(options.limit);
+
+      if (options.scope !== "all" && options.scope !== "unread") {
+        console.error(chalk.red(`Invalid --scope "${options.scope}": must be "all" or "unread"`));
+        process.exit(1);
+      }
       const scope = options.scope === "all" ? "all" as const : "unread" as const;
       const accountLabel = options.account ? ` for ${options.account}` : "";
 

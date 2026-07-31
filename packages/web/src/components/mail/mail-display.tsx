@@ -9,9 +9,11 @@ import { Separator } from "@/components/ui/separator";
 import { Mail, MailOpen } from "lucide-react";
 import { MailSummary } from "./mail-summary";
 import { MailContent } from "./mail-content";
+import { useEffect, useRef } from "react";
 
 interface EmailDetail {
   id: string;
+  accountId: string;
   threadId: string;
   from: string;
   to: string;
@@ -25,17 +27,19 @@ interface EmailDetail {
 
 export function MailDisplay() {
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
+  const selectedEmailAccountId = useEmailStore((s) => s.selectedEmailAccountId);
+  const openedEmailKey = useRef<string | null>(null);
 
   const queryClient = useQueryClient();
 
   const { data: email, isLoading } = useQuery<EmailDetail>({
-    queryKey: ["email", selectedEmailId],
+    queryKey: ["email", selectedEmailAccountId, selectedEmailId],
     queryFn: async (): Promise<EmailDetail> => {
-      const res = await fetch(`/api/gmail/${selectedEmailId}`);
+      const res = await fetch(emailDetailPath(selectedEmailId, selectedEmailAccountId));
       if (!res.ok) throw new Error("Failed to fetch email");
       return res.json() as Promise<EmailDetail>;
     },
-    enabled: Boolean(selectedEmailId),
+    enabled: selectedEmailId !== null && selectedEmailAccountId !== null,
   });
 
   const toggleRead = useMutation<
@@ -44,7 +48,7 @@ export function MailDisplay() {
     boolean
   >({
     mutationFn: async (isUnread: boolean) => {
-      const res = await fetch(`/api/gmail/${selectedEmailId}`, {
+      const res = await fetch(emailDetailPath(selectedEmailId, selectedEmailAccountId), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isUnread }),
@@ -53,11 +57,44 @@ export function MailDisplay() {
       return res.json() as Promise<{ id: string; isUnread: boolean }>;
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["email", selectedEmailId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["email", selectedEmailAccountId, selectedEmailId],
+      });
       void queryClient.invalidateQueries({ queryKey: ["emails"] });
       void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
     },
   });
+
+  useEffect(() => {
+    if (!selectedEmailId) {
+      openedEmailKey.current = null;
+    }
+  }, [selectedEmailId]);
+
+  useEffect(() => {
+    const emailKey = email ? `${email.accountId}:${email.id}` : null;
+    if (
+      !email ||
+      email.id !== selectedEmailId ||
+      email.accountId !== selectedEmailAccountId ||
+      toggleRead.isPending ||
+      openedEmailKey.current === emailKey
+    ) {
+      return;
+    }
+
+    openedEmailKey.current = emailKey;
+    if (email.isUnread) {
+      toggleRead.mutate(false);
+    }
+  }, [
+    email?.accountId,
+    email?.id,
+    email?.isUnread,
+    selectedEmailAccountId,
+    selectedEmailId,
+    toggleRead.isPending,
+  ]);
 
   if (!selectedEmailId) {
     return (
@@ -122,7 +159,11 @@ export function MailDisplay() {
 
         <Separator className="my-4" />
 
-        <MailSummary emailId={email.id} bodyText={email.bodyText} />
+        <MailSummary
+          emailId={email.id}
+          accountId={email.accountId}
+          bodyText={email.bodyText}
+        />
 
         <Separator className="my-4" />
 
@@ -130,6 +171,13 @@ export function MailDisplay() {
       </div>
     </ScrollArea>
   );
+}
+
+function emailDetailPath(emailId: string | null, accountId: string | null): string {
+  const path = `/api/gmail/${emailId ?? ""}`;
+  if (accountId === null) return path;
+  const params = new URLSearchParams({ accountId });
+  return `${path}?${params}`;
 }
 
 function safeParseLabels(labels: string): string[] {

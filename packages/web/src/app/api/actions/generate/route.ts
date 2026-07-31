@@ -2,6 +2,12 @@ import { type NextRequest } from "next/server";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentRouter } from "@email-agent/core/agents";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseActionGenerateRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 const router = new AgentRouter();
 
@@ -25,17 +31,6 @@ async function loadEditSkills(): Promise<string> {
   return editSkillsCache;
 }
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface GenerateRequest {
-  messages: ChatMessage[];
-  mode: "create" | "edit";
-  currentCode?: string;
-}
-
 const encoder = new TextEncoder();
 
 function sseEvent(event: string, data: unknown): Uint8Array {
@@ -43,15 +38,11 @@ function sseEvent(event: string, data: unknown): Uint8Array {
 }
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = (await request.json()) as GenerateRequest;
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
 
-    if (!body.messages?.length) {
-      return new Response(
-        JSON.stringify({ error: "messages are required" }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
-      );
-    }
+  try {
+    const body = parseActionGenerateRequest(await request.json());
 
     // Build system prompt based on mode
     let systemPrompt: string;
@@ -73,40 +64,45 @@ export async function POST(request: NextRequest) {
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
       .join("\n\n");
 
-    try {
-      const result = await router.execute({
-        prompt: conversationText,
-        systemPrompt,
-        signal: request.signal,
-      });
-
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(sseEvent("chunk", { text: result.text }));
-          controller.enqueue(sseEvent("done", { message: result.text }));
+    const stream = new ReadableStream({
+      async start(controller) {
+        let fullText = "";
+        try {
+          for await (const chunk of router.executeStream({
+            prompt: conversationText,
+            systemPrompt,
+            signal: request.signal,
+          })) {
+            if (chunk.text) {
+              fullText += chunk.text;
+              controller.enqueue(sseEvent("chunk", { text: chunk.text }));
+            }
+          }
+          controller.enqueue(sseEvent("done", { message: fullText }));
+        } catch (err) {
+          // Headers are already sent, so surface failures as an SSE error event
+          // rather than an HTTP status the client can no longer read.
+          console.error(err);
+          controller.enqueue(
+            sseEvent("error", { error: "Failed to generate action" }),
+          );
+        } finally {
           controller.close();
-        },
-      });
+        }
+      },
+    });
 
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      return new Response(
-        JSON.stringify({ error: message }),
-        { status: 500, headers: { "Content-Type": "application/json" } },
-      );
-    }
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      },
+    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return new Response(
-      JSON.stringify({ error: message }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
-    );
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to generate action");
   }
 }

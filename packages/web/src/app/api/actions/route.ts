@@ -1,6 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ActionRegistry, ActionRunner, builtInActions, listUserActions, loadUserAction } from "@email-agent/core/actions";
-import { getEmails, initDb } from "@email-agent/core/db";
+import {
+  ActionRegistry,
+  ActionRunner,
+  builtInActions,
+  buildOperationAccountLookup,
+  listUserActions,
+  loadUserAction,
+} from "@email-agent/core/actions";
+import { getEmails, initDb, recordToGmailMessage } from "@email-agent/core/db";
+import {
+  internalErrorResponse,
+  mutationGuardResponse,
+  parseActionRunRequest,
+  validationResponse,
+} from "@/modules/api/validation";
 
 const registry = new ActionRegistry();
 const runner = new ActionRunner();
@@ -30,15 +43,17 @@ export async function GET() {
 
     return NextResponse.json([...builtIns, ...userItems]);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "Failed to load actions");
   }
 }
 
 export async function POST(request: NextRequest) {
+  const guard = mutationGuardResponse(request);
+  if (guard) return guard;
+
   try {
     ensureLoaded();
-    const body = (await request.json()) as { actionId: string; accountEmail?: string };
+    const body = parseActionRunRequest(await request.json());
     let action = registry.get(body.actionId);
 
     // Fall back to user actions if not found in built-ins
@@ -53,25 +68,15 @@ export async function POST(request: NextRequest) {
     // Get unread emails to run the action on
     await initDb();
     const emailRecords = await getEmails({ unreadOnly: true, limit: 20, accountId: body.accountEmail });
-    const emails = emailRecords.map((e) => ({
-      id: e.id,
-      threadId: e.threadId,
-      from: e.from,
-      to: e.to,
-      subject: e.subject,
-      date: e.date,
-      bodyText: e.bodyText,
-      bodyHtml: e.bodyHtml,
-      labels: JSON.parse(e.labels) as string[],
-      isUnread: e.isUnread,
-      senderDomain: e.senderDomain,
-      snippet: e.snippet,
-    }));
+    const accountEmailByMessageId = buildOperationAccountLookup(emailRecords);
+    const emails = emailRecords.map(recordToGmailMessage);
 
-    const result = await runner.run(action, emails, body.accountEmail);
+    const result = await runner.run(action, emails, body.accountEmail, accountEmailByMessageId);
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const validation = validationResponse(err);
+    if (validation) return validation;
+
+    return internalErrorResponse(err, "Failed to run action");
   }
 }
