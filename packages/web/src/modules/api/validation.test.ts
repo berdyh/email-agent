@@ -144,6 +144,24 @@ describe("web API validation", () => {
     assert.throws(() => parseApprovalIdsRequest({ ids: [] }), /ids/);
     assert.throws(() => parseApprovalIdsRequest({}), /ids/);
     assert.throws(() => parseApprovalIdsRequest({ ids: ["op-1", 7] }), /ids\[1\]/);
+    // A blank id would widen the IN(...) filter over the queue; reject it.
+    assert.throws(() => parseApprovalIdsRequest({ ids: ["  "] }), /ids\[0\]/);
+    assert.throws(() => parseApprovalIdsRequest(null), /object/);
+    assert.throws(() => parseApprovalIdsRequest({ ids: "op-1" }), /ids/);
+    assert.deepEqual(parseApprovalIdsRequest({ ids: [" op-1 "] }), {
+      ids: ["op-1"],
+    });
+    // Duplicates would resolve the same queue row twice.
+    assert.deepEqual(parseApprovalIdsRequest({ ids: ["op-1", "op-1"] }), {
+      ids: ["op-1"],
+    });
+    assert.throws(
+      () =>
+        parseApprovalIdsRequest({
+          ids: Array.from({ length: 1001 }, (_, i) => `op-${i}`),
+        }),
+      /more than 1000/,
+    );
     assert.throws(
       () =>
         parseSnapshotRestoreRequest({
@@ -183,6 +201,15 @@ describe("web API validation", () => {
     assert.throws(
       () => parseSettingsUpdateRequest({ gmail: { autoApplyActions: "yes" } }),
       /autoApplyActions/,
+    );
+    assert.throws(
+      () => parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: 1 } }),
+      /autoApplyAcknowledged/,
+    );
+    // A null acknowledgement is read as "not acknowledged", never as "keep".
+    assert.deepEqual(
+      parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: null } }),
+      { gmail: { autoApplyAcknowledged: false } },
     );
   });
 
@@ -363,6 +390,42 @@ describe("web API validation", () => {
     assert.equal("customCliKey" in sanitized, false);
     assert.equal(sanitized.embedding.dimensions, 768);
     assert.equal("panelWidths" in sanitized.ui, false);
+  });
+
+  it("never reports auto-apply as on without an acknowledgement", () => {
+    // A settings.json hand-edited to the dangerous half of the pair must not
+    // surface as an enabled toggle in the UI.
+    const base = {
+      agentMode: "all-agents",
+      preferredAgent: "claude",
+      gcp: { projectId: "" },
+      prompts: { summary: "", digest: "" },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      ui: { fetchInterval: 0, fetchScope: "unread" },
+      dataDir: "/tmp/email-agent",
+      accounts: [],
+    } as unknown as AppConfig;
+
+    const forced = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: false },
+    });
+    assert.equal(forced.gmail.autoApplyActions, false);
+    assert.equal(forced.gmail.autoApplyAcknowledged, false);
+
+    const accepted = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
+    });
+    assert.equal(accepted.gmail.autoApplyActions, true);
+
+    // Acknowledged but not switched on stays off.
+    const armedOnly = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: true },
+    });
+    assert.equal(armedOnly.gmail.autoApplyActions, false);
+    assert.equal(armedOnly.gmail.autoApplyAcknowledged, true);
   });
 
   it("blocks cross-site and non-local mutation requests", () => {

@@ -327,16 +327,30 @@ export function parseSnapshotRestoreRequest(input: unknown): SnapshotRestoreRequ
   };
 }
 
+/** One approval request cannot reasonably target more rows than this. */
+const MAX_APPROVAL_IDS = 1000;
+
 export function parseApprovalIdsRequest(input: unknown): { ids: string[] } {
   const body = asRecord(input);
   if (!Array.isArray(body["ids"]) || body["ids"].length === 0) {
     throw new RequestValidationError("ids array is required");
   }
+  if (body["ids"].length > MAX_APPROVAL_IDS) {
+    throw new RequestValidationError(
+      `ids may not contain more than ${MAX_APPROVAL_IDS} entries`,
+    );
+  }
 
-  const ids = body["ids"].map((id, index) =>
-    requiredString(id, `ids[${index}]`),
-  );
-  return { ids };
+  const ids = body["ids"].map((id, index) => {
+    const trimmed = requiredString(id, `ids[${index}]`).trim();
+    // A blank id would widen the generated `id IN (...)` filter, so reject it.
+    if (trimmed.length === 0) {
+      throw new RequestValidationError(`ids[${index}] must not be blank`);
+    }
+    return trimmed;
+  });
+  // Duplicates would resolve the same row twice; collapse them here.
+  return { ids: [...new Set(ids)] };
 }
 
 export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
