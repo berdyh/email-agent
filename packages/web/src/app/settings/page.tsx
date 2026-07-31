@@ -327,10 +327,12 @@ export default function SettingsPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="rounded-md border border-destructive/50 bg-destructive/5 p-3">
-                    <p className="text-sm font-medium text-destructive">
+                    <p className="text-sm font-medium text-destructive-text">
                       Read this before enabling
                     </p>
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                    {/* Consequences are set at full contrast — this is the copy
+                        the decision rests on, not supporting detail. */}
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-foreground">
                       <li>
                         <span className="font-medium text-foreground">
                           Mail can be deleted.
@@ -360,8 +362,11 @@ export default function SettingsPage() {
                         or Spam folders yourself, before they are purged.
                       </li>
                       <li>
-                        This applies to every connected account and to every
-                        action you run, including scheduled and cron runs.
+                        <span className="font-medium text-foreground">
+                          It applies everywhere.
+                        </span>{" "}
+                        Every connected account and every action you run,
+                        including scheduled and cron runs.
                       </li>
                       <li>
                         <span className="font-medium text-foreground">
@@ -404,7 +409,7 @@ export default function SettingsPage() {
                       <label className="text-sm font-medium">
                         Auto-apply action results
                       </label>
-                      <p className="text-xs text-muted-foreground">
+                      <p id="auto-apply-help" className="text-xs text-muted-foreground">
                         {gmail.autoApplyAcknowledged
                           ? "Trash, spam, archive, and label changes are applied to Gmail immediately."
                           : "Accept the cautions above to unlock this option."}
@@ -413,6 +418,8 @@ export default function SettingsPage() {
                     <Switch
                       checked={gmail.autoApplyActions ?? false}
                       disabled={!gmail.autoApplyAcknowledged}
+                      aria-label="Auto-apply action results to Gmail"
+                      aria-describedby="auto-apply-help"
                       onCheckedChange={(enabled) =>
                         editLocal({
                           ...local,
@@ -426,11 +433,22 @@ export default function SettingsPage() {
                     />
                   </div>
 
-                  {gmail.autoApplyActions && (
-                    <p className="flex items-center gap-2 text-sm font-medium text-destructive">
+                  {/* Driven by the SAVED setting, not the local form state:
+                      the dangerous claim must describe what the server will
+                      actually do. Turning the switch off used to hide this
+                      warning while auto-apply was still live. */}
+                  {settings?.gmail?.autoApplyActions && (
+                    <p className="flex items-center gap-2 text-sm font-medium text-destructive-text">
                       <AlertTriangle className="h-4 w-4 shrink-0" />
-                      Auto-apply is on — actions will change your Gmail without
-                      asking. Remember to save.
+                      Auto-apply is currently ON — actions change your Gmail
+                      without asking.
+                    </p>
+                  )}
+                  {gmail.autoApplyActions !==
+                    (settings?.gmail?.autoApplyActions ?? false) && (
+                    <p className="text-sm text-muted-foreground">
+                      Unsaved change — press Save to{" "}
+                      {gmail.autoApplyActions ? "turn auto-apply on" : "turn auto-apply off"}.
                     </p>
                   )}
                 </CardContent>
