@@ -518,6 +518,22 @@ export class UnsafeActionSourceError extends Error {
 }
 
 /**
+ * A one-string explanation of why a file on disk was not loaded, listing every
+ * violation. A refused file must be diagnosable — silently skipping one is how
+ * "my action disappeared" becomes unanswerable.
+ */
+export function describeActionSourceRefusal(filename: string, err: unknown): string {
+  if (err instanceof UnsafeActionSourceError) {
+    const lines = err.violations.map((v) => `  - ${v.rule}: ${v.detail}`).join("\n");
+    return (
+      `Refusing to load ${filename}: an action file must be pure data, and this one is not. ` +
+      `Its code is NOT executed — it is parsed, and parsing found:\n${lines}`
+    );
+  }
+  return `Failed to read ${filename}: ${String(err)}`;
+}
+
+/**
  * Throw `UnsafeActionSourceError` unless `source` is a pure-data action file.
  * Call this before persisting any generated action.
  */

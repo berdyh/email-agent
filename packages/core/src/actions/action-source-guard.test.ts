@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import {
   assertSafeActionSource,
@@ -485,5 +486,23 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
       },
     );
     delete globals[probe];
+  });
+
+  it("keeps every ACTIONS_DIR import out of the load path", async () => {
+    // `new Function("p", "return import(p)")` was the webpack-proof route that
+    // ran ACTIONS_DIR files in-process. Nothing may reintroduce it.
+    const loader = await readFile(new URL("./user-actions.ts", import.meta.url), "utf8");
+    assert.doesNotMatch(loader, /return import\(/);
+    assert.doesNotMatch(loader, /new Function/);
+    assert.doesNotMatch(loader, /\bimport\(/);
+
+    // The registry may only import from its own built-in directory. Any
+    // `import()` there must be reachable from BUILT_IN_DIR and nothing else.
+    const registry = await readFile(new URL("./registry.ts", import.meta.url), "utf8");
+    for (const line of registry.split("\n")) {
+      if (!/\bawait import\(/.test(line)) continue;
+      assert.match(line, /BUILT_IN_DIR/, `registry imports something that is not a built-in: ${line}`);
+    }
+    assert.match(registry, /extractActionData/);
   });
 });

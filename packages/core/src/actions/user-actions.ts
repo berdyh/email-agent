@@ -1,8 +1,11 @@
 import { readdir, readFile, writeFile, unlink, mkdir, copyFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { pathToFileURL } from "node:url";
 import { ACTIONS_DIR } from "../config/defaults.js";
-import { assertSafeActionSource } from "./action-source-guard.js";
+import {
+  assertSafeActionSource,
+  describeActionSourceRefusal,
+  extractActionData,
+} from "./action-source-guard.js";
 import type { EmailAction } from "./types.js";
 import {
   extractActionIdFromSource,
@@ -61,10 +64,11 @@ export async function listUserActions(): Promise<UserActionMeta[]> {
 
 /** Save (or overwrite) a user action file. Snapshots previous version if it exists. */
 export async function saveUserAction(filename: string, content: string): Promise<void> {
-  // Reject before anything touches disk. A saved action is later imported
-  // in-process with full Node privileges, and its top-level code runs before
-  // the exported object is ever inspected — so this is the last point at which
-  // refusing is still cheap.
+  // Reject before anything touches disk. The load path no longer executes
+  // action files, so this is not the last line of defence any more — it is the
+  // point where refusing is cheap and the reason can be fed straight back to
+  // the model that wrote the file, instead of surfacing later as an action
+  // that mysteriously never appears.
   const safeFilename = normalizeUserActionFilename(filename);
   // Pass the name so a .action.js file is parsed as JavaScript; parsing it as
   // TypeScript would wave through syntax Node cannot actually run.
@@ -93,11 +97,16 @@ export async function deleteUserAction(filename: string): Promise<void> {
   await unlink(resolveUserActionFilePath(ACTIONS_DIR, filename));
 }
 
-// Bypass webpack's static analysis of dynamic import — defers to Node's native
-// loader so .action.ts files can be imported at runtime from outside the bundle.
-const nativeImport = new Function("p", "return import(p)") as (p: string) => Promise<unknown>;
-
-/** Dynamic-import a single user action by ID (server-side only). */
+/**
+ * Read a single user action by ID (server-side only).
+ *
+ * The file is PARSED, never imported. An action is pure data, so the parser
+ * can hand back the same object an import would have produced without the file
+ * ever entering the module graph. That is what makes the save-time guard
+ * unnecessary for safety here: a file hand-dropped into `ACTIONS_DIR`, or
+ * written before the guard existed, gets exactly the same treatment as a
+ * generated one — its code does not run either way.
+ */
 export async function loadUserAction(id: string): Promise<EmailAction | undefined> {
   let entries: string[];
   try {
@@ -119,19 +128,14 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
       const fileId = extractActionIdFromSource(content);
       if (fileId !== id) continue;
 
-      const fileUrl = pathToFileURL(resolveUserActionFilePath(ACTIONS_DIR, filename));
-      let mod: { default?: EmailAction; action?: EmailAction };
+      let action: EmailAction | undefined;
       try {
-        mod = (await nativeImport(fileUrl.href)) as {
-          default?: EmailAction;
-          action?: EmailAction;
-        };
+        action = extractActionData(content, filename);
       } catch (err) {
-        console.warn(`[loadUserAction] Failed to import ${filename}:`, err);
+        console.warn(`[loadUserAction] ${describeActionSourceRefusal(filename, err)}`);
         continue;
       }
-      const action = mod.default ?? mod.action;
-      if (action?.id && action?.name && action?.prompt) {
+      if (action) {
         action.builtIn = false;
         return action;
       }

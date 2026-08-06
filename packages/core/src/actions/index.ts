@@ -33,6 +33,7 @@ export {
 export { parseActionOutput } from "./output-parser.js";
 export {
   assertSafeActionSource,
+  extractActionData,
   findActionSourceViolations,
   UnsafeActionSourceError,
   type ActionSourceViolation,
