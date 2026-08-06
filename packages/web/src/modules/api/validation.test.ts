@@ -18,6 +18,7 @@ import {
   parseSnapshotRestoreRequest,
   parseFetchEmailsRequest,
   parseUserActionSaveRequest,
+  readGuardResponse,
   sanitizeSettingsForResponse,
 } from "./validation.js";
 
@@ -468,6 +469,78 @@ describe("web API validation", () => {
         process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = previous;
       }
     }
+  });
+
+  it("refuses a mutation that carries no browser fetch metadata at all", () => {
+    // The exact shape the old guard waved through:
+    //   curl -X POST -H 'Host: localhost:3847' http://…/api/approvals/apply
+    // `Host` is caller-controlled, so `request.url` said "local" and neither
+    // Origin nor Sec-Fetch-Site was present to contradict it.
+    const headless = new Request("http://localhost:3847/api/approvals/apply", {
+      method: "POST",
+    });
+    const response = mutationGuardResponse(headless);
+    assert.equal(response?.status, 403);
+
+    // A real browser always sends at least Sec-Fetch-Site, so the UI is unaffected.
+    const browserFetch = new Request("http://localhost:3847/api/approvals/apply", {
+      method: "POST",
+      headers: { "sec-fetch-site": "same-origin" },
+    });
+    assert.equal(mutationGuardResponse(browserFetch), undefined);
+
+    // A same-origin Origin header alone is enough too (older browsers).
+    const originOnly = new Request("http://localhost:3847/api/approvals/apply", {
+      method: "POST",
+      headers: { origin: "http://localhost:3847" },
+    });
+    assert.equal(mutationGuardResponse(originOnly), undefined);
+  });
+
+  it("keeps EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS as the full escape hatch", () => {
+    const previous = process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
+    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = "1";
+    try {
+      // Remote host, no Origin, no Sec-Fetch-Site — the documented deployment
+      // where a non-browser client is expected to write.
+      const headlessRemote = new Request("http://192.168.1.20:3847/api/approvals/apply", {
+        method: "POST",
+      });
+      assert.equal(mutationGuardResponse(headlessRemote), undefined);
+      assert.equal(readGuardResponse(headlessRemote), undefined);
+    } finally {
+      if (previous === undefined) {
+        delete process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
+      } else {
+        process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = previous;
+      }
+    }
+  });
+
+  it("guards mail reads against non-local and cross-origin callers", () => {
+    // GET /api/approvals returns subjects, senders and snippets and used to have
+    // no guard at all, so any page the user visited could read the queue.
+    const crossOrigin = new Request("http://localhost:3847/api/approvals", {
+      headers: { origin: "https://example.com", "sec-fetch-site": "cross-site" },
+    });
+    assert.equal(readGuardResponse(crossOrigin)?.status, 403);
+
+    const rebound = new Request("http://evil.example.com:3847/api/approvals");
+    assert.equal(readGuardResponse(rebound)?.status, 403);
+
+    const sameOrigin = new Request("http://localhost:3847/api/approvals", {
+      headers: { origin: "http://localhost:3847", "sec-fetch-site": "same-origin" },
+    });
+    assert.equal(readGuardResponse(sameOrigin), undefined);
+
+    // Typed into the address bar: Sec-Fetch-Site: none, no Origin. Reads stay
+    // reachable for local debugging — unlike mutations, they are not required
+    // to prove they came from the UI.
+    const addressBar = new Request("http://localhost:3847/api/approvals", {
+      headers: { "sec-fetch-site": "none" },
+    });
+    assert.equal(readGuardResponse(addressBar), undefined);
+    assert.equal(readGuardResponse(new Request("http://127.0.0.1:3847/api/approvals")), undefined);
   });
 
   it("returns generic internal errors", async () => {

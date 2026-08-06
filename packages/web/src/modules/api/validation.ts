@@ -513,19 +513,47 @@ export function validationResponse(error: unknown): Response | undefined {
   return undefined;
 }
 
-export function mutationGuardResponse(request: Request): Response | undefined {
+/**
+ * Header-level checks shared by the mutation and read guards.
+ *
+ * IMPORTANT — what this is and is not. Every input here is a request header,
+ * and a non-browser client controls all of them: `Host` (and therefore
+ * `request.url`), `Origin`, and `Sec-Fetch-*`. This function is therefore NOT
+ * the security boundary. It buys exactly two things:
+ *
+ *  1. **Anti DNS-rebinding.** A page on `evil.com` that rebinds its name to
+ *     127.0.0.1 still makes the browser send `Host: evil.com`, so the host
+ *     allowlist refuses it.
+ *  2. **Anti CSRF.** Browsers always attach `Origin`/`Sec-Fetch-Site` to
+ *     cross-origin fetches, so a hostile page cannot ride the user's session.
+ *
+ * The boundary that a header genuinely cannot defeat is the listener binding:
+ * `email-agent serve` binds the dev server to loopback unless
+ * `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`, so an off-box process cannot open the
+ * socket at all, no matter what `Host` it would have sent. A process on this
+ * machine running as this user is out of scope for both — it can read the
+ * OAuth tokens off disk and skip the app entirely.
+ */
+function localRequestViolation(
+  request: Request,
+  kind: "Mutation" | "Read",
+): Response | undefined {
   const url = new URL(request.url);
+  const allowRemote = process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] === "1";
 
-  if (
-    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] !== "1" &&
-    !LOCAL_HOSTS.has(url.hostname)
-  ) {
-    return Response.json({ error: "Mutation requests must use the local Email Agent origin" }, { status: 403 });
+  if (!allowRemote && !LOCAL_HOSTS.has(url.hostname)) {
+    return Response.json(
+      { error: `${kind} requests must use the local Email Agent origin` },
+      { status: 403 },
+    );
   }
 
   const origin = request.headers.get("origin");
   if (origin && origin !== url.origin) {
-    return Response.json({ error: "Cross-origin mutation requests are not allowed" }, { status: 403 });
+    return Response.json(
+      { error: `Cross-origin ${kind.toLowerCase()} requests are not allowed` },
+      { status: 403 },
+    );
   }
 
   const fetchSite = request.headers.get("sec-fetch-site");
@@ -535,10 +563,56 @@ export function mutationGuardResponse(request: Request): Response | undefined {
     fetchSite !== "same-site" &&
     fetchSite !== "none"
   ) {
-    return Response.json({ error: "Cross-site mutation requests are not allowed" }, { status: 403 });
+    return Response.json(
+      { error: `Cross-site ${kind.toLowerCase()} requests are not allowed` },
+      { status: 403 },
+    );
   }
 
   return undefined;
+}
+
+export function mutationGuardResponse(request: Request): Response | undefined {
+  const violation = localRequestViolation(request, "Mutation");
+  if (violation) return violation;
+
+  // Require the fetch metadata rather than only validating it when present.
+  // Every browser released since 2020 sends `Sec-Fetch-Site` on every request
+  // and `Origin` on every non-GET fetch, so this costs the real UI nothing —
+  // while the `curl -X POST -H 'Host: localhost' …` one-liner that used to
+  // satisfy the whole guard now fails. Honest framing: an attacker who adds the
+  // header still gets through. This is a speed bump, not the boundary; the
+  // boundary is the loopback bind (see `localRequestViolation`).
+  if (
+    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] !== "1" &&
+    !request.headers.get("origin") &&
+    !request.headers.get("sec-fetch-site")
+  ) {
+    return Response.json(
+      {
+        error:
+          "Mutation requests must come from the Email Agent UI (missing Origin/Sec-Fetch-Site)",
+      },
+      { status: 403 },
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * Guard for read routes that return mail content (subjects, senders, snippets)
+ * rather than just a count. `GET /api/approvals` had no guard at all, so any
+ * page the user visited could read the whole approval queue cross-origin.
+ *
+ * Unlike the mutation guard this does NOT require the fetch metadata: a user
+ * typing the URL into the address bar sends `Sec-Fetch-Site: none` (fine), but
+ * `curl` sends nothing, and refusing that would break local debugging for no
+ * security gain — reads are already reachable by anything that can open the
+ * socket.
+ */
+export function readGuardResponse(request: Request): Response | undefined {
+  return localRequestViolation(request, "Read");
 }
 
 export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSettings {

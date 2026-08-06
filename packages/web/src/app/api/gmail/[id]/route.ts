@@ -10,6 +10,7 @@ import {
   mutationGuardResponse,
   parseEmailIdentityQuery,
   parseEmailReadStatusRequest,
+  readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
 
@@ -17,6 +18,10 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // Returns the full message body; guard it like the other mail reads.
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   const { id } = await params;
 
   try {
