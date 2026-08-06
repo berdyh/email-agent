@@ -152,50 +152,75 @@ that represents the user's personal consent.
 
 ## Core actions / approval queue
 
-### Recover rows stranded in `applying`
+### Surfaces do not show rows stranded in `applying`
 **Priority:** P2
-The claim/lease means a crash mid-batch now leaves rows in `applying` rather
-than `pending`, so a later pass will NOT silently re-apply them (only `pending`
-rows can be claimed) — the dangerous half of this is fixed. What remains is
-that such rows are stranded: nothing surfaces them, nothing retries them, and
-`getPendingOperations({status:"pending"})` hides them from every UI. Needs a
-recovery path — surface stale `applying` rows past some age, and let the user
-decide whether the Gmail mutation actually landed.
-Found by: data-migration specialist and adversarial review during /ship.
+The core capability landed (feature/todos-w1-queue): call
+**`getStaleApplyingOperations({ olderThanMs? })`** — exported from
+`@email-agent/core` and `@email-agent/core/db` — to get `pending_operations`
+rows a crash left claimed. Default threshold is `STALE_APPLYING_THRESHOLD_MS`
+(15 minutes). Nothing calls it yet, so the rows are still invisible. Needed:
+a section in the web approvals panel and an `approvals stranded` (or a block
+in `approvals list`) in the CLI, each stating plainly that the Gmail change
+may or may not have landed and letting the user resolve the row by hand. Do
+NOT auto-retry — re-trashing a message that was already trashed is not free,
+and only the user can adjudicate.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); adoption deferred to
+the surfaces wave.
 
-### Auto-apply failure after the Gmail calls says "nothing was applied"
+### Surfaces still read only `queueError`
 **Priority:** P2
-`runner.ts:151-159` reuses `queueError` for auto-apply failures, and its comment
-("the rows stay queued") is false for the post-claim case.
-`applyPendingOperationsByIds` can only throw before any Gmail call (claim) or
-**after every Gmail call has completed** (`resolveClaimedOperations`,
-`approval.ts:163`). In the second case the CLI prints "could not be queued for
-approval — nothing was applied" (`run-action.ts:73-79`) and the web toasts the
-same (`actions/page.tsx:49-52`) — while the mail really was trashed or marked
-spam, and the rows sit in `applying`, invisible to every surface. The user is
-told the opposite of what happened to their mailbox. Give auto-apply failures
-their own field (`applyError`) with honest wording: "changes may have been
-applied; their outcome could not be recorded". Pairs with "Recover rows stranded
-in `applying`" above, which covers the rows but not the false reassurance.
-Found by: Fable pre-merge review, 2026-08-06.
+`ActionRunResult` now distinguishes three failures, and the surfaces collapse
+them into one message. `applyError` means auto-apply threw AFTER the rows were
+claimed, so Gmail may already have been mutated — the CLI
+(`run-action.ts:73-79`) and web (`actions/page.tsx:49-52`) still print "could
+not be queued for approval — nothing was applied", which is now not merely
+imprecise but reading the wrong field. `persistError` means the run's history
+row was lost. `duplicateOperations` counts proposals dropped because an
+identical change was already pending, so a surface can say "3 were already
+awaiting approval" instead of silently showing fewer rows than the action
+proposed. The core messages (`describeAutoApplyFailure`,
+`describeUnrecordedBatchFailure`) are already worded for display — print them
+rather than composing new copy.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); adoption deferred to
+the surfaces wave.
 
-### `resolvePendingOperations` is dead code without claim discipline
+### The retention window has no surface
 **Priority:** P3
-`db/pending-operations.ts:186-224`, exported at `db/index.ts:31`, has no
-production caller — `resolveClaimedOperations` superseded it. It resolves on a
-bare `status='pending'` predicate, so the first person to reach for it
-reintroduces exactly the claim race this branch fixed. Delete it, or un-export
-it and mark it internal.
-Found by: Fable pre-merge review, 2026-08-06.
+`retention.approvalQueueDays` (default 365) governs pruning of resolved
+`pending_operations` rows and is honoured by `loadSettings`, but the web
+Settings page cannot show or edit it: `sanitizeSettingsForResponse` and
+`SettingsUpdate` in `packages/web/src/modules/api/validation.ts` build
+explicit literals that omit it. It does survive a settings PUT — the merge
+spreads `...current` first — so the only gap is visibility, and hand-editing
+`~/.email-agent/settings.json` is currently the only way to change it. A CLI
+`approvals prune [--older-than-days N]` would also make the sweep
+inspectable rather than purely opportunistic.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
-### The claimToken migration drops the audit trail, and says it doesn't
-**Priority:** P3
-`db/connection.ts:176-187` drops the whole `pending_operations` table when the
-`claimToken` column is missing, so applied and rejected rows — the audit trail
-the feature exists to keep — go with it. The warning text mentions only
-"queued (unapproved) Gmail changes". Either preserve resolved rows the way the
-`action_results` migration now does, or state the audit-trail loss plainly.
-Found by: Fable pre-merge review, 2026-08-06.
+### Queue helpers with real-table behaviour are unit-tested only
+**Priority:** P2
+Everything wave 1 added is covered at the pure-helper level — filters,
+projections, chunking, the dedupe key, the age rule, the retention cutoff.
+What no test touches is the LanceDB behaviour they depend on: that
+`table.delete(filter)` removes exactly the rows `buildPruneFilter` selects,
+that `getPendingOperationsForEmails` returns the pending rows a dedupe check
+needs, that a chunked apply leaves the unprocessed rows claimed rather than
+pending, and above all that the drop/recreate migration really does
+round-trip an audit trail. Belongs to the integration harness below; listed
+separately because the migration case is the one whose failure mode is
+silent, irreversible data loss.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
+
+### Tighten the two fields declared optional for the surfaces' benefit
+**Priority:** P4
+`PendingOperationRecord.claimedAt` and `AppConfig.retention` are both
+declared optional purely so the `PendingOperationRecord` / `AppConfig`
+literals in `packages/cli/src/commands/approvals.test.ts` and
+`packages/web/src/modules/api/validation.test.ts` kept compiling while core
+changed on its own branch. Neither is optional in reality: the Arrow column
+is non-nullable and `normalizeSettings` always populates `retention`. Add the
+fields to those fixtures and make both required.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
 ### Cross-process claim atomicity is unconfirmed
 **Priority:** P2
@@ -209,33 +234,6 @@ path), and write down the answer.
 Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
 read-only review).
 
-### Resolve rows per operation rather than per batch
-**Priority:** P3
-Status is still written once for the whole batch after every Gmail call
-completes, so the window above exists at all. Per-row (or chunked) resolution
-would shrink it to a single operation, at the cost of one LanceDB update per
-row — LanceDB updates rewrite the table, so this is a real tradeoff at batch
-sizes above a few dozen.
-
-### Write the action_results row before enqueueing its operations
-**Priority:** P2
-`runner.ts` stamps queue rows with `batchId = resultId` and writes them before
-the parent `action_results` row, whose failure is only logged. That can leave
-queue rows referencing a batch that was never recorded, with no reconciliation.
-
-### Retention / prune policy for pending_operations
-**Priority:** P2
-Rows are append-only and never deleted (resolved rows are kept as an audit
-trail), so the table grows for the life of the install and every query scans it.
-Add `prunePendingOperations(olderThanIso)` and call it from apply/reject or
-`initDb`, or expose `approvals prune`.
-
-### Dedupe identical pending operations
-**Priority:** P3
-Re-running an action over the same unread emails before approving enqueues a
-second identical `(emailId, type)` pending row under a new batch. Neither the UI
-nor the apply path dedupes.
-
 ### The action_results migration has never met a real legacy table
 **Priority:** P2
 `initDb` drops and recreates `action_results` when the `accountId` column is
@@ -245,6 +243,13 @@ read→drop→recreate→reinsert path was reasoned through and unit-tested arou
 but never run against an actual pre-column table — and the failure mode it
 guards against is exactly the one it could cause: losing every past action run.
 Build a fixture with the old schema and exercise it before an upgrade does.
+The `pending_operations` migration now runs the same shape through the pure
+helpers in `db/migrations.ts` (`missingColumns` + `projectRowsToSchema`), which
+also strip columns the current schema no longer declares; `action_results`
+still does its own `{ ...row, accountId: "" }` spread. Adopting the shared
+helpers would make one fixture cover both — deliberately not done in wave 1,
+because changing an untested migration that can lose every past action run is
+not a free refactor.
 Found by: Codex pre-merge review, 2026-08-06.
 
 ### action_results `accountId: ""` carries two meanings
@@ -256,12 +261,6 @@ sentinel as legacy rows. Account-filtered history therefore cannot represent a
 genuine multi-account run. An explicit representation (a `mixed` marker, or
 per-account result rows) was deferred. Same theme as "Ambiguous account identity
 for queued unscoped rows" below, different table.
-
-### Column-probe self-heal for pending_operations
-**Priority:** P3
-`initDb` only checks that the table exists, unlike `emails`/`action_results`
-which probe for a missing column and drop+recreate. The first added column will
-need the established pattern.
 
 ## Core agents / executors
 
@@ -306,22 +305,6 @@ first real use is also the first test of the request shape, error handling, and
 abort propagation.
 
 ## Core config
-
-### loadSettings cache makes the auto-apply kill switch stale
-**Priority:** P1
-`loadSettings()` caches indefinitely in-process. `gmail.autoApplyActions` is the
-kill switch for unattended Gmail mutation, so a long-running `serve` process
-that read it as ON keeps auto-applying after the user turns it off, until
-restart. Stat/mtime-check `SETTINGS_PATH`, or bypass the cache for that read.
-Note for the fix: `clearSettingsCache()` — the obvious invalidation hook — was
-deleted during the audit cleanup because it had zero callers at the time
-(`chore: audit cleanup wave`). Reinstating it, or an mtime check inside
-`loadSettings`, is part of this work rather than a regression to report.
-This may be worse than "until restart": if Next.js gives each route bundle its
-own module instance, a web PUT that disables auto-apply updates one
-`cachedSettings` copy while the actions route keeps reading its own. Unverified
-(needs a running server) — check it while fixing, because it decides whether an
-mtime check is sufficient or the read must bypass the cache entirely.
 
 ### Notify when a legacy gmail.syncActions key is dropped
 **Priority:** P3
@@ -432,7 +415,10 @@ changed in between. Named-account rows are unaffected.
 31 of 32 coverage gaps are structurally untestable today: no test DB, no mocking
 layer, no React testing library, no HTTP harness. The queue persistence, API
 routes, runner gate, CLI prompts, and panel interactions all need one. Until
-then, only pure helpers are covered.
+then, only pure helpers are covered. Wave 1 added more of them — prune,
+dedupe, chunked resolution and the drop/recreate migration all have pure
+cores under test and untested LanceDB halves; see "Queue helpers with real-
+table behaviour are unit-tested only" above for the specific cases.
 
 ### No browser-level verification of the web surfaces
 **Priority:** P3
@@ -460,6 +446,116 @@ The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
 classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
+
+### loadSettings cache made the auto-apply kill switch stale
+**Completed:** feature/todos-w1-queue (2026-08-07)
+Was P1. `loadSettings()` cached the parsed config for the life of the process,
+so a long-running `serve` that read `gmail.autoApplyActions` as ON kept
+auto-applying after the user turned it off, until restart. The cache now
+carries the file identity it was read from (path + mtime + size) and re-reads
+when any of them changed; size is compared as well as mtime because a coarse
+filesystem timestamp can leave two same-millisecond writes
+indistinguishable, and a missing file is cached as "missing" so a
+settings.json created later is picked up. `clearSettingsCache()` is
+reinstated for what mtime+size cannot see (a restore that rewrites identical
+bytes with the original timestamp) and for tests.
+
+**The Next.js module-instance question is answered, and the answer was the
+bad one.** Verified from a production `next build` rather than a running
+server, so it is empirical without needing one: every route entry requires
+the single shared `webpack-runtime.js`, which holds one module registry per
+process — but webpack does not always place a module in a shared chunk.
+`app/api/auth/callback/route.js` carries its OWN inlined copy of
+`config/defaults.ts` + `config/settings.ts` (the distinctive literals
+`"Summarize the following email concisely"` and `approvalQueueDays` appear in
+`chunks/982.js`, `chunks/170.js` AND that route entry). `/api/settings` (the
+writer) loads chunk 982; `/api/approvals/apply` loads 982 and 170. So
+separate module instances DO occur, and a process-global invalidation hook
+would only ever clear the caller's own copy. The mtime revalidation is
+therefore necessary, not merely sufficient: it is per-instance and
+file-driven, so every copy converges on the file regardless of how many exist.
+Caveat: measured on the production build; dev-mode on-demand compilation was
+not checked, and the same reasoning applies to it because the mechanism is
+the file, not the cache.
+
+### Approval queue: recovery, retention, dedupe, ordering, and honest failures
+**Completed:** feature/todos-w1-queue (2026-08-07)
+Nine entries closed together because they are one path. In queue order:
+
+- **Parent row before queue rows** (was P2). Queue rows are stamped
+  `batchId = resultId` and were written before the `action_results` row,
+  whose failure was only logged — leaving rows pointing at a batch that was
+  never recorded, unattributable with nothing to reconcile against. The
+  parent is now written first; if it fails, queueing is skipped and
+  `queueError` says plainly that nothing was applied. Deliberate direction:
+  proposals are reproducible by re-running the action, orphaned queue rows
+  are not reconstructable.
+- **Dedupe identical pending operations** (was P3). An enqueue now looks up
+  still-pending rows for the batch's emails and drops proposals whose
+  `(account, message, type, sorted labels)` identity already appears there,
+  plus duplicates inside the incoming batch. Scoped to PENDING only, and
+  that is the judgement call: a re-proposal after a rejection is legitimate
+  — the user said no to one instance, and suppressing the next would hide
+  the proposal entirely, leaving them nothing to act on. Same argument for
+  `applied` (mail restored from Trash, a label re-added). What is never
+  useful is two identical rows in the pending list at once.
+  `enqueueOperations()` keeps its `string[]` return; the new
+  `enqueueOperationsDetailed()` reports what was actually written.
+- **Resolve rows per operation rather than per batch** (was P3). Implemented
+  as chunked resolution, `APPLY_RESOLUTION_CHUNK_SIZE = 10`. The argument:
+  `applyOperations` awaits one Gmail round trip per operation (~100-300ms),
+  so a chunk is ~1-3s of mutated-but-unrecorded exposure whatever the batch
+  size, while LanceDB table rewrites stay at batch/10 instead of batch. A
+  failure to record a chunk aborts the rest of the batch rather than being
+  swallowed — continuing to mutate mail whose fate cannot be written down is
+  the exact failure the gate exists to prevent.
+- **Auto-apply failure said "nothing was applied"** (was P2). It reused
+  `queueError`, whose comment claimed the rows stay queued — false
+  post-claim, since `applyPendingOperationsByIds` can throw after every Gmail
+  call completed. Auto-apply failures now set `applyError`, worded "may
+  already have been applied; their outcome could not be recorded" and
+  pointing at the stranded rows; `persistError` is new for a lost history
+  row. `queueError` means only a pre-Gmail queue failure. The surfaces still
+  read the old field — tracked above as "Surfaces still read only
+  `queueError`".
+- **Recover rows stranded in `applying`** (was P2). `claimedAt` is now
+  stamped whenever a row leaves `pending`, and
+  `getStaleApplyingOperations()` reports rows claimed longer ago than a
+  threshold (default 15 minutes). `createdAt` could not serve: it records
+  when the change was proposed, so a row queued days ago and claimed a second
+  ago would read as stranded. A row whose timestamp cannot be parsed surfaces
+  rather than hides. Deliberately a report, not an auto-retry. Surface
+  adoption is tracked above.
+- **Retention / prune policy** (was P2). `prunePendingOperations(olderThanIso)`
+  runs opportunistically after every apply and reject, counting before
+  deleting because a LanceDB delete rewrites the table. Only `applied` and
+  `rejected` are eligible: `pending`/`applying` are unresolved, and `failed`
+  is excluded on purpose — it looks terminal but it is the diagnostic record
+  of an attempted mutation the user may still be chasing. Window is
+  `retention.approvalQueueDays`, default 365; a non-positive or non-finite
+  value disables pruning rather than pruning everything, because the failure
+  that matters is losing evidence that cannot be reconstructed.
+- **The claimToken migration dropped the audit trail** (was P3). It dropped
+  the whole table, taking applied/rejected rows — the record of Gmail changes
+  that really happened — while warning only about "queued (unapproved)"
+  changes. It now reads every row, drops, recreates and re-inserts, the way
+  `action_results` does. Re-inserting is not a guess: each new column is
+  filled with its documented unset sentinel, so a queued row comes back
+  exactly as a fresh enqueue writes it.
+- **Column-probe self-heal for pending_operations** (was P3). Generalized
+  from "is `claimToken` there" to "which of the current schema's columns are
+  missing", so the next added column is handled by construction. The
+  projection also strips columns the current schema no longer declares, which
+  the `action_results` path does not do.
+- **`resolvePendingOperations` dead code** (was P3). Deleted rather than
+  un-exported: it resolved on a bare `status = 'pending'` predicate, so the
+  next caller would have reintroduced the claim race, and an "internal"
+  marker is only a comment.
+
+Everything above is covered by pure unit tests (filters, projections,
+chunking, dedupe key, age rule, retention cutoff, failure wording); the
+LanceDB halves are listed above under "Queue helpers with real-table
+behaviour are unit-tested only".
 
 ### User actions are silently broken on the declared Node floor
 **Completed:** worktree-approval-gate-bypass (2026-08-06)
