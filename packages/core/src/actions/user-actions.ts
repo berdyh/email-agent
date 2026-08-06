@@ -65,11 +65,13 @@ export async function saveUserAction(filename: string, content: string): Promise
   // in-process with full Node privileges, and its top-level code runs before
   // the exported object is ever inspected — so this is the last point at which
   // refusing is still cheap.
-  assertSafeActionSource(content);
+  const safeFilename = normalizeUserActionFilename(filename);
+  // Pass the name so a .action.js file is parsed as JavaScript; parsing it as
+  // TypeScript would wave through syntax Node cannot actually run.
+  assertSafeActionSource(content, safeFilename);
 
   await mkdir(ACTIONS_DIR, { recursive: true });
 
-  const safeFilename = normalizeUserActionFilename(filename);
   const filePath = resolveUserActionFilePath(ACTIONS_DIR, safeFilename);
 
   // Snapshot existing file before overwrite

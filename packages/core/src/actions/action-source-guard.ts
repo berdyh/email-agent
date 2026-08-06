@@ -39,6 +39,41 @@ export interface ActionSourceViolation {
   detail: string;
 }
 
+/**
+ * `declare` makes a statement ambient: it describes something assumed to exist
+ * rather than creating it, and is erased entirely. So `declare const process =
+ * "safe"` binds nothing — every later mention of `process` resolves to the real
+ * global. Treating that as a data binding would hand an action the live
+ * `process` object while every expression still looked like a literal.
+ *
+ * Decorators are rejected for the plain reason that they are call expressions
+ * attached to a declaration, and this guard's whole premise is that no call
+ * survives anywhere in the tree.
+ */
+function forbiddenModifier(statement: ts.Statement): ActionSourceViolation | undefined {
+  if (ts.canHaveDecorators(statement) && (ts.getDecorators(statement)?.length ?? 0) > 0) {
+    return {
+      rule: "decorator",
+      detail: "decorators are call expressions, which an action file may not contain",
+    };
+  }
+
+  if (ts.canHaveModifiers(statement)) {
+    const isAmbient = ts
+      .getModifiers(statement)
+      ?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword);
+    if (isAmbient === true) {
+      return {
+        rule: "ambient-declaration",
+        detail:
+          "`declare` binds nothing at runtime, so the name would resolve to a global instead of to this file's data",
+      };
+    }
+  }
+
+  return undefined;
+}
+
 /** Describes where in the file the problem is, for a human-readable message. */
 function describe(node: ts.Node, source: ts.SourceFile): string {
   const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
@@ -51,13 +86,19 @@ function describe(node: ts.Node, source: ts.SourceFile): string {
  * only from static data. Anything that could run — a call, a member access, a
  * `new`, a function, a tagged or interpolated template — is not data.
  */
-function isPureDataExpression(node: ts.Expression, safeNames: ReadonlySet<string>): boolean {
+interface DataContext {
+  safeNames: ReadonlySet<string>;
+  /** True when the target file is .js, where TypeScript syntax cannot run. */
+  isJs: boolean;
+}
+
+function isPureDataExpression(node: ts.Expression, ctx: DataContext): boolean {
   // A name is data only if this file already bound it to data. That admits the
   // natural `const PROMPT = "..."` then `prompt: PROMPT` shape, while a name
   // this file never declared (`process`, `globalThis`) resolves to a global and
   // is refused.
   if (ts.isIdentifier(node)) {
-    return safeNames.has(node.text);
+    return ctx.safeNames.has(node.text);
   }
 
   switch (node.kind) {
@@ -81,15 +122,17 @@ function isPureDataExpression(node: ts.Expression, safeNames: ReadonlySet<string
 
   // `{...} as EmailAction` / `{...} satisfies EmailAction` are type-level only.
   if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
-    return isPureDataExpression(node.expression, safeNames);
+    // `as`/`satisfies` are TypeScript-only; in a .js file they never run.
+    if (ctx.isJs) return false;
+    return isPureDataExpression(node.expression, ctx);
   }
 
   if (ts.isParenthesizedExpression(node)) {
-    return isPureDataExpression(node.expression, safeNames);
+    return isPureDataExpression(node.expression, ctx);
   }
 
   if (ts.isArrayLiteralExpression(node)) {
-    return node.elements.every((el) => ts.isExpression(el) && isPureDataExpression(el, safeNames));
+    return node.elements.every((el) => ts.isExpression(el) && isPureDataExpression(el, ctx));
   }
 
   if (ts.isObjectLiteralExpression(node)) {
@@ -99,7 +142,7 @@ function isPureDataExpression(node: ts.Expression, safeNames: ReadonlySet<string
       if (!ts.isPropertyAssignment(prop)) return false;
       // A computed key can evaluate an expression, so require a literal name.
       if (ts.isComputedPropertyName(prop.name)) return false;
-      return isPureDataExpression(prop.initializer, safeNames);
+      return isPureDataExpression(prop.initializer, ctx);
     });
   }
 
@@ -110,14 +153,23 @@ function isPureDataExpression(node: ts.Expression, safeNames: ReadonlySet<string
  * Collect every reason `source` is not a safe action file. Empty array means
  * the source is acceptable.
  */
-export function findActionSourceViolations(source: string): ActionSourceViolation[] {
+export function findActionSourceViolations(
+  source: string,
+  filename = "action.ts",
+): ActionSourceViolation[] {
   const violations: ActionSourceViolation[] = [];
+  // Actions may be saved as .action.js as well as .action.ts. TypeScript-only
+  // syntax in a .js file saves fine and then fails to import — a dead action.
+  // ScriptKind alone does not catch it (the parser accepts TS syntax in JS mode
+  // and only complains in a later grammar pass), so the small set of TS-only
+  // constructs this allowlist permits is rejected explicitly below.
+  const isJs = /\.[cm]?js$/i.test(filename);
   const sourceFile = ts.createSourceFile(
-    "action.ts",
+    filename,
     source,
     ts.ScriptTarget.ESNext,
     /* setParentNodes */ true,
-    ts.ScriptKind.TS,
+    isJs ? ts.ScriptKind.JS : ts.ScriptKind.TS,
   );
 
   // A file we cannot parse is a file we cannot reason about. Refuse it rather
@@ -136,12 +188,30 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
   // Names this file has bound to static data, built up in source order so a
   // declaration can only reference something declared above it.
   const safeNames = new Set<string>();
+  const ctx: DataContext = { safeNames, isJs };
 
   for (const statement of sourceFile.statements) {
+    const modifierViolation = forbiddenModifier(statement);
+    if (modifierViolation) {
+      violations.push({
+        rule: modifierViolation.rule,
+        detail: `${modifierViolation.detail} (${describe(statement, sourceFile)})`,
+      });
+      continue;
+    }
+
     // `import type { EmailAction } from "..."` — erased before the module runs.
     if (ts.isImportDeclaration(statement)) {
       const clause = statement.importClause;
-      if (clause?.isTypeOnly) continue;
+      if (clause?.isTypeOnly) {
+        if (isJs) {
+          violations.push({
+            rule: "typescript-in-js",
+            detail: `\`import type\` is TypeScript syntax and will not load from a .js file (${describe(statement, sourceFile)})`,
+          });
+        }
+        continue;
+      }
       violations.push({
         rule: "value-import",
         detail:
@@ -154,7 +224,15 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
     // is NOT — the module specifier is fetched and executed on import, and only
     // `isTypeOnly` distinguishes the two reliably.
     if (ts.isExportDeclaration(statement)) {
-      if (statement.isTypeOnly) continue;
+      if (statement.isTypeOnly) {
+        if (isJs) {
+          violations.push({
+            rule: "typescript-in-js",
+            detail: `\`export type\` is TypeScript syntax and will not load from a .js file (${describe(statement, sourceFile)})`,
+          });
+        }
+        continue;
+      }
       violations.push({
         rule: "value-export",
         detail: `re-exporting loads and runs the other module (${describe(statement, sourceFile)})`,
@@ -174,7 +252,7 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
         });
         continue;
       }
-      if (isPureDataExpression(statement.expression, safeNames)) continue;
+      if (isPureDataExpression(statement.expression, ctx)) continue;
       violations.push({
         rule: "computed-export",
         detail: `export default must be a name declared in this file or a literal, not an expression (${describe(statement, sourceFile)})`,
@@ -192,8 +270,15 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
           });
           continue;
         }
+        if (isJs && decl.type !== undefined) {
+          violations.push({
+            rule: "typescript-in-js",
+            detail: `a type annotation will not load from a .js file (${describe(decl, sourceFile)})`,
+          });
+          continue;
+        }
         if (decl.initializer === undefined) continue;
-        if (isPureDataExpression(decl.initializer, safeNames)) {
+        if (isPureDataExpression(decl.initializer, ctx)) {
           safeNames.add(decl.name.text);
           continue;
         }
@@ -212,6 +297,12 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
       ts.isTypeAliasDeclaration(statement) ||
       statement.kind === ts.SyntaxKind.EmptyStatement
     ) {
+      if (isJs && statement.kind !== ts.SyntaxKind.EmptyStatement) {
+        violations.push({
+          rule: "typescript-in-js",
+          detail: `type declarations will not load from a .js file (${describe(statement, sourceFile)})`,
+        });
+      }
       continue;
     }
 
@@ -245,8 +336,8 @@ export class UnsafeActionSourceError extends Error {
  * Throw `UnsafeActionSourceError` unless `source` is a pure-data action file.
  * Call this before persisting any generated action.
  */
-export function assertSafeActionSource(source: string): void {
-  const violations = findActionSourceViolations(source);
+export function assertSafeActionSource(source: string, filename?: string): void {
+  const violations = findActionSourceViolations(source, filename);
   if (violations.length > 0) {
     throw new UnsafeActionSourceError(violations);
   }

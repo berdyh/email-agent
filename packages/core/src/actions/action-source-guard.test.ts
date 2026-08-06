@@ -193,6 +193,33 @@ describe("action source guard — anything that could execute", () => {
     assert.ok(rulesFor(`const a = { id: "a" };\nexport = a;\n`).includes("export-equals"));
   });
 
+  it("rejects an ambient `declare`, which binds nothing and leaks the global", () => {
+    // `declare const process = "safe"` is erased entirely, so `process` below
+    // resolves to the REAL global while every expression still looks literal.
+    // Confirmed reachable at runtime before this was fixed.
+    const rules = rulesFor(`declare const process = "safe";
+const action = { id: "a", name: "A", description: "d", prompt: "p", leak: process };
+export default action;
+`);
+    assert.ok(rules.includes("ambient-declaration"), `got ${rules.join(",")}`);
+  });
+
+  it("rejects decorators, which are calls attached to a declaration", () => {
+    assert.ok(
+      rulesFor(`@((globalThis as any).evil) class C {}\n`).length > 0,
+    );
+  });
+
+  it("parses a .action.js file as JavaScript so TS-only syntax cannot slip in", () => {
+    const tsOnly = `const action = { id: "a", name: "A", description: "d", prompt: "p" } as const;
+export default action;
+`;
+    // Fine as TypeScript...
+    assert.deepEqual(findActionSourceViolations(tsOnly, "x.action.ts"), []);
+    // ...but a .js file with the same bytes would not load, so refuse it.
+    assert.ok(findActionSourceViolations(tsOnly, "x.action.js").length > 0);
+  });
+
   it("treats a local binding as shadowing, not as the global it names", () => {
     // `var process = "safe"` really does shadow the global inside a module, so
     // referencing it is data. Referencing an undeclared `process` is not.
