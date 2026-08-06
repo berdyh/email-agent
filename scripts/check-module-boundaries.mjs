@@ -80,6 +80,19 @@ for (const file of await collectSourceFiles(join(root, "packages"))) {
   ) {
     violations.push(`${rel}: non-API web code must not import core runtime directly`);
   }
+
+  // The deep operations path is the approval gate's one sanctioned webpack-only
+  // access to Gmail write ops (manual mail actions, click-is-the-approval).
+  // Every other consumer must go through the approval queue instead.
+  if (
+    rel.startsWith("packages/web/src/") &&
+    source.includes("@email-agent/core/gmail/operations") &&
+    rel !== "packages/web/src/app/api/gmail/[id]/route.ts"
+  ) {
+    violations.push(
+      `${rel}: @email-agent/core/gmail/operations is reserved for the manual mail route; use the approval queue`,
+    );
+  }
 }
 
 if (violations.length > 0) {
