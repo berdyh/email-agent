@@ -10,28 +10,34 @@ These are the gate's known limits. It stops the AI action pipeline from
 mutating Gmail without approval; it is not a sandbox against local code.
 
 **Read this before any other entry in this section.** The gate protects the
-app's own mutation path from an *innocently generated* action — the realistic
-failure, since these files are written by an LLM following our skill docs. It
-is not, and cannot be by any barrel/exports mechanism, a control against a
-*malicious* one. A user action's top-level code runs in-process with full Node
-privileges before anything inspects it, so a hostile action never needs a core
-symbol at all: `import("node:fs")`, read the stored OAuth tokens at
+app's own mutation path. It is not, and cannot be by any barrel/exports
+mechanism, a control against *malicious local code*: such code never needs a
+core symbol at all — `import("node:fs")`, read the stored OAuth tokens at
 `~/.email-agent/accounts/{email}/token.json` (scope `gmail.modify`), and call
 the Gmail REST API over https directly — mailbox mutated, zero queue rows,
-nothing in this repo touched. Every residual below is therefore about raising
-the bar for innocent code and keeping the audit trail honest.
+nothing in this repo touched. That case is out of scope here and always was.
+What changed is that it no longer has an entry point through the action
+pathway.
 
-**The main defense is now the save-time source guard**, not the barrels:
-`assertSafeActionSource()` (`actions/action-source-guard.ts`) runs inside
-`saveUserAction()`. It parses the file with the TypeScript compiler and accepts
-only a pure-data shape — type-only imports/exports, type declarations,
-variables initialised to literals/objects/arrays, and `export default`. A file
-that passes contains no call, member access, `new`, function, tagged or
-interpolated template, spread, computed key or getter, so there is nothing in
-it that can execute at import time. That is the right layer, because it
-inspects the file BEFORE it can ever be imported, which is the only moment
-refusing is still possible, and it closes the generate→save path for every
-residual below.
+**The main defense is that action files never execute**, not the barrels and
+not the save-time check. `extractActionData()`
+(`actions/action-source-guard.ts`) parses an `ACTIONS_DIR` file with the
+TypeScript compiler and statically evaluates it, returning the action object
+without the file ever entering the module graph — `loadUserAction()` and
+`ActionRegistry`'s user-directory pass both use it, and the
+`new Function("p", "return import(p)")` hatch is gone. `EmailAction` is pure
+data (five strings, two booleans) and `mapSingleResult` maps only the built-in
+`junk`/`subscription` ids, so an action never needed to be code in the first
+place; treating it as data removes the whole class of problem instead of
+policing it.
+
+The allowlist is unchanged and is now enforced at both ends:
+`findActionSourceViolations()` (save time, so the model gets a 422 it can act
+on) is literally `analyzeActionSource()` with the extracted values discarded.
+One traversal, deliberately — a second, parallel evaluator would drift, and the
+drift would be a bypass. A file that passes contains no call, member access,
+`new`, function, tagged or interpolated template, spread, computed key or
+getter.
 
 It must stay an AST allowlist. The first version was a regex denylist over a
 string-stripped skeleton, and review defeated it completely in one line —
@@ -46,87 +52,111 @@ was semantic rather than syntactic and no parse check could have caught it:
 `declare const process = "safe"` is an AMBIENT declaration, so it binds nothing
 and is erased whole, and every later mention of `process` resolves to the real
 global — while the guard had recorded the name as data and every expression
-still looked like a literal. Ambient statements and decorators are refused now.
-All of these are regression tests. The lesson to carry: when adding a case to
-this allowlist, ask not "is this syntax inert?" but "does this syntax BIND what
-it appears to bind at runtime?"
+still looked like a literal. Ambient statements and decorators are refused now,
+as is `using` (its disposal hook is a call the file never spells) and
+`__proto__` as an object-literal key (it sets a prototype rather than binding a
+property — found while making the evaluator produce values, because that is the
+first time the difference became observable). All of these are regression
+tests. The lesson to carry, and it now applies to name→VALUE resolution too:
+ask not "is this syntax inert?" but "does this syntax BIND what it appears to
+bind at runtime?"
 
-Its remaining limits, stated plainly: it runs only on save, so a file
-hand-dropped into `ACTIONS_DIR` is never inspected, and files written before
-the guard existed are not re-checked. Full containment would still need
-out-of-process isolation.
-
-Two facts that scope the residuals below, both measured 2026-08-06:
+Two facts that used to scope this section, both measured 2026-08-06 and now
+historical, since nothing from `ACTIONS_DIR` is imported at all:
 - From the real `ACTIONS_DIR` (`~/.email-agent/actions`) NO bare specifier
-  resolves — `@email-agent/core`, `@email-agent/core/gmail` and even
-  `googleapis` give `ERR_MODULE_NOT_FOUND`. So in the shipped install location
-  the import-a-core-symbol routes are inert; the protection there is "the
-  package is not on the action's resolution path", not the barrel privacy.
-  (Verify with `--experimental-import-meta-resolve` and an explicit parent —
-  the two-arg `import.meta.resolve` silently ignores the parent without it and
-  reports a false positive.)
+  resolved — `@email-agent/core`, `@email-agent/core/gmail` and even
+  `googleapis` gave `ERR_MODULE_NOT_FOUND`. (Verify with
+  `--experimental-import-meta-resolve` and an explicit parent — the two-arg
+  `import.meta.resolve` silently ignores the parent without it and reports a
+  false positive.)
 - The declared Node floor was 20.12, which cannot strip TS types, so
-  `.action.ts` files did not import at all there — the attack surface was
-  inert on the runtime we claimed to support and live only on newer Node (see
-  Completed: "User actions are silently broken on the declared Node floor").
-  The floor is now `>=22.18.0`, which strips types unflagged, so this is no
-  longer a hypothetical: `.action.ts` files import for real on the Node
-  version we ship against, and the residuals below apply there directly.
+  `.action.ts` files did not import at all there. The floor is now `>=22.18.0`,
+  which strips types unflagged; that still matters for the in-repo built-in
+  actions, which are real modules, but no longer for user actions.
 
-### A user action can still approve its own queue rows
-**Priority:** P2
-The direct-mutation bypass is closed (see Completed), but the approval-side
-surface is still public by necessity: the CLI can only import from the root
-barrel, and `approvals apply` / the web approvals routes legitimately need
-`enqueueOperations` and `applyPendingOperationsByIds`. So a generated action
-that goes out of its way can enqueue a batch and immediately apply it by id —
-the rows ARE recorded (audit trail intact, unlike the closed bypass), but the
-user never approved them. The generate→save path is now closed by the source
-guard, which rejects the value import this route needs before the file is ever
-written — so what remains is a hand-dropped file, i.e. the hostile-local-code
-case the section header scopes out. Downgraded from the P0 codex assigned it
-for that reason, and because the recorded rows keep the audit trail intact.
-The real fix is still option (b) from the closed item: approval
-provenance — make `applyPendingOperationsByIds` require proof that the approval
-came from a user surface (web route / CLI prompt), e.g. a token minted outside
-the module graph reachable by actions. Do not remove the exports; that breaks
-the CLI's own approvals flow.
-Found by: scoping the barrel-export fix (worktree-approval-gate-bypass,
-2026-08-06).
+### Malicious local code outside the action pathway
+**Priority:** P3 (documented residual — the honest statement of what is NOT
+covered; not a work item, and not fixable in-process)
+Nothing in `ACTIONS_DIR` executes any more, whatever put it there — generated,
+legacy pre-guard, or hand-dropped alike. That closes both of the P2 residuals
+this entry replaces (a user action enqueueing and self-applying its own queue
+rows; a user action calling `saveSettings` to arm auto-apply for itself), and
+it closes them at the source rather than at the approval surface: there is no
+longer an untrusted caller in the process to make either call.
 
-### `saveSettings` lets plugin code arm auto-apply for itself
-**Priority:** P2
-`config/index.ts` exports `saveSettings`, which accepts both auto-apply
-booleans. `normalizeSettings` only checks that `autoApplyAcknowledged` is
-`true` — never who set it — so in-process code that can reach the config
-module writes a fabricated acknowledgement and arms unattended Gmail writes
-for every subsequent run. Same shape as the existing "consent flag records
-consent" entry below, but this is the programmatic route rather than a
-hand-edited file, and it persists. Gated by the same resolution reality as the
-entries above (nothing resolves by name from `ACTIONS_DIR`) and now by the
-save-time source guard, which refuses the value import this needs — so it is a
-hostile-plugin route, not a naive one. Fix shape is the same approval
-provenance work: settings writes that arm mutation should require a
-user-surface credential rather than trusting any in-process caller.
-Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
-(2026-08-06).
+The proposed fix for both — "approval provenance", a credential proving
+`applyPendingOperationsByIds` was reached from a real user surface — was
+**rejected**, and should not be re-proposed:
+- ESM module identity is per-resolved-URL and process-global, so any function
+  the CLI can call, in-process code can call with identical standing. There is
+  no unforgeable caller identity inside one Node process.
+- The runner's auto-apply path calls apply with no user surface in the loop,
+  so the credential would have to be grantable to `ActionRunner.run`, a public
+  export. The boundary leaks by design.
+- A hostile file defeats any in-process token by spawning a fresh `node` where
+  it is the entrypoint — or skips the game and reads the OAuth tokens.
+- Stack-origin checks are spoofable via `Error.prepareStackTrace` and break
+  legitimate web callers; entrypoint registration breaks under Next HMR.
 
-### No end-to-end denied-case test through `loadUserAction()`
+What remains uncovered, stated plainly so nobody reads more into the above than
+is there: any local code running outside the action pathway can read
+`~/.email-agent/accounts/{email}/token.json` (scope `gmail.modify`) and drive
+the Gmail REST API itself, touching nothing in this repo. Containing that needs
+out-of-process isolation of the whole app, not of actions, and is out of scope
+for this section. The claim is "the action pathway cannot execute code", not
+"the machine is sandboxed".
+
+### No end-to-end denied-case test with an injectable `ACTIONS_DIR`
 **Priority:** P3
-`barrel-surface.test.ts` pins the surface at the namespace/resolution level
-(source barrels, dist barrels, `exports`-map keys, deep-path refusal), but the
-actual attack vector — a real `.action.ts` file loaded through
-`loadUserAction()`'s native-import escape hatch trying to reach Gmail mutation
-— has no test. Write a temp action file that imports `@email-agent/core/gmail`
-(and one that tries the deep operations path), load it through the real code
-path, and assert the mutating names are unreachable / the import rejects. This
-also documents empirically how bare specifiers resolve from
-`~/.email-agent/actions/`. Partly superseded: `action-source-guard.test.ts`
-now covers the save-time denial thoroughly (including the token-exfiltration
-shape), so what is still missing is only the load-side half — which needs
-`ACTIONS_DIR` to be injectable, since it is currently a homedir constant and a
-test cannot write there safely.
+Now covered: `action-source-guard.test.ts` exercises the load-side surface
+directly, because `extractActionData()` is a pure function of (source,
+filename) — round-trip extraction against a fixture object, load-time refusal
+of the enqueue-then-apply and token-exfiltration shapes, `.action.js` parsing,
+`export default` vs an exported `action` binding, safe-name resolution, and a
+regression pin proving the file did not execute (the same payload sets a global
+when imported as a module and does not when extracted). It also pins that
+`user-actions.ts` contains no `import(` at all and that every `import()` in
+`registry.ts` is reachable only from `BUILT_IN_DIR`.
+Still missing: a true end-to-end run through `loadUserAction()` /
+`ActionRegistry.loadAll()` against files on disk, which needs `ACTIONS_DIR` to
+be injectable — it is a homedir constant (`config/defaults.ts:8`) and a test
+cannot write there safely. It was verified manually by overriding `HOME`
+(2026-08-07): a pure-data action loaded with the expected object, an action
+that writes a file at import time was refused with its violations and the file
+was never written, while the same bytes under the old `new Function` import did
+write it. Making that a checked-in test means threading a directory through the
+loader or reading `ACTIONS_DIR` lazily.
 Found by: testing specialist during /review (2026-08-06).
+
+### Record which surface approved an operation
+**Priority:** P3
+**Blocked on:** "The claimToken migration drops the audit trail" (below).
+Add an `approvedVia` column to `pending_operations` — `web` | `cli` |
+`auto-apply` — written when a row is claimed. This is **attribution only, zero
+prevention**: as the residual above explains, the value is set by whichever
+in-process caller performs the apply and proves nothing about who asked for it.
+It is worth having anyway, because "was this batch applied by a person or by
+the auto-apply setting?" is currently unanswerable from the table, which is the
+one question an audit trail exists to answer.
+Blocked because LanceDB has no ALTER TABLE, so adding a column means
+drop+recreate, and the migration that would do it currently discards resolved
+rows — doing this first would destroy the very audit rows it exists to enrich.
+Fix that entry first, then add the column through the preserving path.
+
+### If `EmailAction` ever gains an executable field, extraction stops being enough
+**Priority:** P3 (conditional — no work until the trigger)
+Pure-data extraction works because `EmailAction` is five strings and two
+booleans. The moment a field has to be code — a custom result mapper, a
+lifecycle hook, a template function — a parser cannot produce it, and the only
+honest ways forward are (a) don't ship the field, or (b) load actions
+out-of-process. If (b): a child `node --permission` with no `--allow-fs-read`
+of `~/.email-agent` and no `--allow-child-process` is the shape, and this must
+land BEFORE the field does, not after.
+Note precisely what that would and would not buy: Node's permission model does
+not restrict network egress. The isolation claim would be "no token or
+filesystem access", never "no exfiltration" — an isolated action could still
+POST anything it was given to an arbitrary host. Do not let the word "sandbox"
+into the docs on the strength of it.
 
 ### The consent flag records consent, it does not prove the warnings were seen
 **Priority:** P3
@@ -461,6 +491,41 @@ classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
 
+### User action files are parsed as pure data instead of being imported
+**Completed:** feature/todos-w5-static-extraction (2026-08-07)
+Replaces the two P2 "approval provenance" entries ("A user action can still
+approve its own queue rows", "`saveSettings` lets plugin code arm auto-apply for
+itself"). Both proposed a credential proving a call came from a real user
+surface; that was rejected on the grounds recorded in the residual above (no
+unforgeable caller identity exists inside one process, and the runner's
+auto-apply path has no user surface in the loop anyway). The problem was
+upstream: untrusted files were executing in our process at all.
+`loadUserAction()` imported them through `new Function("p", "return import(p)")`
+and `ActionRegistry.loadFromDirectory()` `import()`ed every `*.action.ts` in
+`ACTIONS_DIR` on each CLI `run-action`, with only a SAVE-time guard in front —
+nothing ran at load. Since `EmailAction` is pure data and `mapSingleResult` maps
+only built-in ids, actions never needed to be code: `isPureDataExpression` became
+the value-producing `evaluatePureData`, `safeNames` became name→value, and
+`extractActionData()` returns the action object without the file entering the
+module graph. `findActionSourceViolations()` is the same traversal with values
+discarded, so save-time and load-time cannot drift. Built-ins keep native
+`import()` (in-repo, reviewed, genuinely modules). Refusals now warn with the
+full violation list at both call sites — the registry's old trailing `catch {}`
+made a rejected file simply vanish. `loadUserAction`/`loadAll` signatures are
+unchanged, so the CLI and the web route needed no edits. Also refused now:
+`__proto__` as an object-literal key, which sets a prototype rather than binding
+a property — the same "does this syntax bind what it appears to bind" failure as
+the ambient `declare` hole, and only observable once the object was actually
+being materialised. Behavioural cost, documented in CLAUDE.md and README: a
+hand-WRITTEN action that computes anything stops loading. Such a file could
+never have been saved through the app, so the only people affected are power
+users hand-authoring executable actions in `ACTIONS_DIR` — a capability the
+threat model does not want — and the refusal is loud rather than silent.
+Verified end to end with `HOME` overridden at a scratch dir: pure-data action
+loads with the expected object; an action writing a file at import time is
+refused with its violations and the file is never written; the same bytes under
+the old `new Function` import do write it.
+
 ### User actions are silently broken on the declared Node floor
 **Completed:** worktree-approval-gate-bypass (2026-08-06)
 Was P2. `package.json` engines said `>=20.12.0`; Node at that floor cannot
@@ -509,17 +574,19 @@ of a silent mutation. It is NOT an enforcement boundary: a user action runs
 in-process with full Node privileges, and
 `new URL("./gmail/operations.js", import.meta.resolve("@email-agent/core"))`
 reaches every raw mutator by path from any context where the package name
-resolves. Real enforcement needs approval provenance (see the P2 entries above)
-or out-of-process isolation. Core keeps using relative imports; web's manual
+resolves. Real enforcement came later, from a different direction entirely: user
+action files stopped being executed at all (see "User action files are parsed as
+pure data instead of being imported"), which is why the approval-provenance idea
+this entry pointed at was ultimately rejected. Core keeps using relative
+imports; web's manual
 mail actions (the click-is-the-approval path) moved to a webpack-only
 `@email-agent/core/gmail/operations` tsconfig path that Node refuses at runtime
 (`ERR_PACKAGE_PATH_NOT_EXPORTED`). Both skill docs now prohibit any import
 beyond `type { EmailAction }` and explain that mutation flows through the
 approval queue. `barrel-surface.test.ts` pins the absent exports, the surviving
-approval surface, and the runtime resolution refusal. Remaining approval-side
-residual is tracked above as "A user action can still approve its own queue
-rows". Deliberately NOT a sandbox: absolute-path `import()` of dist files by
-local code is out of scope, as the section header states.
+approval surface, and the runtime resolution refusal. Deliberately NOT a
+sandbox: absolute-path `import()` of dist files by local code is out of scope,
+as the section header states.
 
 ### Chained `.where()` silently dropped every filter but the last
 **Completed:** feature/approval-gate (2026-08-06)
