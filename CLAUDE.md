@@ -112,7 +112,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - `emails` table has `accountId` column — must be included in all insert records
 - All `.where()` string interpolation must use `escapeSql()` from `db/utils.ts` — LanceDB has no parameterized queries
 - LanceDB's DataFusion SQL parser folds unquoted identifiers to lowercase — wrap camelCase columns in backticks (e.g. `` `actionId` = '...' ``) or queries fail with `No field named actionid`. See `emails.ts` for the convention
-- `countEmails` uses `table.countRows(filter)` (single combined string) vs `getEmails` which chains `.where()` — `buildEmailFilters()` in `emails.ts` bridges both patterns
+- **Never chain `.where()`** — LanceDB's `where()` maps to `onlyIf`, which REPLACES the previous predicate instead of ANDing it, so `query().where(A).where(B)` silently matches B only (verified against `@lancedb/lancedb` 0.15.0). Always join with `" AND "` into one string. `buildEmailFilters()` / `buildPendingOperationFilters()` return arrays for exactly this join; `countEmails` passes the same combined string to `table.countRows(filter)`
 
 ### Web (Next.js)
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`

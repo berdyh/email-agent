@@ -94,8 +94,11 @@ export async function getPendingOperations(options?: {
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
   let query = table.query();
-  for (const f of buildPendingOperationFilters(options)) {
-    query = query.where(f);
+  // One combined predicate — chained .where() calls REPLACE rather than AND
+  // (see the same note in emails.ts), which would drop the status filter.
+  const filters = buildPendingOperationFilters(options);
+  if (filters.length > 0) {
+    query = query.where(filters.join(" AND "));
   }
   // Fetch all matching rows, sort newest-batch-first, then slice. LanceDB
   // applies limit before this JS sort, so limiting in-query would return an
