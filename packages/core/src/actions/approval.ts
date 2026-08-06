@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   savePendingOperations,
   claimPendingOperations,
+  getPendingOperationsForEmails,
   prunePendingOperations,
   resolveClaimedOperations,
   type PendingOperationOutcome,
@@ -112,15 +113,99 @@ export function recordToGmailOperation(
 }
 
 /**
+ * Identity of a proposed Gmail change, for dedupe purposes.
+ *
+ * Account, message, operation type and labels all participate: "archive m1"
+ * and "add label Work to m1" are different proposals, and the same message id
+ * in two accounts is two different messages. Labels are sorted so two
+ * orderings of the same set collapse. Built with `JSON.stringify` rather than
+ * a delimiter join so a value containing the delimiter cannot forge a
+ * collision.
+ */
+export function operationDedupeKey(record: PendingOperationRecord): string {
+  return JSON.stringify([
+    record.accountId,
+    record.emailId,
+    record.type,
+    [...parseLabelIds(record.labelIds)].sort(),
+  ]);
+}
+
+/**
+ * Indexes of `records` that are not already awaiting approval.
+ *
+ * Deduping is deliberately scoped to rows that are still PENDING. A
+ * re-proposal after a rejection is legitimate — the user said no to one
+ * instance, and suppressing the next one would hide the proposal entirely,
+ * leaving them no way to see or act on it. The same argument covers `applied`:
+ * the state that justified the change can recur (mail restored from Trash, a
+ * label re-added), and a queue row is a proposal, not a mutation. What is
+ * never useful is two identical rows sitting in the pending list at once,
+ * which is exactly what re-running an action over the same unread mail before
+ * approving produced.
+ *
+ * Duplicates inside the incoming batch are collapsed too, keeping the first.
+ */
+export function selectNewOperationIndexes(
+  records: readonly PendingOperationRecord[],
+  existingKeys: ReadonlySet<string>,
+): number[] {
+  const seen = new Set(existingKeys);
+  const kept: number[] = [];
+  records.forEach((record, index) => {
+    const key = operationDedupeKey(record);
+    if (seen.has(key)) return;
+    seen.add(key);
+    kept.push(index);
+  });
+  return kept;
+}
+
+export interface EnqueueOperationsResult {
+  /** Queue row ids actually written, in operation order. */
+  ids: string[];
+  /** The subset of the input operations those rows represent. */
+  operations: GmailOperation[];
+  /** How many proposals were dropped as already awaiting approval. */
+  duplicates: number;
+}
+
+/**
+ * Persist a batch of Gmail operations awaiting the user's approval, skipping
+ * proposals identical to one already queued and unapproved.
+ */
+export async function enqueueOperationsDetailed(
+  input: EnqueueOperationsInput,
+): Promise<EnqueueOperationsResult> {
+  const records = toPendingOperationRecords(input);
+  if (records.length === 0) return { ids: [], operations: [], duplicates: 0 };
+
+  // Scoped to the emails in this batch rather than reading the whole queue.
+  const existing = await getPendingOperationsForEmails([
+    ...new Set(records.map((record) => record.emailId)),
+  ]);
+  const existingKeys = new Set(existing.map(operationDedupeKey));
+  const keep = selectNewOperationIndexes(records, existingKeys);
+
+  const kept = keep.map((index) => records[index] as PendingOperationRecord);
+  await savePendingOperations(kept);
+  return {
+    ids: kept.map((record) => record.id),
+    operations: keep.map((index) => input.operations[index] as GmailOperation),
+    duplicates: records.length - kept.length,
+  };
+}
+
+/**
  * Persist a batch of Gmail operations awaiting the user's approval.
- * Returns the queue row ids, in operation order.
+ * Returns the queue row ids, in operation order. Proposals identical to a row
+ * already pending are skipped, so this can be shorter than `input.operations`.
  */
 export async function enqueueOperations(
   input: EnqueueOperationsInput,
 ): Promise<string[]> {
-  const records = toPendingOperationRecords(input);
-  await savePendingOperations(records);
-  return records.map((record) => record.id);
+  const result = await enqueueOperationsDetailed(input);
+  return result.ids;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;

@@ -5,6 +5,8 @@ import {
   chunkList,
   describeGmailOperation,
   mergeApplyResults,
+  operationDedupeKey,
+  selectNewOperationIndexes,
   toOperationOutcomes,
   isDestructiveOperation,
   parseLabelIds,
@@ -291,5 +293,72 @@ describe("retention cutoff", () => {
 
   it("defaults to a full year of history", () => {
     assert.equal(defaultConfig.retention?.approvalQueueDays, 365);
+  });
+});
+
+describe("dedupe of identical pending proposals", () => {
+  function records(operations: Parameters<typeof toPendingOperationRecords>[0]["operations"]) {
+    return toPendingOperationRecords({
+      batchId: "batch-2",
+      actionId: "junk",
+      actionName: "Junk Detector",
+      operations,
+    });
+  }
+
+  it("treats account, message, type and label set as the identity", () => {
+    const [a, b] = records([
+      { emailId: "m1", type: "addLabels", labelIds: ["Work", "Later"] },
+      { emailId: "m1", type: "addLabels", labelIds: ["Later", "Work"] },
+    ]);
+    assert.ok(a && b);
+    // Label order is not part of the proposal.
+    assert.equal(operationDedupeKey(a), operationDedupeKey(b));
+  });
+
+  it("keeps different proposals for the same message apart", () => {
+    const [trash, archive, otherAccount] = records([
+      { emailId: "m1", type: "trash" },
+      { emailId: "m1", type: "removeLabels", labelIds: ["INBOX"] },
+      { emailId: "m1", type: "trash", accountEmail: "work@example.com" },
+    ]);
+    assert.ok(trash && archive && otherAccount);
+    const keys = new Set([trash, archive, otherAccount].map(operationDedupeKey));
+    // The same Gmail id in two accounts is two different messages.
+    assert.equal(keys.size, 3);
+  });
+
+  it("drops a re-proposal of something already awaiting approval", () => {
+    // Re-running an action over the same unread mail before approving used to
+    // enqueue a second identical row under a new batch.
+    const existing = records([{ emailId: "m1", type: "trash" }]);
+    const incoming = records([
+      { emailId: "m1", type: "trash" },
+      { emailId: "m2", type: "spam" },
+    ]);
+    assert.deepEqual(
+      selectNewOperationIndexes(
+        incoming,
+        new Set(existing.map(operationDedupeKey)),
+      ),
+      [1],
+    );
+  });
+
+  it("collapses duplicates inside one batch, keeping the first", () => {
+    const incoming = records([
+      { emailId: "m1", type: "trash" },
+      { emailId: "m1", type: "trash" },
+      { emailId: "m2", type: "trash" },
+    ]);
+    assert.deepEqual(selectNewOperationIndexes(incoming, new Set()), [0, 2]);
+  });
+
+  it("keeps everything when nothing is pending", () => {
+    const incoming = records([
+      { emailId: "m1", type: "trash" },
+      { emailId: "m2", type: "spam" },
+    ]);
+    assert.deepEqual(selectNewOperationIndexes(incoming, new Set()), [0, 1]);
   });
 });

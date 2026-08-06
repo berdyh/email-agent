@@ -9,6 +9,10 @@ export type {
 } from "./types.js";
 export {
   enqueueOperations,
+  enqueueOperationsDetailed,
+  operationDedupeKey,
+  selectNewOperationIndexes,
+  type EnqueueOperationsResult,
   toPendingOperationRecords,
   recordToGmailOperation,
   parseLabelIds,

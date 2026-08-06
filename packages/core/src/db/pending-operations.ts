@@ -24,14 +24,50 @@ export function buildPendingOperationFilters(options?: {
   return filters;
 }
 
+/**
+ * `column IN (...)` over string values.
+ *
+ * `column` is a literal from this module, never user input — only the values
+ * are escaped. camelCase columns must be backticked by the caller: LanceDB's
+ * DataFusion parser folds unquoted identifiers to lowercase.
+ */
+export function buildInFilter(column: string, values: string[]): string {
+  // `IN ()` is a parse error in DataFusion, so an empty list must never reach
+  // the query builder — callers short-circuit before this point.
+  if (values.length === 0) {
+    throw new Error(`buildInFilter requires at least one value for ${column}`);
+  }
+  const quoted = values.map((value) => `'${escapeSql(value)}'`);
+  return `${column} IN (${quoted.join(", ")})`;
+}
+
 export function buildIdListFilter(ids: string[]): string {
-  // `id IN ()` is a parse error in DataFusion, so an empty list must never
-  // reach the query builder — callers short-circuit before this point.
   if (ids.length === 0) {
     throw new Error("buildIdListFilter requires at least one id");
   }
-  const quoted = ids.map((id) => `'${escapeSql(id)}'`);
-  return `id IN (${quoted.join(", ")})`;
+  return buildInFilter("id", ids);
+}
+
+/**
+ * Still-pending rows touching any of `emailIds` — the dedupe lookup for a new
+ * enqueue, scoped to the emails in question rather than scanning the whole
+ * queue.
+ */
+export function buildPendingEmailFilter(emailIds: string[]): string {
+  return `status = 'pending' AND ${buildInFilter("`emailId`", emailIds)}`;
+}
+
+export async function getPendingOperationsForEmails(
+  emailIds: string[],
+): Promise<PendingOperationRecord[]> {
+  if (emailIds.length === 0) return [];
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+  const results = await table
+    .query()
+    .where(buildPendingEmailFilter(emailIds))
+    .toArray();
+  return results as unknown as PendingOperationRecord[];
 }
 
 /**

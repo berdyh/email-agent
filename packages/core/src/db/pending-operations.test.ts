@@ -5,6 +5,8 @@ import {
   buildIdListFilter,
   buildPendingOperationFilters,
   buildPendingResolutionFilter,
+  buildInFilter,
+  buildPendingEmailFilter,
   buildPruneFilter,
   PRUNABLE_STATUSES,
   selectStaleApplyingOperations,
@@ -201,5 +203,21 @@ describe("retention prune filter", () => {
 
   it("escapes the cutoff it interpolates", () => {
     assert.ok(buildPruneFilter("a'b").includes("'a''b'"));
+  });
+});
+
+describe("dedupe lookup filter", () => {
+  it("scopes to still-pending rows for the emails in question", () => {
+    // camelCase columns need backticks or DataFusion folds them to lowercase
+    // and the query fails with "No field named emailid".
+    assert.equal(
+      buildPendingEmailFilter(["m1", "m2"]),
+      "status = 'pending' AND `emailId` IN ('m1', 'm2')",
+    );
+  });
+
+  it("escapes values and refuses an empty list", () => {
+    assert.equal(buildInFilter("`emailId`", ["a'b"]), "`emailId` IN ('a''b')");
+    assert.throws(() => buildInFilter("`emailId`", []), /at least one value/);
   });
 });

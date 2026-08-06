@@ -14,7 +14,7 @@ import {
 } from "./apply.js";
 import {
   applyPendingOperationsByIds,
-  enqueueOperations,
+  enqueueOperationsDetailed,
 } from "./approval.js";
 import { parseActionOutput } from "./output-parser.js";
 
@@ -193,18 +193,26 @@ export class ActionRunner {
 
         let queuedIds: string[] = [];
         try {
-          queuedIds = await enqueueOperations({
+          const queued = await enqueueOperationsDetailed({
             batchId: resultId,
             actionId: action.id,
             actionName: action.name,
             operations: pendingOps,
           });
+          queuedIds = queued.ids;
           // Only claim the batch is awaiting approval once it is actually
-          // persisted. Reporting pendingOperations for a batch that failed to
-          // queue tells the UI to show "N changes await your approval" for
-          // changes no approval surface can ever find.
-          result.pendingOperations = pendingOps;
-          result.batchId = resultId;
+          // persisted, and only for the rows that were really written —
+          // reporting pendingOperations for a batch that failed to queue (or
+          // for proposals dropped as duplicates of rows already awaiting
+          // approval) tells the UI to show "N changes await your approval" for
+          // changes this batch has no rows for.
+          if (queued.duplicates > 0) {
+            result.duplicateOperations = queued.duplicates;
+          }
+          if (queued.ids.length > 0) {
+            result.pendingOperations = queued.operations;
+            result.batchId = resultId;
+          }
         } catch (queueErr) {
           const message =
             queueErr instanceof Error ? queueErr.message : String(queueErr);

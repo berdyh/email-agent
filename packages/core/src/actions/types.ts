@@ -61,6 +61,13 @@ export interface ActionRunResult {
   pendingOperations?: GmailOperation[];
   /** Approval batch id (the action_results row id) when operations were enqueued. */
   batchId?: string;
+  /**
+   * How many proposed operations were dropped at enqueue time because an
+   * identical change was already pending approval. Set only when non-zero, so
+   * a surface can say "3 of these were already awaiting approval" instead of
+   * silently showing fewer rows than the action proposed.
+   */
+  duplicateOperations?: number;
   /** True when the user's opt-in auto-apply setting applied the batch immediately. */
   autoApplied?: boolean;
   /**
