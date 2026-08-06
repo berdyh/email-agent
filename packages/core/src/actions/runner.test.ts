@@ -75,13 +75,29 @@ describe("deriveResultAccountId", () => {
   });
 });
 
-describe("honest failure wording", () => {
-  it("never claims nothing was applied when the auto-apply threw", () => {
-    // The bug: auto-apply failures reused `queueError`, whose comment claimed
-    // "the rows stay queued". `applyPendingOperationsByIds` claims rows BEFORE
-    // any Gmail call, so it can also throw after every mutation completed —
-    // and the surfaces printed "nothing was applied" for mail that had really
-    // been trashed.
+describe("failure-message builders (strings only — NOT the message users see)", () => {
+  // SCOPE, stated plainly so nobody reads more into these than they check.
+  // These assert the text these two builders return. They do NOT reach any
+  // surface, and therefore do NOT pin what a user is told when an auto-apply
+  // fails.
+  //
+  // `describeAutoApplyFailure` is assigned to `ActionRunResult.applyError`,
+  // which nothing reads: the web result type omits the field, and
+  // `packages/web/src/app/actions/page.tsx` and
+  // `packages/cli/src/commands/run-action.ts` both still print the
+  // `queueError` copy. So in the failure this string was written for, the user
+  // is still told "nothing was applied" while mail may really have been
+  // trashed. Only the adoption pass tracked in TODOS.md ("Surfaces still read
+  // only `queueError`") can make that claim true, and only a test that goes
+  // through a surface can pin it.
+  //
+  // `describeUnrecordedBatchFailure` is the exception: it is assigned to
+  // `queueError`, which the surfaces do read, so its text does reach the user.
+
+  it("builds an auto-apply message that never says nothing was applied", () => {
+    // `applyPendingOperationsByIds` claims rows BEFORE any Gmail call, so it
+    // can throw after every mutation completed. The string must not be
+    // definite in either direction.
     const message = describeAutoApplyFailure("connection reset");
     assert.match(message, /may already have been applied/);
     assert.equal(/nothing was applied/i.test(message), false);
@@ -90,8 +106,9 @@ describe("honest failure wording", () => {
     assert.match(message, /applying/);
   });
 
-  it("does state plainly that nothing happened when the batch was never recorded", () => {
+  it("builds a definite message for a batch that was never recorded", () => {
     // This one CAN be definite: queueing is skipped, so Gmail is untouched.
+    // It also actually reaches the user, via `queueError`.
     const message = describeUnrecordedBatchFailure("disk full");
     assert.match(message, /Nothing was applied/);
     assert.match(message, /not queued/);

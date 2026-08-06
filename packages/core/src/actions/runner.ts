@@ -52,14 +52,21 @@ export function deriveResultAccountId(
 /**
  * Wording for an auto-apply that threw.
  *
- * This message is the one the user reads instead of looking at their mailbox,
- * so it must not claim more than we know. `applyPendingOperationsByIds` claims
- * rows before any Gmail call, which means it can only throw before the first
- * mutation OR after mutations have already completed but their outcome could
- * not be written back. From here the two are indistinguishable, so the honest
- * statement is "may have been applied" — the previous code reused
- * `queueError`, and the surfaces printed "nothing was applied" while mail had
- * really been trashed.
+ * NOT YET SHOWN TO ANYONE. This string, `result.applyError`, and
+ * `result.persistError` all exist and are populated, but **no surface reads
+ * them**: the web result type omits both fields, and the web page and the CLI
+ * still print the `queueError` copy ("could not be queued for approval —
+ * nothing was applied"). So the user-visible message in this failure is still
+ * the wrong one — it says nothing happened while mail may really have been
+ * trashed. What this branch changed is the core data, not what anybody sees.
+ * The adoption is tracked in TODOS.md ("Surfaces still read only
+ * `queueError`") and names the exact files.
+ *
+ * The wording itself must not claim more than we know.
+ * `applyPendingOperationsByIds` claims rows before any Gmail call, which means
+ * it can only throw before the first mutation OR after mutations have already
+ * completed but their outcome could not be written back. From here the two are
+ * indistinguishable, so the honest statement is "may have been applied".
  */
 export function describeAutoApplyFailure(message: string): string {
   return `Auto-apply failed after the changes were queued: ${message}. Some Gmail changes may already have been applied; their outcome could not be recorded. Review the approval queue for operations stuck in "applying" before re-running this action.`;
@@ -69,7 +76,9 @@ export function describeAutoApplyFailure(message: string): string {
  * Wording for a run whose `action_results` row could not be written.
  *
  * Nothing is queued in that case, so unlike the auto-apply message this one
- * CAN state plainly that the mailbox is untouched.
+ * CAN state plainly that the mailbox is untouched. It is assigned to
+ * `queueError`, which the surfaces DO read, so this string does reach the
+ * user — unlike `describeAutoApplyFailure` above.
  */
 export function describeUnrecordedBatchFailure(message: string): string {
   return `The action result could not be recorded (${message}), so its Gmail changes were not queued. Nothing was applied — re-run the action to propose them again.`;
@@ -243,6 +252,11 @@ export class ActionRunner {
             // `describeAutoApplyFailure`). Reusing queueError made every
             // surface print "nothing was applied" for mail that had really
             // been trashed.
+            //
+            // NOTE: no surface reads `applyError` yet, so the user still sees
+            // the wrong message here. Separating the field is a prerequisite
+            // for the fix, not the fix. See TODOS.md "Surfaces still read only
+            // `queueError`" for the files that must change.
             result.applyError = describeAutoApplyFailure(message);
           }
         }

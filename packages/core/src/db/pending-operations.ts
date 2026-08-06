@@ -203,8 +203,12 @@ export function selectStaleApplyingOperations(
  * landed, so this is deliberately a *report*, not an auto-retry: only the user
  * can decide whether the change went through.
  *
- * Approval surfaces should call this and offer the rows for review; see
- * TODOS.md ("Recover rows stranded in `applying`").
+ * NOTHING CALLS THIS YET. It is exported from `@email-agent/core` and
+ * `@email-agent/core/db` and has no caller in web or CLI, so stranded rows
+ * remain invisible on every surface — they are neither listed nor actionable.
+ * The capability exists; the recovery does not. Approval surfaces should call
+ * this and offer the rows for review; see TODOS.md ("Surfaces do not show rows
+ * stranded in `applying`") for the exact files.
  */
 export async function getStaleApplyingOperations(options?: {
   olderThanMs?: number;
