@@ -1,9 +1,21 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
 import type { AccountConfig, AppConfig, OAuthConfig } from "./types.js";
 
-let cachedSettings: AppConfig | null = null;
+/**
+ * A cached parse of one settings file, tagged with the file identity it was
+ * read from. `mtimeMs`/`size` are null when the file did not exist, so a
+ * settings.json created after the first read is still picked up.
+ */
+export interface SettingsCacheEntry {
+  path: string;
+  config: AppConfig;
+  mtimeMs: number | null;
+  size: number | null;
+}
+
+let cacheEntry: SettingsCacheEntry | null = null;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -102,21 +114,101 @@ export function normalizeSettings(
   return normalized;
 }
 
-export async function loadSettings(): Promise<AppConfig> {
-  if (cachedSettings) return cachedSettings;
+/**
+ * True when a cache entry still describes the file currently on disk.
+ *
+ * Pure so the freshness rule itself is unit-testable. Both mtime AND size are
+ * compared: coarse filesystem timestamps can leave two writes in the same
+ * millisecond indistinguishable by mtime alone, and a settings edit that flips
+ * a boolean almost always changes the byte length too.
+ */
+export function isSettingsCacheFresh(
+  entry: SettingsCacheEntry,
+  path: string,
+  stats: { mtimeMs: number; size: number } | null,
+): boolean {
+  if (entry.path !== path) return false;
+  if (stats === null) return entry.mtimeMs === null && entry.size === null;
+  return entry.mtimeMs === stats.mtimeMs && entry.size === stats.size;
+}
 
+async function statSettings(
+  path: string,
+): Promise<{ mtimeMs: number; size: number } | null> {
   try {
-    const raw = await readFile(SETTINGS_PATH, "utf-8");
-    cachedSettings = normalizeSettings(JSON.parse(raw));
+    const stats = await stat(path);
+    return { mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
-    cachedSettings = normalizeSettings({});
+    return null;
   }
-  return cachedSettings;
+}
+
+/**
+ * Loads settings from `path`, re-reading whenever the file changed on disk.
+ *
+ * The cache used to be unconditional, which made `gmail.autoApplyActions` — the
+ * kill switch for unattended Gmail mutation — stale for the life of the
+ * process: a `serve` that read it as ON kept auto-applying after the user
+ * turned it off. Re-validating against the file's mtime+size on every read
+ * keeps the file the single source of truth, which also makes the number of
+ * module instances irrelevant (each instance independently notices the change),
+ * at the cost of one `stat()` per read.
+ *
+ * Not exported from the package barrel: `loadSettings()` is the public entry
+ * point. Parameterized only so tests can exercise the freshness behaviour
+ * against a temp file instead of the user's real `~/.email-agent/settings.json`.
+ */
+export async function loadSettingsFromPath(path: string): Promise<AppConfig> {
+  const stats = await statSettings(path);
+  if (cacheEntry && isSettingsCacheFresh(cacheEntry, path, stats)) {
+    return cacheEntry.config;
+  }
+
+  let config: AppConfig;
+  try {
+    const raw = await readFile(path, "utf-8");
+    config = normalizeSettings(JSON.parse(raw));
+  } catch {
+    config = normalizeSettings({});
+  }
+
+  cacheEntry = {
+    path,
+    config,
+    mtimeMs: stats?.mtimeMs ?? null,
+    size: stats?.size ?? null,
+  };
+  return config;
+}
+
+export function loadSettings(): Promise<AppConfig> {
+  return loadSettingsFromPath(SETTINGS_PATH);
+}
+
+/**
+ * Drops the in-process settings cache, forcing the next `loadSettings()` to
+ * re-read from disk.
+ *
+ * The mtime+size check above already covers ordinary edits; this exists for the
+ * cases it cannot see — a restore that rewrites the file with its original
+ * timestamp and length, or a test that needs a guaranteed cold read.
+ */
+export function clearSettingsCache(): void {
+  cacheEntry = null;
 }
 
 export async function saveSettings(config: AppConfig): Promise<void> {
   const normalized = normalizeSettings(config);
   await mkdir(dirname(SETTINGS_PATH), { recursive: true });
   await writeFile(SETTINGS_PATH, JSON.stringify(normalized, null, 2));
-  cachedSettings = normalized;
+  // Re-stat after the write so the cached entry carries the identity of the
+  // bytes we just wrote. Caching the config against a stale (or absent) stat
+  // would make the very next read look fresh against the wrong file identity.
+  const stats = await statSettings(SETTINGS_PATH);
+  cacheEntry = {
+    path: SETTINGS_PATH,
+    config: normalized,
+    mtimeMs: stats?.mtimeMs ?? null,
+    size: stats?.size ?? null,
+  };
 }

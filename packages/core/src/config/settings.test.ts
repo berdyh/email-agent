@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { normalizeSettings } from "./settings.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
+import {
+  clearSettingsCache,
+  isSettingsCacheFresh,
+  loadSettingsFromPath,
+  normalizeSettings,
+} from "./settings.js";
 import { defaultConfig } from "./defaults.js";
 
 describe("config settings normalization", () => {
@@ -101,5 +109,122 @@ describe("config settings normalization", () => {
   it("drops oauth when its fields are malformed", () => {
     const normalized = normalizeSettings({ oauth: { clientId: 123 } });
     assert.equal("oauth" in normalized, false);
+  });
+});
+
+describe("settings cache freshness", () => {
+  const entry = {
+    path: "/tmp/settings.json",
+    config: defaultConfig,
+    mtimeMs: 100,
+    size: 42,
+  };
+
+  it("treats an unchanged file as fresh", () => {
+    assert.equal(
+      isSettingsCacheFresh(entry, "/tmp/settings.json", {
+        mtimeMs: 100,
+        size: 42,
+      }),
+      true,
+    );
+  });
+
+  it("invalidates on a changed mtime or a changed size", () => {
+    // Size is compared as well as mtime because a coarse filesystem timestamp
+    // can leave two writes in the same millisecond indistinguishable.
+    assert.equal(
+      isSettingsCacheFresh(entry, "/tmp/settings.json", {
+        mtimeMs: 101,
+        size: 42,
+      }),
+      false,
+    );
+    assert.equal(
+      isSettingsCacheFresh(entry, "/tmp/settings.json", {
+        mtimeMs: 100,
+        size: 43,
+      }),
+      false,
+    );
+  });
+
+  it("invalidates when the file appears or disappears", () => {
+    assert.equal(isSettingsCacheFresh(entry, "/tmp/settings.json", null), false);
+    const missing = { ...entry, mtimeMs: null, size: null };
+    assert.equal(
+      isSettingsCacheFresh(missing, "/tmp/settings.json", null),
+      true,
+    );
+    assert.equal(
+      isSettingsCacheFresh(missing, "/tmp/settings.json", {
+        mtimeMs: 100,
+        size: 42,
+      }),
+      false,
+    );
+  });
+
+  it("never serves one file's cache for another path", () => {
+    assert.equal(
+      isSettingsCacheFresh(entry, "/tmp/other.json", { mtimeMs: 100, size: 42 }),
+      false,
+    );
+  });
+});
+
+describe("loadSettings re-reads a changed settings file", () => {
+  let dir = "";
+  let path = "";
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), "email-agent-settings-"));
+    path = join(dir, "settings.json");
+  });
+
+  after(async () => {
+    clearSettingsCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("picks up a kill-switch flip without a restart", async () => {
+    // The regression: `gmail.autoApplyActions` is the kill switch for
+    // unattended Gmail mutation. A long-running `serve` that cached it as ON
+    // kept auto-applying after the user turned it off, until restart.
+    clearSettingsCache();
+    await writeFile(
+      path,
+      JSON.stringify({
+        gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
+      }),
+    );
+    const armed = await loadSettingsFromPath(path);
+    assert.equal(armed.gmail.autoApplyActions, true);
+
+    await writeFile(
+      path,
+      JSON.stringify({
+        gmail: { autoApplyActions: false, autoApplyAcknowledged: true },
+      }),
+    );
+    const disarmed = await loadSettingsFromPath(path);
+    assert.equal(disarmed.gmail.autoApplyActions, false);
+  });
+
+  it("serves the cached object while the file is untouched", async () => {
+    clearSettingsCache();
+    const first = await loadSettingsFromPath(path);
+    const second = await loadSettingsFromPath(path);
+    assert.equal(first, second);
+  });
+
+  it("falls back to defaults for a missing file, then notices it appear", async () => {
+    clearSettingsCache();
+    const absent = join(dir, "nope.json");
+    assert.deepEqual(await loadSettingsFromPath(absent), defaultConfig);
+
+    await writeFile(absent, JSON.stringify({ agentMode: "direct-api" }));
+    const created = await loadSettingsFromPath(absent);
+    assert.equal(created.agentMode, "direct-api");
   });
 });
