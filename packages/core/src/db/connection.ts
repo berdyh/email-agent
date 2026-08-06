@@ -11,6 +11,7 @@ import {
 } from "apache-arrow";
 import { LANCEDB_DIR } from "../config/defaults.js";
 import { VECTOR_DIMENSION } from "../shared/vector.js";
+import { missingColumns, projectRowsToSchema } from "./migrations.js";
 
 let dbPromise: Promise<Connection> | null = null;
 
@@ -80,8 +81,23 @@ const pendingOperationSchema = new Schema([
   new Field("error", new Utf8()),
   new Field("claimToken", new Utf8()),
   new Field("createdAt", new Utf8()),
+  new Field("claimedAt", new Utf8()),
   new Field("resolvedAt", new Utf8()),
 ]);
+
+/**
+ * Values for `pending_operations` columns a legacy table predates. Every
+ * column is Utf8 and "" is the schema's documented "unset" sentinel, so a
+ * migrated row lands in exactly the state a fresh enqueue would produce.
+ */
+const pendingOperationMigrationDefaults: Record<string, unknown> = {
+  claimToken: "",
+  claimedAt: "",
+  resolvedAt: "",
+  error: "",
+  labelIds: "[]",
+  accountId: "",
+};
 
 const clusterSchema = new Schema([
   new Field("id", new Utf8()),
@@ -168,22 +184,47 @@ async function runInit(): Promise<void> {
   if (!tableNames.includes("pending_operations")) {
     await conn.createEmptyTable("pending_operations", pendingOperationSchema);
   } else {
-    // Migration: ensure claimToken exists (LanceDB has no ALTER TABLE).
-    // Unlike action_results these rows are not worth preserving across a shape
-    // change — an un-applied proposal can simply be produced again by re-running
-    // the action, and re-inserting rows under a guessed shape risks approving
-    // something the user never saw.
+    // Migration: probe for ANY missing column, not just the one the last
+    // schema change added (LanceDB has no ALTER TABLE). This is the same
+    // pattern `emails`/`action_results` use, generalized so the next added
+    // column is handled by construction.
     const pendingOps = await conn.openTable("pending_operations");
     const existingSchema = await pendingOps.schema();
-    const hasClaimToken = existingSchema.fields.some(
-      (f: { name: string }) => f.name === "claimToken",
+    const requiredColumns = pendingOperationSchema.fields.map(
+      (f: { name: string }) => f.name,
     );
-    if (!hasClaimToken) {
+    const absent = missingColumns(
+      existingSchema.fields.map((f: { name: string }) => f.name),
+      requiredColumns,
+    );
+    if (absent.length > 0) {
       console.warn(
-        "Migrating pending_operations table: adding claimToken column. Any queued (unapproved) Gmail changes will be discarded — re-run the action to propose them again.",
+        `Migrating pending_operations table: adding column(s) ${absent.join(", ")}. Existing rows — including the applied/rejected audit trail — are preserved; queued rows stay queued and unclaimed.`,
+      );
+      // Preserve every row. The earlier version dropped the table outright,
+      // which took the applied/rejected audit trail — the record of Gmail
+      // changes that really happened, and the whole point of the feature —
+      // with it, while the warning mentioned only "queued (unapproved)"
+      // changes. Re-inserting is safe rather than a guess: every new column
+      // is filled with its documented unset sentinel, which reproduces the
+      // exact state a fresh enqueue produces, and the projection drops any
+      // column the current schema no longer declares.
+      const legacyRows = (await pendingOps
+        .query()
+        .toArray()) as unknown as Array<Record<string, unknown>>;
+      const preserved = projectRowsToSchema(
+        legacyRows,
+        requiredColumns,
+        pendingOperationMigrationDefaults,
       );
       await conn.dropTable("pending_operations");
-      await conn.createEmptyTable("pending_operations", pendingOperationSchema);
+      const migrated = await conn.createEmptyTable(
+        "pending_operations",
+        pendingOperationSchema,
+      );
+      if (preserved.length > 0) {
+        await migrated.add(preserved);
+      }
     }
   }
 }

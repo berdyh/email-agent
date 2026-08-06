@@ -65,6 +65,14 @@ export interface PendingOperationRecord {
    */
   claimToken: string;
   createdAt: string;
+  /**
+   * When this row left `pending` — i.e. when an apply/reject attempt claimed
+   * it. "" while unclaimed. This is the age basis for stranded-row recovery:
+   * `createdAt` records when the change was *proposed*, which can be days
+   * before a claim, so a long-queued row claimed a second ago would otherwise
+   * read as stale the moment it was picked up.
+   */
+  claimedAt: string;
   resolvedAt: string; // "" while pending
 }
 
