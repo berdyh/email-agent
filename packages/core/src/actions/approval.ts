@@ -248,20 +248,20 @@ async function pruneResolvedOperationsQuietly(): Promise<void> {
 }
 
 /**
- * How many claimed rows are applied before their outcomes are written back.
+ * How many rows are claimed, applied and resolved as one unit.
  *
  * Status used to be written once, after every Gmail call in the batch had
  * completed, so a crash anywhere in a 200-operation batch left all 200 rows
  * saying "applying" while up to 200 mailbox changes had really happened. The
- * other extreme — one status write per operation — closes that window
- * completely but costs one LanceDB update per row, and a LanceDB update
+ * other extreme — one claim/status write per operation — closes that window
+ * completely but costs two LanceDB updates per row, and a LanceDB update
  * rewrites the table.
  *
  * 10 is the compromise. `applyOperations` awaits one Gmail round trip per
  * operation (~100-300ms each), so a chunk is roughly 1-3s of exposure
  * regardless of how large the batch is, while the number of table rewrites
- * stays at batch/10 instead of batch. Approval batches in practice are tens
- * of rows, so this is usually 1-3 rewrites total.
+ * stays proportional to batch/10 instead of batch. Approval batches in
+ * practice are tens of rows.
  */
 export const APPLY_RESOLUTION_CHUNK_SIZE = 10;
 
@@ -325,6 +325,78 @@ export function mergeApplyResults(
 }
 
 /**
+ * The three side-effecting steps of a chunked apply, plus token minting.
+ *
+ * Injected rather than imported so the *sequencing* — which is the whole
+ * correctness argument below — can be tested without a LanceDB table or a
+ * Gmail account. `applyPendingOperationsByIds` supplies the real ones.
+ */
+export interface ChunkedApplyDeps {
+  /** A fresh, unguessable claim token. */
+  newToken(): string;
+  /** Moves the given rows out of `pending`; returns only the rows won. */
+  claim(
+    ids: string[],
+    token: string,
+  ): Promise<PendingOperationRecord[]>;
+  /** Performs the Gmail mutations. */
+  apply(operations: GmailOperation[]): Promise<ActionApplyResult>;
+  /** Writes the outcomes back, scoped to `token`. */
+  resolve(
+    outcomes: PendingOperationOutcome[],
+    token: string,
+  ): Promise<void>;
+}
+
+/**
+ * Claims, applies and resolves `ids` one chunk at a time.
+ *
+ * CLAIM BEFORE MUTATING. A row is moved out of `pending` and stamped with its
+ * chunk's token *before* any Gmail call, and only the rows we actually won come
+ * back. Without this, a Reject issued while an apply was in flight would
+ * succeed against still-pending rows, be reported to the user as honored, and
+ * then be silently overwritten as the apply completed — mail destroyed after
+ * the user personally refused it, which is the exact failure this whole feature
+ * exists to prevent.
+ *
+ * CLAIM PER CHUNK, not once up front. Claiming the whole batch first bounded
+ * the mutated-but-unrecorded set to one chunk but NOT the stranded set: a crash
+ * or a LanceDB failure during the first chunk left every remaining row sitting
+ * in `applying`, ineligible for approval or rejection, even though only ten had
+ * reached Gmail. With the claim inside the loop the claimed set and the
+ * in-flight set coincide, so what is actually guaranteed is: at most one chunk
+ * can be stranded in `applying`, and every id after it is still `pending` and
+ * still approvable or rejectable.
+ *
+ * A fresh token per chunk keeps the claim/lease discipline intact — resolution
+ * predicates are scoped to `claimToken` AND `status`, so a chunk can only ever
+ * write rows it personally won, and no two chunks share a scope.
+ */
+export async function applyClaimedOperationsInChunks(
+  ids: readonly string[],
+  deps: ChunkedApplyDeps,
+  chunkSize: number = APPLY_RESOLUTION_CHUNK_SIZE,
+): Promise<ActionApplyResult> {
+  const results: ActionApplyResult[] = [];
+  for (const idChunk of chunkList(ids, chunkSize)) {
+    const token = deps.newToken();
+    const rows = await deps.claim(idChunk, token);
+    // Nothing won — a concurrent apply or reject took them. Move on; the next
+    // chunk is independent.
+    if (rows.length === 0) continue;
+
+    const chunkResult = await deps.apply(rows.map(recordToGmailOperation));
+    results.push(chunkResult);
+    // Deliberately NOT wrapped: if outcomes cannot be recorded, stop rather
+    // than keep mutating mail whose fate we are unable to write down. This
+    // chunk's rows stay claimed and surface via `getStaleApplyingOperations()`;
+    // every later id is untouched and still `pending`.
+    await deps.resolve(toOperationOutcomes(rows, chunkResult), token);
+  }
+  return mergeApplyResults(results);
+}
+
+/**
  * Applies queued operations the user approved, by queue row id.
  * Only rows still in "pending" state are applied; each row is marked
  * applied/failed afterwards. Returns the aggregate apply result.
@@ -332,41 +404,21 @@ export function mergeApplyResults(
 export async function applyPendingOperationsByIds(
   ids: string[],
 ): Promise<ActionApplyResult> {
-  // CLAIM BEFORE MUTATING. Rows are moved out of `pending` and stamped with
-  // this attempt's token *before* any Gmail call, and only the rows we actually
-  // won come back. Without this, a Reject issued while an apply was in flight
-  // would succeed against still-pending rows, be reported to the user as
-  // honored, and then be silently overwritten as the apply completed — mail
-  // destroyed after the user personally refused it, which is the exact failure
-  // this whole feature exists to prevent.
-  const token = randomUUID();
-  const rows = await claimPendingOperations(ids, token, "applying");
-  if (rows.length === 0) {
+  if (ids.length === 0) {
     return { applied: 0, failed: 0, errors: [], outcomes: [] };
   }
 
-  // Apply and resolve in chunks rather than mutating the whole batch and then
-  // writing every status at the end. A crash (or a LanceDB failure) can now
-  // strand at most one chunk in `applying`, instead of the entire batch.
-  const results: ActionApplyResult[] = [];
-  for (const rowChunk of chunkList(rows, APPLY_RESOLUTION_CHUNK_SIZE)) {
-    const chunkResult = await applyOperations(
-      rowChunk.map(recordToGmailOperation),
-    );
-    results.push(chunkResult);
-    // Deliberately NOT wrapped: if outcomes cannot be recorded, stop rather
-    // than keep mutating mail whose fate we are unable to write down. The
-    // unprocessed rows stay claimed and surface via
-    // `getStaleApplyingOperations()`.
-    await resolveClaimedOperations(
-      toOperationOutcomes(rowChunk, chunkResult),
-      token,
-      new Date().toISOString(),
-    );
-  }
+  const result = await applyClaimedOperationsInChunks(ids, {
+    newToken: randomUUID,
+    claim: (chunkIds, token) =>
+      claimPendingOperations(chunkIds, token, "applying"),
+    apply: applyOperations,
+    resolve: (outcomes, token) =>
+      resolveClaimedOperations(outcomes, token, new Date().toISOString()),
+  });
 
   await pruneResolvedOperationsQuietly();
-  return mergeApplyResults(results);
+  return result;
 }
 
 /**

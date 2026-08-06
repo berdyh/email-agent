@@ -521,13 +521,27 @@ Nine entries closed together because they are one path. In queue order:
   `enqueueOperations()` keeps its `string[]` return; the new
   `enqueueOperationsDetailed()` reports what was actually written.
 - **Resolve rows per operation rather than per batch** (was P3). Implemented
-  as chunked resolution, `APPLY_RESOLUTION_CHUNK_SIZE = 10`. The argument:
-  `applyOperations` awaits one Gmail round trip per operation (~100-300ms),
-  so a chunk is ~1-3s of mutated-but-unrecorded exposure whatever the batch
-  size, while LanceDB table rewrites stay at batch/10 instead of batch. A
-  failure to record a chunk aborts the rest of the batch rather than being
-  swallowed — continuing to mutate mail whose fate cannot be written down is
-  the exact failure the gate exists to prevent.
+  as chunked claim-apply-resolve, `APPLY_RESOLUTION_CHUNK_SIZE = 10`. The
+  argument: `applyOperations` awaits one Gmail round trip per operation
+  (~100-300ms), so a chunk is ~1-3s of mutated-but-unrecorded exposure
+  whatever the batch size, while LanceDB table rewrites stay proportional to
+  batch/10 instead of batch. A failure to record a chunk aborts the rest of
+  the batch rather than being swallowed — continuing to mutate mail whose
+  fate cannot be written down is the exact failure the gate exists to
+  prevent.
+
+  The first version claimed **every** id as `applying` before the loop and
+  the comment claimed a crash stranded at most one chunk. That was false:
+  only the mutated-but-unrecorded set was bounded. A crash after the claim,
+  or a first-chunk `resolveClaimedOperations()` failure, left the entire
+  remaining batch claimed — with 200 rows, up to 200 became ineligible for
+  approval *or* rejection even though only 10 had reached Gmail. The claim is
+  now inside the loop (`applyClaimedOperationsInChunks`, dependency-injected
+  so the sequencing is testable without LanceDB or Gmail), each chunk mints
+  its own token, and what is guaranteed is now what is written down: at most
+  one chunk stranded in `applying`, every later id still `pending` and still
+  approvable or rejectable.
+  Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 - **Auto-apply failure said "nothing was applied"** (was P2). It reused
   `queueError`, whose comment claimed the rows stay queued — false
   post-claim, since `applyPendingOperationsByIds` can throw after every Gmail
