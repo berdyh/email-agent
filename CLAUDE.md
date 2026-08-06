@@ -66,7 +66,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
   - `EDIT_ACTION_SKILLS.md` (EDIT skill) — system prompt for modifying existing actions; current action code is appended to the prompt
   - Route: `packages/web/src/app/api/actions/generate/route.ts` — loads skill doc based on `mode: "create" | "edit"`, passes it as `systemPrompt` to `AgentRouter`
   - UI: `packages/web/src/components/actions/action-chat-card.tsx` + `store/action-chat-store.ts` — chat interface for create/edit conversations
-  - Saved actions go to `~/.email-agent/actions/<id>.action.ts` via `POST /api/actions/user`
+  - Saved actions go to `~/.email-agent/actions/<id>.action.ts` via `POST /api/actions/user`, gated by `assertSafeActionSource()` (`actions/action-source-guard.ts`). It rejects any value import, `import()`/`require`/`eval`/`Function`, `process`/`globalThis`, `fetch`, re-exports, and `${...}` in template literals — the route answers 422 with the violated rules so the chat can show the model what to change. It strips comments and string bodies before scanning, so prompt text mentioning "import" or "fetch" does not trip it. Save-time only: files hand-dropped into `ACTIONS_DIR` are never inspected, and `restoreSnapshot()` re-validates, so a pre-guard snapshot containing a value import will refuse to restore
 - **DB**: LanceDB vector database with Apache Arrow schemas
 
 ## Key Files

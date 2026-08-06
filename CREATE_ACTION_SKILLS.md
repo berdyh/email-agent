@@ -149,6 +149,8 @@ export default action;
 5. **Don't use relative imports** — user actions must import from `"@email-agent/core"`
 6. **Don't import anything except `type { EmailAction }`** — no Gmail helpers, no queue helpers (`enqueueOperations`, `applyPendingOperationsByIds`), no side effects at module load. The action file is a static description; all mutation goes through the approval queue, which the runner manages. A file that reaches for the mailbox directly bypasses the user's approval and must never be produced.
 
+**This is enforced, not just requested.** Saving runs a source guard that rejects the file outright if its code contains a value import, `import()`, `require`, `eval`, the `Function` constructor, `process`, `globalThis`, a `fetch` call, a re-export, or `${...}` interpolation inside a template literal. The save returns 422 with the list of violated rules. Only `import type` survives, because TypeScript erases it before the module runs. Note the guard ignores comments and string contents, so a *prompt* that happens to discuss importing, fetching, or processing email is fine — only real code is inspected.
+
 ## Response Format
 
 When you respond to the user, include:

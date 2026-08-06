@@ -78,7 +78,7 @@ When the user wants to fundamentally change what the action does, rewrite `name`
 Before returning, verify:
 - [ ] `id` unchanged (unless user requested rename)
 - [ ] Import is `from "@email-agent/core"` (not relative path)
-- [ ] No import other than `type { EmailAction }`; no Gmail/queue/network/filesystem calls anywhere in the file
+- [ ] No import other than `type { EmailAction }`; no Gmail/queue/network/filesystem calls anywhere in the file (a save-time source guard rejects the file with 422 otherwise — it inspects code only, so trigger words inside the prompt text are fine)
 - [ ] Uses `export default action`
 - [ ] `prompt` does not include email data
 - [ ] `prompt` ends with JSON array instruction
