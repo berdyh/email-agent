@@ -1,18 +1,18 @@
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
 import type { AccountConfig, AppConfig, OAuthConfig } from "./types.js";
 
 /**
- * A cached parse of one settings file, tagged with the file identity it was
- * read from. `mtimeMs`/`size` are null when the file did not exist, so a
+ * A cached parse of one settings file, tagged with a hash of the exact bytes
+ * that parse came from. `contentHash` is null when the file did not exist, so a
  * settings.json created after the first read is still picked up.
  */
 export interface SettingsCacheEntry {
   path: string;
   config: AppConfig;
-  mtimeMs: number | null;
-  size: number | null;
+  contentHash: string | null;
 }
 
 let cacheEntry: SettingsCacheEntry | null = null;
@@ -122,69 +122,89 @@ export function normalizeSettings(
 }
 
 /**
- * True when a cache entry still describes the file currently on disk.
+ * Content hash of the exact bytes a settings parse came from.
  *
- * Pure so the freshness rule itself is unit-testable. Both mtime AND size are
- * compared: coarse filesystem timestamps can leave two writes in the same
- * millisecond indistinguishable by mtime alone, and a settings edit that flips
- * a boolean almost always changes the byte length too.
+ * Hashes the raw buffer rather than a decoded string so the key is the bytes
+ * on disk, not a lossy view of them (invalid UTF-8 decodes to replacement
+ * characters and would collide).
+ */
+export function hashSettingsContent(raw: Buffer | string): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+/**
+ * True when a cache entry still describes the bytes just read from `path`.
+ *
+ * The key is a hash of content, NOT file metadata. `mtimeMs + size` is not
+ * file identity: `git checkout`, a restore from backup and `rsync --times` all
+ * reproduce a timestamp, and two settings files differing only in a boolean can
+ * be byte-for-byte the same length. That combination was reproducible — the
+ * auto-apply kill switch reported ON while the file said OFF, indefinitely.
+ * Hashing also closes a TOCTOU the stat-based check had: the metadata was read
+ * before the file contents, so an entry could tag pre-read metadata onto
+ * different bytes. Here the validated bytes ARE the parsed bytes.
+ *
+ * Pure so the freshness rule itself is unit-testable.
  */
 export function isSettingsCacheFresh(
   entry: SettingsCacheEntry,
   path: string,
-  stats: { mtimeMs: number; size: number } | null,
+  contentHash: string | null,
 ): boolean {
   if (entry.path !== path) return false;
-  if (stats === null) return entry.mtimeMs === null && entry.size === null;
-  return entry.mtimeMs === stats.mtimeMs && entry.size === stats.size;
+  return entry.contentHash === contentHash;
 }
 
-async function statSettings(
-  path: string,
-): Promise<{ mtimeMs: number; size: number } | null> {
+/** The file's bytes, or null when it does not exist / cannot be read. */
+async function readSettingsBytes(path: string): Promise<Buffer | null> {
   try {
-    const stats = await stat(path);
-    return { mtimeMs: stats.mtimeMs, size: stats.size };
+    return await readFile(path);
   } catch {
     return null;
   }
 }
 
 /**
- * Loads settings from `path`, re-reading whenever the file changed on disk.
+ * Loads settings from `path`, re-reading the file on every call.
  *
  * The cache used to be unconditional, which made `gmail.autoApplyActions` — the
  * kill switch for unattended Gmail mutation — stale for the life of the
  * process: a `serve` that read it as ON kept auto-applying after the user
- * turned it off. Re-validating against the file's mtime+size on every read
- * keeps the file the single source of truth, which also makes the number of
- * module instances irrelevant (each instance independently notices the change),
- * at the cost of one `stat()` per read.
+ * turned it off. It was then keyed on `mtimeMs + size`, which is not file
+ * identity and left the same staleness reachable (see `isSettingsCacheFresh`).
+ *
+ * settings.json is a small local file, so the honest fix is the simple one:
+ * read it every time and key the cache on a hash of the bytes actually read.
+ * The cache then only skips the JSON parse + normalization, never the read, so
+ * the file is the single source of truth on every call. That also makes the
+ * number of module instances irrelevant — each instance independently sees the
+ * current bytes — at the cost of one small read + one sha256 per call.
  *
  * Not exported from the package barrel: `loadSettings()` is the public entry
  * point. Parameterized only so tests can exercise the freshness behaviour
  * against a temp file instead of the user's real `~/.email-agent/settings.json`.
  */
 export async function loadSettingsFromPath(path: string): Promise<AppConfig> {
-  const stats = await statSettings(path);
-  if (cacheEntry && isSettingsCacheFresh(cacheEntry, path, stats)) {
+  const raw = await readSettingsBytes(path);
+  const contentHash = raw === null ? null : hashSettingsContent(raw);
+
+  // Cheap path: same path, same bytes — reuse the parse, skip nothing else.
+  if (cacheEntry && isSettingsCacheFresh(cacheEntry, path, contentHash)) {
     return cacheEntry.config;
   }
 
   let config: AppConfig;
-  try {
-    const raw = await readFile(path, "utf-8");
-    config = normalizeSettings(JSON.parse(raw));
-  } catch {
+  if (raw === null) {
     config = normalizeSettings({});
+  } else {
+    try {
+      config = normalizeSettings(JSON.parse(raw.toString("utf-8")));
+    } catch {
+      config = normalizeSettings({});
+    }
   }
 
-  cacheEntry = {
-    path,
-    config,
-    mtimeMs: stats?.mtimeMs ?? null,
-    size: stats?.size ?? null,
-  };
+  cacheEntry = { path, config, contentHash };
   return config;
 }
 
@@ -194,11 +214,11 @@ export function loadSettings(): Promise<AppConfig> {
 
 /**
  * Drops the in-process settings cache, forcing the next `loadSettings()` to
- * re-read from disk.
+ * re-parse.
  *
- * The mtime+size check above already covers ordinary edits; this exists for the
- * cases it cannot see — a restore that rewrites the file with its original
- * timestamp and length, or a test that needs a guaranteed cold read.
+ * Since the cache is keyed on content, every real edit already invalidates it;
+ * this is now only a test affordance (a guaranteed cold parse) and a belt for
+ * callers that want to drop the retained `AppConfig` object.
  */
 export function clearSettingsCache(): void {
   cacheEntry = null;
@@ -207,15 +227,13 @@ export function clearSettingsCache(): void {
 export async function saveSettings(config: AppConfig): Promise<void> {
   const normalized = normalizeSettings(config);
   await mkdir(dirname(SETTINGS_PATH), { recursive: true });
-  await writeFile(SETTINGS_PATH, JSON.stringify(normalized, null, 2));
-  // Re-stat after the write so the cached entry carries the identity of the
-  // bytes we just wrote. Caching the config against a stale (or absent) stat
-  // would make the very next read look fresh against the wrong file identity.
-  const stats = await statSettings(SETTINGS_PATH);
+  const serialized = JSON.stringify(normalized, null, 2);
+  await writeFile(SETTINGS_PATH, serialized);
+  // Key the cache on the bytes we just wrote — no re-read, no re-stat, no
+  // window in which the recorded identity could belong to different bytes.
   cacheEntry = {
     path: SETTINGS_PATH,
     config: normalized,
-    mtimeMs: stats?.mtimeMs ?? null,
-    size: stats?.size ?? null,
+    contentHash: hashSettingsContent(Buffer.from(serialized, "utf-8")),
   };
 }

@@ -451,14 +451,33 @@ classification, are pure but inlined where tests cannot reach them.
 **Completed:** feature/todos-w1-queue (2026-08-07)
 Was P1. `loadSettings()` cached the parsed config for the life of the process,
 so a long-running `serve` that read `gmail.autoApplyActions` as ON kept
-auto-applying after the user turned it off, until restart. The cache now
-carries the file identity it was read from (path + mtime + size) and re-reads
-when any of them changed; size is compared as well as mtime because a coarse
-filesystem timestamp can leave two same-millisecond writes
-indistinguishable, and a missing file is cached as "missing" so a
-settings.json created later is picked up. `clearSettingsCache()` is
-reinstated for what mtime+size cannot see (a restore that rewrites identical
-bytes with the original timestamp) and for tests.
+auto-applying after the user turned it off, until restart.
+
+The first fix keyed the cache on `path + mtimeMs + size` and was **wrong**, in
+a way that left the same staleness fully reachable: `mtimeMs + size` is not
+file identity. `git checkout`, a restore from backup, `rsync --times` and any
+editor that preserves timestamps all reproduce the mtime, and two valid
+settings files differing only in a boolean are trivially the same byte
+length. Reproduced against a built `dist` by codex (gpt-5.6-sol xhigh):
+equal-length content, mtime restored after the rewrite, and the process
+reported the kill switch ON while the file said OFF, with no bound on how
+long. The same check also had a genuine TOCTOU — the `stat()` ran before the
+`readFile`, so an entry could tag pre-read metadata onto different bytes.
+
+Settled shape: `loadSettings()` **reads the file on every call** — it is a
+small local file — and caches only the parse, keyed on a sha256 of the bytes
+it actually read. The cheap path skips the JSON parse and normalization when
+the content is unchanged; it never skips the read. That closes both the
+identity hole and the TOCTOU, because the bytes validated are the bytes
+parsed. A missing file is cached as "missing" (null hash) so a settings.json
+created later is picked up. `clearSettingsCache()` is now only a test
+affordance and a way to drop the retained object — every real edit
+invalidates by construction. The earlier commit message's claim that "every
+file change is detected" held only for changes that move mtime or size; it
+holds without qualification now. Pinned by the reviewer's exact reproduction
+in `config/settings.test.ts` ("sees a kill-switch flip that preserves BOTH
+mtime and byte length"), which asserts the equal mtime/size premise before
+asserting the new value is read.
 
 **The Next.js module-instance question is answered, and the answer was the
 bad one.** Verified from a production `next build` rather than a running

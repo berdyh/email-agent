@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
   clearSettingsCache,
+  hashSettingsContent,
   isSettingsCacheFresh,
   loadSettingsFromPath,
   normalizeSettings,
@@ -113,63 +114,51 @@ describe("config settings normalization", () => {
 });
 
 describe("settings cache freshness", () => {
+  const hashOn = hashSettingsContent('{"gmail":{"autoApplyActions":true}}');
+  const hashOff = hashSettingsContent('{"gmail":{"autoApplyActions":false}}');
   const entry = {
     path: "/tmp/settings.json",
     config: defaultConfig,
-    mtimeMs: 100,
-    size: 42,
+    contentHash: hashOn,
   };
 
-  it("treats an unchanged file as fresh", () => {
-    assert.equal(
-      isSettingsCacheFresh(entry, "/tmp/settings.json", {
-        mtimeMs: 100,
-        size: 42,
-      }),
-      true,
-    );
+  it("treats identical bytes as fresh", () => {
+    assert.equal(isSettingsCacheFresh(entry, "/tmp/settings.json", hashOn), true);
   });
 
-  it("invalidates on a changed mtime or a changed size", () => {
-    // Size is compared as well as mtime because a coarse filesystem timestamp
-    // can leave two writes in the same millisecond indistinguishable.
+  it("invalidates whenever the bytes differ", () => {
     assert.equal(
-      isSettingsCacheFresh(entry, "/tmp/settings.json", {
-        mtimeMs: 101,
-        size: 42,
-      }),
-      false,
-    );
-    assert.equal(
-      isSettingsCacheFresh(entry, "/tmp/settings.json", {
-        mtimeMs: 100,
-        size: 43,
-      }),
+      isSettingsCacheFresh(entry, "/tmp/settings.json", hashOff),
       false,
     );
   });
 
   it("invalidates when the file appears or disappears", () => {
     assert.equal(isSettingsCacheFresh(entry, "/tmp/settings.json", null), false);
-    const missing = { ...entry, mtimeMs: null, size: null };
+    const missing = { ...entry, contentHash: null };
     assert.equal(
       isSettingsCacheFresh(missing, "/tmp/settings.json", null),
       true,
     );
     assert.equal(
-      isSettingsCacheFresh(missing, "/tmp/settings.json", {
-        mtimeMs: 100,
-        size: 42,
-      }),
+      isSettingsCacheFresh(missing, "/tmp/settings.json", hashOn),
       false,
     );
   });
 
   it("never serves one file's cache for another path", () => {
+    assert.equal(isSettingsCacheFresh(entry, "/tmp/other.json", hashOn), false);
+  });
+
+  it("hashes bytes, not a decoded view of them", () => {
+    // The Buffer and string overloads must agree, so saveSettings (which hashes
+    // what it serialized) and loadSettingsFromPath (which hashes what it read)
+    // key the same content the same way.
     assert.equal(
-      isSettingsCacheFresh(entry, "/tmp/other.json", { mtimeMs: 100, size: 42 }),
-      false,
+      hashSettingsContent(Buffer.from('{"a":1}', "utf-8")),
+      hashSettingsContent('{"a":1}'),
     );
+    assert.notEqual(hashSettingsContent('{"a":1}'), hashSettingsContent('{"a":2}'));
   });
 });
 
@@ -226,5 +215,49 @@ describe("loadSettings re-reads a changed settings file", () => {
     await writeFile(absent, JSON.stringify({ agentMode: "direct-api" }));
     const created = await loadSettingsFromPath(absent);
     assert.equal(created.agentMode, "direct-api");
+  });
+
+  it("sees a kill-switch flip that preserves BOTH mtime and byte length", async () => {
+    // The reproduction that broke the previous `mtimeMs + size` cache key.
+    // Two valid settings files of identical byte length, with the mtime
+    // restored to its original value after the rewrite — exactly what
+    // `git checkout`, a restore from backup, `rsync --times` or an editor that
+    // preserves timestamps produces. Under the stat-based key the process kept
+    // reporting the auto-apply kill switch ON while the file on disk said OFF,
+    // with no bound on how long that lasted.
+    clearSettingsCache();
+    const path = join(dir, "identity.json");
+    const frozen = new Date(1_700_000_000_000);
+
+    // "true" is one byte shorter than "false"; the padding key (dropped by
+    // normalizeSettings) makes the two files the same length.
+    const armed = '{"gmail":{"autoApplyActions":true,"autoApplyAcknowledged":true},"pad":"xx"}';
+    const disarmed = '{"gmail":{"autoApplyActions":false,"autoApplyAcknowledged":true},"pad":"x"}';
+    assert.equal(
+      Buffer.byteLength(armed),
+      Buffer.byteLength(disarmed),
+      "test fixture must produce equal-length files",
+    );
+
+    await writeFile(path, armed);
+    await utimes(path, frozen, frozen);
+    const before = await stat(path);
+    assert.equal((await loadSettingsFromPath(path)).gmail.autoApplyActions, true);
+
+    await writeFile(path, disarmed);
+    await utimes(path, frozen, frozen);
+    const afterStats = await stat(path);
+
+    // Pin the premise: the file identity the old cache keyed on is unchanged.
+    assert.equal(afterStats.mtimeMs, before.mtimeMs);
+    assert.equal(afterStats.size, before.size);
+
+    // ...and the kill switch is still read correctly, because the cache key is
+    // a hash of the bytes actually read.
+    assert.equal(
+      (await loadSettingsFromPath(path)).gmail.autoApplyActions,
+      false,
+      "kill switch must follow the file, not its mtime+size",
+    );
   });
 });
