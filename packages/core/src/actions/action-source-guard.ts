@@ -58,7 +58,8 @@ import type { EmailAction } from "./types.js";
  *
  * And the module semantics themselves are modelled, not assumed: a named export
  * is a LIVE binding read at the end of evaluation, while `export default`
- * snapshots its operand where it stands.
+ * snapshots its operand where it stands, and `mod.default ?? mod.action` falls
+ * back on the VALUE being nullish rather than on the default export's presence.
  *
  * Remaining limits, stated plainly: this stops code in `ACTIONS_DIR` files from
  * running, whatever put them there — it does nothing about malicious local code
@@ -638,10 +639,12 @@ export function extractActionData(
   }
 
   // Mirrors the runtime resolution this replaces: `mod.default ?? mod.action`.
-  const exported = analysis.defaultExport ?? analysis.namedActionExport;
-  if (!exported) return undefined;
-
-  const value = exported.value;
+  // `??` acts on the VALUE, not on "was a default export present": a file with
+  // `export default null` alongside `export const action = {…}` resolves to the
+  // NAMED action at runtime, because `null ?? mod.action` is `mod.action`. An
+  // absent default export is `undefined`, which the same expression covers, so
+  // presence never needs to be consulted separately.
+  const value = analysis.defaultExport?.value ?? analysis.namedActionExport?.value;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 
   // The same three fields every caller checked after importing. Anything else

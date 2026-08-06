@@ -434,6 +434,23 @@ var action = { id: "second", name: "J", description: "d", prompt: "p" };
       "first",
     );
   });
+
+  it("falls back to the named export on the default export's VALUE", () => {
+    // `mod.default ?? mod.action` tests the value, not whether a default export
+    // exists. Testing the wrapper picked a `{ value: null }` and returned
+    // nothing, dropping a perfectly good named action.
+    assert.equal(
+      extractActionData(
+        `export const action = { id: "named", name: "N", description: "d", prompt: "p" };
+export default null;
+`,
+        "x.action.ts",
+      )?.id,
+      "named",
+    );
+    // Nothing to fall back to: still nothing.
+    assert.equal(extractActionData(`export default null;\n`, "x.action.ts"), undefined);
+  });
 });
 
 describe("action source extraction (load path)", () => {
