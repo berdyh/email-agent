@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { applyOperations } from "@email-agent/core/actions";
+import { rejectPendingOperationsByIds } from "@email-agent/core/actions";
+import { initDb } from "@email-agent/core/db";
 import {
   internalErrorResponse,
   mutationGuardResponse,
-  parseApplyActionsRequest,
+  parseApprovalIdsRequest,
   validationResponse,
 } from "@/modules/api/validation";
 
@@ -12,14 +13,15 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseApplyActionsRequest(await request.json());
+    const { ids } = parseApprovalIdsRequest(await request.json());
 
-    const result = await applyOperations(body.operations, body.accountEmail);
-    return NextResponse.json(result);
+    await initDb();
+    const rejected = await rejectPendingOperationsByIds(ids);
+    return NextResponse.json({ rejected });
   } catch (err) {
     const validation = validationResponse(err);
     if (validation) return validation;
 
-    return internalErrorResponse(err, "Failed to apply Gmail operations");
+    return internalErrorResponse(err, "Failed to reject operations");
   }
 }

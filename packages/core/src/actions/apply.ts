@@ -10,6 +10,7 @@ import type {
   ActionEmailResult,
   GmailOperation,
   ActionApplyResult,
+  OperationOutcome,
 } from "./types.js";
 
 export type OperationAccountLookup = ReadonlyMap<string, string | null>;
@@ -137,6 +138,7 @@ export async function applyOperations(
   let applied = 0;
   let failed = 0;
   const errors: Array<{ emailId: string; error: string }> = [];
+  const outcomes: OperationOutcome[] = [];
 
   for (const op of operations) {
     const operationAccountEmail = op.accountEmail ?? accountEmail;
@@ -154,39 +156,35 @@ export async function applyOperations(
         case "markUnread":
           await markAsUnread(op.emailId, operationAccountEmail);
           break;
+        // A label operation with no labels, or an operation type this build
+        // does not know, must NOT count as applied: the queue would retire the
+        // row as a completed Gmail mutation that never happened. Approved
+        // instructions are only ever discarded loudly.
         case "addLabels":
-          if (op.labelIds?.length) {
-            await addLabels(op.emailId, op.labelIds, operationAccountEmail);
+          if (!op.labelIds?.length) {
+            throw new Error("addLabels operation carries no label ids");
           }
+          await addLabels(op.emailId, op.labelIds, operationAccountEmail);
           break;
         case "removeLabels":
-          if (op.labelIds?.length) {
-            await removeLabels(op.emailId, op.labelIds, operationAccountEmail);
+          if (!op.labelIds?.length) {
+            throw new Error("removeLabels operation carries no label ids");
           }
+          await removeLabels(op.emailId, op.labelIds, operationAccountEmail);
           break;
+        default:
+          throw new Error(`Unsupported Gmail operation type "${op.type}"`);
       }
       applied++;
+      outcomes.push({ emailId: op.emailId, type: op.type, ok: true });
     } catch (err) {
       failed++;
-      errors.push({
-        emailId: op.emailId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const error = err instanceof Error ? err.message : String(err);
+      errors.push({ emailId: op.emailId, error });
+      outcomes.push({ emailId: op.emailId, type: op.type, ok: false, error });
     }
   }
 
-  return { applied, failed, errors };
+  return { applied, failed, errors, outcomes };
 }
 
-/**
- * Returns a summary of operations grouped by type for display.
- */
-export function summarizeOperations(
-  operations: GmailOperation[],
-): Record<string, number> {
-  const summary: Record<string, number> = {};
-  for (const op of operations) {
-    summary[op.type] = (summary[op.type] ?? 0) + 1;
-  }
-  return summary;
-}

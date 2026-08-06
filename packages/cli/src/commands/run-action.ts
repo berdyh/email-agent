@@ -5,14 +5,19 @@ import ora from "ora";
 import {
   initDb,
   getEmails,
+  getPendingOperations,
   recordToGmailMessage,
   ActionRegistry,
   ActionRunner,
-  applyOperations,
   buildOperationAccountLookup,
-  summarizeOperations,
 } from "@email-agent/core";
-import type { GmailOperation } from "@email-agent/core";
+import {
+  applyOperationIds,
+  loadOperationDisplays,
+  printOperationList,
+  rejectOperationIds,
+  reviewOperations,
+} from "./approvals.js";
 
 export function registerRunAction(program: Command) {
   program
@@ -62,18 +67,33 @@ export function registerRunAction(program: Command) {
           );
           console.log(chalk.dim(JSON.stringify(result.output, null, 2)));
 
-          // Show auto-applied results
-          if (result.applyResult) {
+          // Gmail changes are queued first. They are only applied without a
+          // prompt when the user turned on auto-apply and accepted its
+          // warnings in Settings; otherwise ask for approval here.
+          if (result.queueError) {
+            console.log(
+              chalk.red(
+                `\nThe action proposed Gmail changes but they could not be queued for approval — nothing was applied.`,
+              ),
+            );
+            console.log(chalk.dim(`  ${result.queueError}`));
+          } else if (result.applyResult) {
             const { applied, failed } = result.applyResult;
             console.log(
-              chalk.green(`\nAuto-applied: ${applied} operations`) +
-                (failed > 0 ? chalk.red(`, ${failed} failed`) : ""),
+              chalk.yellow(
+                `\nAuto-apply is ON — applied ${applied} Gmail changes without asking`,
+              ) + (failed > 0 ? chalk.red(`, ${failed} failed`) : ""),
             );
-          }
-
-          // Prompt for pending operations
-          if (result.pendingOperations?.length) {
-            await promptApplyOperations(result.pendingOperations, options.account);
+            for (const err of result.applyResult.errors) {
+              console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
+            }
+            console.log(
+              chalk.dim(
+                "Disable it in the web UI under Settings → Gmail to review changes before they apply.",
+              ),
+            );
+          } else if (result.pendingOperations?.length && result.batchId) {
+            await promptApproval(result.batchId);
           }
         } else {
           spinner.fail(`"${action.name}" failed: ${result.error}`);
@@ -86,36 +106,46 @@ export function registerRunAction(program: Command) {
     });
 }
 
-async function promptApplyOperations(
-  operations: GmailOperation[],
-  accountEmail?: string,
-): Promise<void> {
-  const summary = summarizeOperations(operations);
-  const summaryStr = Object.entries(summary)
-    .map(([type, count]) => `${count} ${type}`)
-    .join(", ");
+async function promptApproval(batchId: string): Promise<void> {
+  const ops = await getPendingOperations({ status: "pending", batchId });
+  if (ops.length === 0) {
+    console.log(
+      chalk.yellow(
+        "\nThe action proposed Gmail changes but they could not be queued for approval — nothing was applied.",
+      ),
+    );
+    return;
+  }
 
-  console.log(chalk.yellow(`\nPending Gmail changes: ${summaryStr}`));
+  console.log(chalk.yellow(`\nGmail changes awaiting your approval:`));
+  const displays = await loadOperationDisplays(ops);
+  printOperationList(displays);
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let answer: string;
   try {
-    const answer = await rl.question("Apply changes to Gmail? [y/N] ");
-    if (answer.trim().toLowerCase() === "y") {
-      const applySpinner = ora("Applying changes to Gmail...").start();
-      const result = await applyOperations(operations, accountEmail);
-      applySpinner.succeed(
-        `Applied ${result.applied} operations` +
-          (result.failed > 0 ? chalk.red(`, ${result.failed} failed`) : ""),
-      );
-      if (result.errors.length > 0) {
-        for (const err of result.errors) {
-          console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
-        }
-      }
-    } else {
-      console.log(chalk.dim("Skipped."));
-    }
+    answer = (
+      await rl.question(
+        "\nApply? [a]ll / [r]eview each / [s]kip for later [a/r/S] ",
+      )
+    )
+      .trim()
+      .toLowerCase();
   } finally {
     rl.close();
+  }
+
+  if (answer === "a") {
+    await applyOperationIds(ops.map((op) => op.id));
+  } else if (answer === "r") {
+    const { approved, rejected } = await reviewOperations(displays);
+    await applyOperationIds(approved);
+    await rejectOperationIds(rejected);
+  } else {
+    console.log(
+      chalk.dim(
+        "Left pending — review later with `email-agent approvals` or in the web UI.",
+      ),
+    );
   }
 }

@@ -1,5 +1,14 @@
 export { getDb, initDb } from "./connection.js";
-export { emailsTable, actionResultsTable, clustersTable } from "./schema.js";
+export {
+  emailsTable,
+  actionResultsTable,
+  clustersTable,
+  pendingOperationsTable,
+  type EmailRecord,
+  type ActionResultRecord,
+  type PendingOperationRecord,
+  type PendingOperationStatus,
+} from "./schema.js";
 export {
   upsertEmails,
   getEmails,
@@ -12,6 +21,20 @@ export {
   buildEmailFilters,
 } from "./emails.js";
 export { saveActionResult, getActionResults } from "./actions.js";
+export {
+  savePendingOperations,
+  getPendingOperations,
+  getPendingOperationsByIds,
+  countPendingOperations,
+  claimPendingOperations,
+  resolveClaimedOperations,
+  resolvePendingOperations,
+  buildPendingOperationFilters,
+  buildIdListFilter,
+  buildPendingResolutionFilter,
+  buildClaimFilter,
+  type PendingOperationOutcome,
+} from "./pending-operations.js";
 export { saveClusters } from "./clusters.js";
 export { generateEmbedding, generateEmbeddings } from "./embeddings.js";
 export { recordToGmailMessage } from "./record-mapper.js";

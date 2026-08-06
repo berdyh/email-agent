@@ -18,11 +18,17 @@ export async function getActionResults(options?: {
   const db = await getDb();
   const table = await db.openTable(actionResultsTable);
   let query = table.query();
+  // One combined predicate — chained .where() calls REPLACE rather than AND
+  // (see the note in emails.ts), which would drop the actionId filter.
+  const filters: string[] = [];
   if (options?.actionId) {
-    query = query.where(`\`actionId\` = '${escapeSql(options.actionId)}'`);
+    filters.push(`\`actionId\` = '${escapeSql(options.actionId)}'`);
   }
   if (options?.accountId !== undefined) {
-    query = query.where(`\`accountId\` = '${escapeSql(options.accountId)}'`);
+    filters.push(`\`accountId\` = '${escapeSql(options.accountId)}'`);
+  }
+  if (filters.length > 0) {
+    query = query.where(filters.join(" AND "));
   }
   // Fetch all matching rows, sort newest-first, then slice. LanceDB applies
   // limit before this JS sort, so limiting in-query would return an arbitrary

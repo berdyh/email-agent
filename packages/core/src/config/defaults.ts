@@ -27,7 +27,8 @@ export const defaultConfig: AppConfig = {
     dimensions: VECTOR_DIMENSION,
   },
   gmail: {
-    syncActions: false,
+    autoApplyActions: false,
+    autoApplyAcknowledged: false,
   },
   ui: {
     fetchInterval: 0,

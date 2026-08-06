@@ -67,6 +67,22 @@ const actionResultSchema = new Schema([
   new Field("createdAt", new Utf8()),
 ]);
 
+const pendingOperationSchema = new Schema([
+  new Field("id", new Utf8()),
+  new Field("batchId", new Utf8()),
+  new Field("actionId", new Utf8()),
+  new Field("actionName", new Utf8()),
+  new Field("accountId", new Utf8()),
+  new Field("emailId", new Utf8()),
+  new Field("type", new Utf8()),
+  new Field("labelIds", new Utf8()),
+  new Field("status", new Utf8()),
+  new Field("error", new Utf8()),
+  new Field("claimToken", new Utf8()),
+  new Field("createdAt", new Utf8()),
+  new Field("resolvedAt", new Utf8()),
+]);
+
 const clusterSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("name", new Utf8()),
@@ -147,5 +163,27 @@ async function runInit(): Promise<void> {
 
   if (!tableNames.includes("clusters")) {
     await conn.createEmptyTable("clusters", clusterSchema);
+  }
+
+  if (!tableNames.includes("pending_operations")) {
+    await conn.createEmptyTable("pending_operations", pendingOperationSchema);
+  } else {
+    // Migration: ensure claimToken exists (LanceDB has no ALTER TABLE).
+    // Unlike action_results these rows are not worth preserving across a shape
+    // change — an un-applied proposal can simply be produced again by re-running
+    // the action, and re-inserting rows under a guessed shape risks approving
+    // something the user never saw.
+    const pendingOps = await conn.openTable("pending_operations");
+    const existingSchema = await pendingOps.schema();
+    const hasClaimToken = existingSchema.fields.some(
+      (f: { name: string }) => f.name === "claimToken",
+    );
+    if (!hasClaimToken) {
+      console.warn(
+        "Migrating pending_operations table: adding claimToken column. Any queued (unapproved) Gmail changes will be discarded — re-run the action to propose them again.",
+      );
+      await conn.dropTable("pending_operations");
+      await conn.createEmptyTable("pending_operations", pendingOperationSchema);
+    }
   }
 }

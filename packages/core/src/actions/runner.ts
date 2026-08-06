@@ -9,10 +9,13 @@ import type {
 } from "./types.js";
 import {
   mapResultToOperations,
-  applyOperations,
   scopeOperationsToAccounts,
   type OperationAccountLookup,
 } from "./apply.js";
+import {
+  applyPendingOperationsByIds,
+  enqueueOperations,
+} from "./approval.js";
 import { parseActionOutput } from "./output-parser.js";
 
 const router = new AgentRouter();
@@ -89,6 +92,7 @@ export class ActionRunner {
 
       const output = parseActionOutput(agentResult.text, emailIds);
 
+      const resultId = randomUUID();
       const result: ActionRunResult = {
         actionId: action.id,
         status: "success",
@@ -105,18 +109,60 @@ export class ActionRunner {
         accountEmailByMessageId,
       );
 
+      // Gmail mutations always go through the approval queue first, so every
+      // proposed change is recorded before anything touches Gmail. They are
+      // applied here only when the user opted into auto-apply AND accepted its
+      // warnings in Settings; otherwise they wait for an explicit approval in
+      // the web panel or CLI. The batch id ties queue rows to the action result.
       if (pendingOps.length > 0) {
-        const settings = await loadSettings();
-        if (settings.gmail.syncActions) {
-          result.applyResult = await applyOperations(pendingOps, accountEmail);
-        } else {
+        let queuedIds: string[] = [];
+        try {
+          queuedIds = await enqueueOperations({
+            batchId: resultId,
+            actionId: action.id,
+            actionName: action.name,
+            operations: pendingOps,
+          });
+          // Only claim the batch is awaiting approval once it is actually
+          // persisted. Reporting pendingOperations for a batch that failed to
+          // queue tells the UI to show "N changes await your approval" for
+          // changes no approval surface can ever find.
           result.pendingOperations = pendingOps;
+          result.batchId = resultId;
+        } catch (queueErr) {
+          const message =
+            queueErr instanceof Error ? queueErr.message : String(queueErr);
+          console.error(
+            `Failed to queue pending operations for "${action.id}": ${message}`,
+          );
+          result.queueError = message;
+        }
+
+        if (queuedIds.length > 0) {
+          try {
+            const settings = await loadSettings();
+            if (settings.gmail.autoApplyActions) {
+              result.applyResult =
+                await applyPendingOperationsByIds(queuedIds);
+              // Set only after the apply resolves, so `autoApplied` never
+              // claims a batch was applied when the attempt threw.
+              result.autoApplied = true;
+            }
+          } catch (applyErr) {
+            const message =
+              applyErr instanceof Error ? applyErr.message : String(applyErr);
+            console.error(
+              `Failed to auto-apply operations for "${action.id}": ${message}`,
+            );
+            // The rows stay queued, so the user can still approve them by hand.
+            result.queueError = message;
+          }
         }
       }
 
-      // Persist to DB in its own try/catch: the Gmail mutations in applyResult
-      // are already real, so a persistence failure must not be reported to the
-      // caller as a failed run.
+      // Persist to DB in its own try/catch: the run itself succeeded and its
+      // operations are already queued, so a persistence failure must not be
+      // reported to the caller as a failed run.
       try {
         // An explicit accountEmail is authoritative. Otherwise (an "all
         // accounts" run) derive the account from the per-message lookup so a
@@ -127,7 +173,7 @@ export class ActionRunner {
           deriveResultAccountId(emailIds, accountEmailByMessageId);
 
         await saveActionResult({
-          id: randomUUID(),
+          id: resultId,
           actionId: action.id,
           accountId: resultAccountId,
           status: "success",

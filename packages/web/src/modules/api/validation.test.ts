@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { AppConfig } from "@email-agent/core/config";
 import {
   internalErrorResponse,
   mergeSettingsUpdate,
@@ -8,7 +9,7 @@ import {
   parseActionRunRequest,
   parseAccountDeleteRequest,
   parseAccountPostRequest,
-  parseApplyActionsRequest,
+  parseApprovalIdsRequest,
   parseEmailIdRequest,
   parseEmailIdentityQuery,
   parseEmailListQuery,
@@ -129,19 +130,10 @@ describe("web API validation", () => {
     assert.throws(() => parseEmailIdentityQuery(new URLSearchParams()), /accountId/);
   });
 
-  it("validates apply-actions and snapshot restore requests", () => {
-    assert.equal(
-      parseApplyActionsRequest({
-        operations: [{ emailId: "m1", type: "trash" }],
-      }).operations[0]?.type,
-      "trash",
-    );
-    assert.equal(
-      parseApplyActionsRequest({
-        operations: [{ emailId: "m1", type: "trash", accountEmail: "" }],
-      }).operations[0]?.accountEmail,
-      "",
-    );
+  it("validates approval-ids and snapshot restore requests", () => {
+    assert.deepEqual(parseApprovalIdsRequest({ ids: ["op-1", "op-2"] }), {
+      ids: ["op-1", "op-2"],
+    });
     assert.equal(
       parseSnapshotRestoreRequest({
         snapshotFilename: "custom.action.ts.2026-06-26T10-00-00-000Z.ts",
@@ -149,17 +141,26 @@ describe("web API validation", () => {
       }).originalFilename,
       "custom.action.ts",
     );
-    assert.throws(() => parseApplyActionsRequest({ operations: [] }), /operations/);
-    assert.throws(
-      () => parseApplyActionsRequest({ operations: [{ emailId: "m1", type: "archive" }] }),
-      /type/,
-    );
+    assert.throws(() => parseApprovalIdsRequest({ ids: [] }), /ids/);
+    assert.throws(() => parseApprovalIdsRequest({}), /ids/);
+    assert.throws(() => parseApprovalIdsRequest({ ids: ["op-1", 7] }), /ids\[1\]/);
+    // A blank id would widen the IN(...) filter over the queue; reject it.
+    assert.throws(() => parseApprovalIdsRequest({ ids: ["  "] }), /ids\[0\]/);
+    assert.throws(() => parseApprovalIdsRequest(null), /object/);
+    assert.throws(() => parseApprovalIdsRequest({ ids: "op-1" }), /ids/);
+    assert.deepEqual(parseApprovalIdsRequest({ ids: [" op-1 "] }), {
+      ids: ["op-1"],
+    });
+    // Duplicates would resolve the same queue row twice.
+    assert.deepEqual(parseApprovalIdsRequest({ ids: ["op-1", "op-1"] }), {
+      ids: ["op-1"],
+    });
     assert.throws(
       () =>
-        parseApplyActionsRequest({
-          operations: [{ emailId: "m1", type: "addLabels", labelIds: "INBOX" }],
+        parseApprovalIdsRequest({
+          ids: Array.from({ length: 1001 }, (_, i) => `op-${i}`),
         }),
-      /labelIds/,
+      /more than 1000/,
     );
     assert.throws(
       () =>
@@ -188,12 +189,28 @@ describe("web API validation", () => {
   });
 
   it("accepts only object settings updates", () => {
-    assert.deepEqual(parseSettingsUpdateRequest({ gmail: { syncActions: true } }), {
-      gmail: { syncActions: true },
+    assert.deepEqual(parseSettingsUpdateRequest({ ui: { fetchInterval: 10 } }), {
+      ui: { fetchInterval: 10 },
     });
     assert.throws(() => parseSettingsUpdateRequest([]), /object/);
     assert.throws(() => parseSettingsUpdateRequest({ unknown: true }), /Unknown setting/);
-    assert.throws(() => parseSettingsUpdateRequest({ gmail: { syncActions: "yes" } }), /syncActions/);
+    // Legacy nested keys are dropped rather than rejected, like every other section.
+    assert.deepEqual(parseSettingsUpdateRequest({ gmail: { syncActions: true } }), {
+      gmail: {},
+    });
+    assert.throws(
+      () => parseSettingsUpdateRequest({ gmail: { autoApplyActions: "yes" } }),
+      /autoApplyActions/,
+    );
+    assert.throws(
+      () => parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: 1 } }),
+      /autoApplyAcknowledged/,
+    );
+    // A null acknowledgement is read as "not acknowledged", never as "keep".
+    assert.deepEqual(
+      parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: null } }),
+      { gmail: { autoApplyAcknowledged: false } },
+    );
   });
 
   it("validates a full settings update shape", () => {
@@ -212,7 +229,6 @@ describe("web API validation", () => {
         model: "qwen/qwen3-embedding-0.6b",
         dimensions: 768,
       },
-      gmail: { syncActions: true },
       ui: {
         panelWidths: [25, 35, 40],
         fetchInterval: 15,
@@ -263,7 +279,7 @@ describe("web API validation", () => {
         gcp: { projectId: "project" },
         prompts: { summary: "s", digest: "d" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
-        gmail: { syncActions: false },
+        gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "all",
@@ -279,28 +295,41 @@ describe("web API validation", () => {
     assert.equal("panelWidths" in merged.ui, false);
   });
 
-  it("keeps omitted gmail settings during partial updates", () => {
-    const update = parseSettingsUpdateRequest({ gmail: {} });
-    const merged = mergeSettingsUpdate(
-      {
-        agentMode: "all-agents",
-        preferredAgent: "claude",
-        gcp: { projectId: "" },
-        prompts: { summary: "", digest: "" },
-        embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
-        gmail: { syncActions: true },
-        ui: {
-          fetchInterval: 0,
-          fetchScope: "unread",
-        },
-        dataDir: "/tmp/email-agent",
-        accounts: [],
-      },
-      update,
-    );
+  it("never enables auto-apply without an acknowledgement in the same config", () => {
+    const base: AppConfig = {
+      agentMode: "all-agents",
+      preferredAgent: "claude",
+      gcp: { projectId: "" },
+      prompts: { summary: "", digest: "" },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
+      ui: { fetchInterval: 0, fetchScope: "unread" },
+      dataDir: "/tmp/email-agent",
+      accounts: [],
+    };
 
-    assert.equal(merged.gmail.syncActions, true);
-    assert.equal(merged.embedding.dimensions, 768);
+    // Toggle alone: rejected.
+    const forced = mergeSettingsUpdate(
+      base,
+      parseSettingsUpdateRequest({ gmail: { autoApplyActions: true } }),
+    );
+    assert.equal(forced.gmail.autoApplyActions, false);
+
+    // Toggle plus acknowledgement: honored.
+    const accepted = mergeSettingsUpdate(
+      base,
+      parseSettingsUpdateRequest({
+        gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
+      }),
+    );
+    assert.equal(accepted.gmail.autoApplyActions, true);
+
+    // Revoking the acknowledgement switches auto-apply back off.
+    const revoked = mergeSettingsUpdate(
+      { ...base, gmail: { autoApplyActions: true, autoApplyAcknowledged: true } },
+      parseSettingsUpdateRequest({ gmail: { autoApplyAcknowledged: false } }),
+    );
+    assert.equal(revoked.gmail.autoApplyActions, false);
   });
 
   it("ignores an accounts key in settings updates (managed by account endpoints)", () => {
@@ -314,7 +343,7 @@ describe("web API validation", () => {
         gcp: { projectId: "" },
         prompts: { summary: "", digest: "" },
         embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
-        gmail: { syncActions: false },
+        gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
         ui: {
           fetchInterval: 0,
           fetchScope: "unread",
@@ -345,7 +374,7 @@ describe("web API validation", () => {
       gcp: { projectId: "" },
       prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 1536 },
-      gmail: { syncActions: false },
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
       ui: {
         fetchInterval: 0,
         fetchScope: "unread",
@@ -361,6 +390,42 @@ describe("web API validation", () => {
     assert.equal("customCliKey" in sanitized, false);
     assert.equal(sanitized.embedding.dimensions, 768);
     assert.equal("panelWidths" in sanitized.ui, false);
+  });
+
+  it("never reports auto-apply as on without an acknowledgement", () => {
+    // A settings.json hand-edited to the dangerous half of the pair must not
+    // surface as an enabled toggle in the UI.
+    const base = {
+      agentMode: "all-agents",
+      preferredAgent: "claude",
+      gcp: { projectId: "" },
+      prompts: { summary: "", digest: "" },
+      embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+      ui: { fetchInterval: 0, fetchScope: "unread" },
+      dataDir: "/tmp/email-agent",
+      accounts: [],
+    } as unknown as AppConfig;
+
+    const forced = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: false },
+    });
+    assert.equal(forced.gmail.autoApplyActions, false);
+    assert.equal(forced.gmail.autoApplyAcknowledged, false);
+
+    const accepted = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
+    });
+    assert.equal(accepted.gmail.autoApplyActions, true);
+
+    // Acknowledged but not switched on stays off.
+    const armedOnly = sanitizeSettingsForResponse({
+      ...base,
+      gmail: { autoApplyActions: false, autoApplyAcknowledged: true },
+    });
+    assert.equal(armedOnly.gmail.autoApplyActions, false);
+    assert.equal(armedOnly.gmail.autoApplyAcknowledged, true);
   });
 
   it("blocks cross-site and non-local mutation requests", () => {

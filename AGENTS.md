@@ -30,11 +30,15 @@ npx email-agent accounts remove <email>  # Remove account
 npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
+npx email-agent approvals          # List Gmail changes queued for approval
+npx email-agent approvals review   # Approve/reject each queued change interactively (--batch <id>)
+npx email-agent approvals apply    # Approve and apply queued changes in bulk (--batch <id>)
+npx email-agent approvals reject   # Reject queued changes without applying (--batch <id>)
 npx email-agent serve              # Start web UI
 npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope)
 npx email-agent cron status        # Show current crontab entry
 npx email-agent cron remove        # Remove crontab entry
-npx email-agent config get <key>   # Read config value (dotted path, e.g. gmail.syncActions)
+npx email-agent config get <key>   # Read config value (dotted path, e.g. ui.fetchScope)
 npx email-agent config set <key> <value>  # Set config value
 ```
 
@@ -56,6 +60,8 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - **Unread sync reconciliation**: Complete unread-scoped syncs should mark same-account local unread rows as read when Gmail no longer returns them; do not use whole-table overwrite to clear stale unread rows.
 - **Agent system**: Strategy pattern executors (Codex SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
+- **Approval gate**: Action runs never mutate Gmail directly. `ActionRunner` maps results to Gmail operations and always enqueues them in the LanceDB `pending_operations` table first (`actions/approval.ts`, batchId = action_results row id). Mutations then happen via `applyPendingOperationsByIds()` after explicit user approval: the web `ApprovalPanel` on `/actions` (`/api/approvals*`) or the CLI (`run-action` prompt, `approvals` command). Resolved rows stay as an audit trail. Manual per-email clicks in the mail UI stay immediate — the click is the approval.
+- **Auto-apply opt-in** (`gmail.autoApplyActions` + `gmail.autoApplyAcknowledged`): applies the queued batch immediately instead of waiting for approval. Both flags are required — `normalizeSettings()` (core) and `normalizeGmailConfig()` (web validation) force the toggle off unless the acknowledgement is set, and CLI `config set` refuses both keys outright. Settings → Gmail is the only surface that shows the warnings before recording the acknowledgement; a direct PUT or a hand-edited settings.json setting both booleans is still honoured, so the invariant is "consent recorded", not "web UI only".
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
   - `CREATE_ACTION_SKILLS.md` (CREATE skill) — system prompt teaching the AI to generate new `.action.ts` files from scratch (template, interface, examples)
   - `EDIT_ACTION_SKILLS.md` (EDIT skill) — system prompt for modifying existing actions; current action code is appended to the prompt

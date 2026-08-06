@@ -6,6 +6,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
 
 - **Multi-agent support** — Routes tasks to Claude Code, OpenAI Codex, Google Gemini CLI, or OpenRouter (with direct API fallback)
 - **Email actions** — Extensible plugin system for custom email analysis (priority detection, spam scoring, subscription detection, and more)
+- **Approval gate** — Gmail changes an action proposes (trash, spam, archive, labels) are queued for review first. Nothing touches your mailbox until you approve it from the web UI or the CLI
 - **AI summaries** — On-demand email summarization with citation mapping back to source text
 - **Semantic clustering** — Groups similar emails using vector embeddings and k-means clustering
 - **Subscription digests** — Aggregates newsletter and marketing emails into a single AI-generated digest
@@ -60,7 +61,7 @@ API keys). Agent selection, embedding provider, GCP project, and data dir are
 
 ```bash
 npx email-agent config set agentMode direct-api   # all-agents | hybrid | direct-api
-npx email-agent config set preferredAgent codex   # claude | codex | gemini | openrouter
+npx email-agent config set preferredAgent codex   # claude | codex | gemini | openrouter | claude-sdk | direct-api
 ```
 
 ## Usage
@@ -77,14 +78,24 @@ npx email-agent fetch --limit 50
 # List available actions
 npx email-agent list-actions
 
-# Run an action on unread emails
+# Run an action on unread emails (Gmail changes are queued for approval)
 npx email-agent run-action priority
 npx email-agent run-action subscription
 npx email-agent run-action junk
 
+# Review the Gmail changes actions queued for you
+npx email-agent approvals              # list what is waiting
+npx email-agent approvals review       # decide per email: apply / reject / skip
+npx email-agent approvals apply        # approve everything pending, after a confirm
+npx email-agent approvals reject       # discard everything pending
+
 # Start the web UI
 npx email-agent serve
 ```
+
+`review`, `apply`, and `reject` all take `--batch <id>` to scope the decision to a
+single action run. `approvals list` prints the batch id next to each group; a
+prefix works as long as it matches exactly one batch.
 
 ### Web UI
 
@@ -97,10 +108,12 @@ Then open [http://localhost:3847](http://localhost:3847).
 
 **Pages:**
 - `/mail` — Three-panel inbox with email list, reader, and AI summaries
-- `/actions` — Browse and run AI actions on your emails
+- `/actions` — Browse and run AI actions, and approve or reject the Gmail changes they queue
 - `/clusters` — Semantic email clustering visualization
 - `/digest` — AI-generated subscription digest
-- `/settings` — Configure agents and prompts
+- `/settings` — Configure agents, prompts, and the Gmail auto-apply opt-in
+
+The sidebar shows a badge with the number of Gmail changes waiting for you.
 
 ## Architecture
 
@@ -154,6 +167,40 @@ See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creat
 | `subscription` | Detects newsletters and marketing emails |
 | `junk` | Scores emails for spam likelihood (0-100) |
 
+### Approval Gate
+
+Actions never write to Gmail on their own. When an action decides an email should
+be trashed, marked spam, archived, or relabelled, that change is written to a
+local `pending_operations` queue and stops there. You decide what actually
+happens:
+
+- **Web** — the `/actions` page lists everything queued with the email it affects.
+  Rows are ticked once they have been on screen, so untick anything you don't
+  want. Changes that arrive from a background refresh after you last looked are
+  never swept into a bulk apply.
+- **CLI** — `run-action` prompts you at the end of a run, and
+  `npx email-agent approvals` picks up anything you left pending.
+
+Approved and rejected rows stay in the `pending_operations` table as an audit
+trail. The UI and CLI only list what is still pending, so reading the resolved
+history means querying the table directly.
+
+Per-email actions you click yourself in the mail UI still apply immediately — the
+click is the approval.
+
+**Turning the gate off.** Settings → Gmail has an auto-apply toggle that applies
+each batch as soon as the action finishes. It is off by default and takes effect
+only once you have accepted its cautions: `gmail.autoApplyActions` is forced back
+to false on every read unless `gmail.autoApplyAcknowledged` is also true. The
+Settings page is the only place that shows those cautions, and `config set`
+refuses both keys, so the CLI can never arm it. While it is on, the `/actions`
+page keeps a warning banner up and the CLI says so on every run. Changes are
+still queued first, so the audit trail is unchanged.
+
+> **Upgrading from an older install?** The old `gmail.syncActions` setting is
+> gone. Any value you had is dropped and auto-apply starts off, so the first run
+> after upgrading queues its Gmail changes for approval instead of applying them.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -175,6 +222,8 @@ npm run lint
 npm run check:boundaries
 npm run build
 ```
+
+Known gaps and deferred work live in [TODOS.md](TODOS.md).
 
 ## License
 

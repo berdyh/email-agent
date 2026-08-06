@@ -1,6 +1,5 @@
 import { defaultConfig, type AppConfig } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
-import type { GmailOperation } from "@email-agent/core/actions";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const SETTING_KEYS = new Set([
@@ -328,51 +327,30 @@ export function parseSnapshotRestoreRequest(input: unknown): SnapshotRestoreRequ
   };
 }
 
-export function parseApplyActionsRequest(input: unknown): {
-  operations: GmailOperation[];
-  accountEmail?: string;
-} {
+/** One approval request cannot reasonably target more rows than this. */
+const MAX_APPROVAL_IDS = 1000;
+
+export function parseApprovalIdsRequest(input: unknown): { ids: string[] } {
   const body = asRecord(input);
-  if (!Array.isArray(body["operations"]) || body["operations"].length === 0) {
-    throw new RequestValidationError("operations array is required");
+  if (!Array.isArray(body["ids"]) || body["ids"].length === 0) {
+    throw new RequestValidationError("ids array is required");
+  }
+  if (body["ids"].length > MAX_APPROVAL_IDS) {
+    throw new RequestValidationError(
+      `ids may not contain more than ${MAX_APPROVAL_IDS} entries`,
+    );
   }
 
-  const operations: GmailOperation[] = body["operations"].map((operation, index) => {
-    const record = asRecord(operation);
-    const emailId = requiredString(record["emailId"], `operations[${index}].emailId`);
-    const type = record["type"];
-    if (
-      type !== "trash" &&
-      type !== "spam" &&
-      type !== "markRead" &&
-      type !== "markUnread" &&
-      type !== "addLabels" &&
-      type !== "removeLabels"
-    ) {
-      throw new RequestValidationError(`operations[${index}].type is invalid`);
+  const ids = body["ids"].map((id, index) => {
+    const trimmed = requiredString(id, `ids[${index}]`).trim();
+    // A blank id would widen the generated `id IN (...)` filter, so reject it.
+    if (trimmed.length === 0) {
+      throw new RequestValidationError(`ids[${index}] must not be blank`);
     }
-
-    const labels = record["labelIds"];
-    if ((type === "addLabels" || type === "removeLabels") && (!Array.isArray(labels) || labels.some((label) => typeof label !== "string"))) {
-      throw new RequestValidationError(`operations[${index}].labelIds must be a string array`);
-    }
-    const operationType: GmailOperation["type"] = type;
-
-    return {
-      emailId,
-      type: operationType,
-      labelIds: Array.isArray(labels) ? labels as string[] : undefined,
-      accountEmail: optionalPresentString(
-        record["accountEmail"],
-        `operations[${index}].accountEmail`,
-      ),
-    };
+    return trimmed;
   });
-
-  return {
-    operations,
-    accountEmail: optionalPresentString(body["accountEmail"], "accountEmail"),
-  };
+  // Duplicates would resolve the same row twice; collapse them here.
+  return { ids: [...new Set(ids)] };
 }
 
 export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
@@ -413,8 +391,13 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
   if (body["gmail"] !== undefined) {
     const gmail = asRecord(body["gmail"]);
     const update: Partial<AppConfig["gmail"]> = {};
-    if ("syncActions" in gmail) {
-      update.syncActions = optionalBoolean(gmail["syncActions"], "gmail.syncActions") ?? false;
+    if ("autoApplyAcknowledged" in gmail) {
+      update.autoApplyAcknowledged =
+        optionalBoolean(gmail["autoApplyAcknowledged"], "gmail.autoApplyAcknowledged") ?? false;
+    }
+    if ("autoApplyActions" in gmail) {
+      update.autoApplyActions =
+        optionalBoolean(gmail["autoApplyActions"], "gmail.autoApplyActions") ?? false;
     }
     settings.gmail = update;
   }
@@ -513,7 +496,7 @@ export function mergeSettingsUpdate(
       ...update.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
-    gmail: { ...current.gmail, ...update.gmail },
+    gmail: normalizeGmailConfig({ ...current.gmail, ...update.gmail }),
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
     // Accounts are owned by the dedicated /api/accounts endpoints; a settings
     // PUT must never mutate them, or a stale client snapshot resurrects a
@@ -567,11 +550,26 @@ export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSetti
       ...settings.embedding,
       dimensions: defaultConfig.embedding.dimensions,
     },
-    gmail: settings.gmail,
+    gmail: normalizeGmailConfig(settings.gmail),
     prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
     dataDir: settings.dataDir,
     accounts: settings.accounts,
+  };
+}
+
+/**
+ * Mirrors the core `normalizeSettings` invariant at the API boundary: enabling
+ * auto-apply requires a recorded acknowledgement of its warnings, so a client
+ * can never flip the toggle alone (and revoking consent disables it again).
+ */
+function normalizeGmailConfig(
+  gmail: Partial<AppConfig["gmail"]> | undefined,
+): AppConfig["gmail"] {
+  const autoApplyAcknowledged = gmail?.autoApplyAcknowledged === true;
+  return {
+    autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
+    autoApplyAcknowledged,
   };
 }
 

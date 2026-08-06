@@ -38,8 +38,12 @@ export async function getEmails(options?: {
   const table = await db.openTable(emailsTable);
 
   let query = table.query();
-  for (const f of buildEmailFilters(options)) {
-    query = query.where(f);
+  // One combined predicate, never chained .where() calls: LanceDB's where()
+  // maps to `onlyIf`, which REPLACES the previous filter instead of ANDing it,
+  // so chaining silently drops every filter but the last.
+  const filters = buildEmailFilters(options);
+  if (filters.length > 0) {
+    query = query.where(filters.join(" AND "));
   }
 
   const limit = options?.limit ?? 0;

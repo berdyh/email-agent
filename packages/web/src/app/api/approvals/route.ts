@@ -1,0 +1,65 @@
+import { NextResponse } from "next/server";
+import { getEmailById, getPendingOperations, initDb } from "@email-agent/core/db";
+import type { EmailRecord } from "@email-agent/core/db";
+import {
+  describeGmailOperation,
+  isDestructiveOperation,
+  parseLabelIds,
+} from "@email-agent/core/actions";
+import { internalErrorResponse } from "@/modules/api/validation";
+
+export interface ApprovalEmailSummary {
+  subject: string;
+  from: string;
+  date: string;
+  snippet: string;
+}
+
+export async function GET() {
+  try {
+    await initDb();
+    const rows = await getPendingOperations({ status: "pending" });
+
+    // One lookup per distinct email; several operations can target one mail.
+    const emailCache = new Map<string, EmailRecord | null>();
+    const operations = [];
+    for (const row of rows) {
+      const cacheKey = `${row.accountId}\u0000${row.emailId}`;
+      let email = emailCache.get(cacheKey);
+      if (email === undefined) {
+        email = await getEmailById(row.emailId, row.accountId);
+        emailCache.set(cacheKey, email);
+      }
+
+      const labelIds = parseLabelIds(row.labelIds);
+      operations.push({
+        id: row.id,
+        batchId: row.batchId,
+        actionId: row.actionId,
+        actionName: row.actionName,
+        accountId: row.accountId,
+        emailId: row.emailId,
+        type: row.type,
+        labelIds,
+        // Rendered verbatim by the panel. Derived here so the wording the user
+        // approves comes from one place in core and cannot drift per surface —
+        // web components may not import core runtime themselves.
+        label: describeGmailOperation(row.type, labelIds),
+        destructive: isDestructiveOperation(row.type),
+        createdAt: row.createdAt,
+        email: email
+          ? ({
+              subject: email.subject,
+              from: email.from,
+              date: email.date,
+              snippet: email.snippet,
+            } satisfies ApprovalEmailSummary)
+          : null,
+      });
+    }
+
+    return NextResponse.json({ operations, pendingCount: operations.length });
+  } catch (err) {
+    return internalErrorResponse(err, "Failed to load pending approvals");
+  }
+}

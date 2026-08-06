@@ -48,7 +48,7 @@ describe("config settings normalization", () => {
       gcp: { projectId: "my-project" },
       prompts: { summary: "custom summary", digest: "custom digest" },
       embedding: { provider: "openrouter", model: "qwen", dimensions: 768 },
-      gmail: { syncActions: true },
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: true },
       ui: { fetchInterval: 15, fetchScope: "all" },
       dataDir: "/tmp/data",
       accounts: [{ email: "me@example.com", isDefault: true }],
@@ -59,7 +59,7 @@ describe("config settings normalization", () => {
     assert.equal(normalized.preferredAgent, "codex");
     assert.equal(normalized.gcp.projectId, "my-project");
     assert.equal(normalized.prompts.summary, "custom summary");
-    assert.equal(normalized.gmail.syncActions, true);
+    assert.equal(normalized.gmail.autoApplyActions, true);
     assert.equal(normalized.ui.fetchInterval, 15);
     assert.equal(normalized.dataDir, "/tmp/data");
     assert.equal(normalized.accounts[0]?.email, "me@example.com");
@@ -70,6 +70,32 @@ describe("config settings normalization", () => {
     assert.deepEqual(normalizeSettings({}), defaultConfig);
     assert.deepEqual(normalizeSettings(null), defaultConfig);
     assert.deepEqual(normalizeSettings("garbage"), defaultConfig);
+  });
+
+  it("refuses to enable auto-apply without an acknowledgement", () => {
+    // The dangerous half of the pair alone must never survive normalization —
+    // this is what a hand-edited settings.json or `config set` would produce.
+    const forced = normalizeSettings({
+      gmail: { autoApplyActions: true },
+    });
+    assert.equal(forced.gmail.autoApplyActions, false);
+    assert.equal(forced.gmail.autoApplyAcknowledged, false);
+
+    const revoked = normalizeSettings({
+      gmail: { autoApplyActions: true, autoApplyAcknowledged: false },
+    });
+    assert.equal(revoked.gmail.autoApplyActions, false);
+  });
+
+  it("keeps auto-apply off by default and when only acknowledged", () => {
+    assert.equal(defaultConfig.gmail.autoApplyActions, false);
+    assert.equal(defaultConfig.gmail.autoApplyAcknowledged, false);
+
+    const acknowledgedOnly = normalizeSettings({
+      gmail: { autoApplyAcknowledged: true },
+    });
+    assert.equal(acknowledgedOnly.gmail.autoApplyActions, false);
+    assert.equal(acknowledgedOnly.gmail.autoApplyAcknowledged, true);
   });
 
   it("drops oauth when its fields are malformed", () => {

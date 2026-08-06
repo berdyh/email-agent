@@ -7,14 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useEmailStore } from "@/store/email-store";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
 
@@ -135,7 +136,10 @@ export default function SettingsPage() {
   const agentMode = local.agentMode ?? "all-agents";
   const preferredAgent = local.preferredAgent ?? "claude";
   const prompts = (local.prompts ?? {}) as Partial<Record<"summary" | "digest", string>>;
-  const gmail = local.gmail ?? { syncActions: false };
+  const gmail = local.gmail ?? {
+    autoApplyActions: false,
+    autoApplyAcknowledged: false,
+  };
 
   return (
     <div className="flex h-screen flex-col">
@@ -306,34 +310,151 @@ export default function SettingsPage() {
             </TabsContent>
 
             <TabsContent value="gmail" className="space-y-4">
-              <Card>
+              <Card className="border-destructive/50">
                 <CardHeader>
-                  <CardTitle className="text-base">Gmail Sync</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-destructive" />
+                    <CardTitle className="text-base">
+                      Auto-apply AI actions to Gmail
+                    </CardTitle>
+                  </div>
                   <CardDescription>
-                    Control how action results are applied to Gmail
+                    By default, every Gmail change an action proposes waits for
+                    your approval on the Actions page. Turning this on removes
+                    that safety net: changes are applied the moment an action
+                    finishes, with no review and no confirmation.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
+                  <div className="rounded-md border border-destructive/50 bg-destructive/5 p-3">
+                    <p className="text-sm font-medium text-destructive-text">
+                      Read this before enabling
+                    </p>
+                    {/* Consequences are set at full contrast — this is the copy
+                        the decision rests on, not supporting detail. */}
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-foreground">
+                      <li>
+                        <span className="font-medium text-foreground">
+                          Mail can be deleted.
+                        </span>{" "}
+                        Anything the AI judges as junk is moved to Trash, and
+                        Gmail permanently deletes trashed mail after 30 days.
+                      </li>
+                      <li>
+                        <span className="font-medium text-foreground">
+                          Mail can be marked as spam or archived.
+                        </span>{" "}
+                        It leaves your inbox without you seeing it, and future
+                        mail from that sender may be filtered too.
+                      </li>
+                      <li>
+                        <span className="font-medium text-foreground">
+                          The AI can be wrong.
+                        </span>{" "}
+                        A real invoice, ticket, job offer, or personal message
+                        can be trashed by mistake.
+                      </li>
+                      <li>
+                        <span className="font-medium text-foreground">
+                          There is no undo here.
+                        </span>{" "}
+                        Reversing a mistake means digging through Gmail’s Trash
+                        or Spam folders yourself, before they are purged.
+                      </li>
+                      <li>
+                        <span className="font-medium text-foreground">
+                          It applies everywhere.
+                        </span>{" "}
+                        Every connected account and every action you run,
+                        including scheduled and cron runs.
+                      </li>
+                      <li>
+                        <span className="font-medium text-foreground">
+                          You are solely responsible
+                        </span>{" "}
+                        for changes made to your mailbox while this is on.
+                      </li>
+                    </ul>
+                  </div>
+
+                  <label className="flex cursor-pointer items-start gap-3">
+                    <Checkbox
+                      checked={gmail.autoApplyAcknowledged ?? false}
+                      onCheckedChange={(acknowledged) =>
+                        editLocal({
+                          ...local,
+                          gmail: {
+                            // Revoking the acknowledgement must also switch
+                            // auto-apply back off — the server enforces this
+                            // too, so the UI never shows an impossible state.
+                            autoApplyAcknowledged: acknowledged,
+                            autoApplyActions: acknowledged
+                              ? (gmail.autoApplyActions ?? false)
+                              : false,
+                          },
+                        })
+                      }
+                      aria-label="Accept auto-apply cautions"
+                      className="mt-0.5"
+                    />
+                    <span className="text-sm">
+                      I have read the cautions above, I understand emails may be
+                      deleted or hidden without my review, and I accept full
+                      responsibility for what happens to my mailbox.
+                    </span>
+                  </label>
+
+                  <div className="flex items-center justify-between gap-4 border-t pt-4">
                     <div>
-                      <label className="text-sm font-medium">Auto-apply actions</label>
-                      <p className="text-xs text-muted-foreground">
-                        Automatically apply action recommendations (trash, spam, labels) to Gmail without confirmation
+                      <label className="text-sm font-medium">
+                        Auto-apply action results
+                      </label>
+                      <p id="auto-apply-help" className="text-xs text-muted-foreground">
+                        {gmail.autoApplyAcknowledged
+                          ? "Trash, spam, archive, and label changes are applied to Gmail immediately."
+                          : "Accept the cautions above to unlock this option."}
                       </p>
                     </div>
                     <Switch
-                      checked={gmail.syncActions ?? false}
-                      onCheckedChange={(v) =>
+                      checked={gmail.autoApplyActions ?? false}
+                      disabled={!gmail.autoApplyAcknowledged}
+                      aria-label="Auto-apply action results to Gmail"
+                      aria-describedby="auto-apply-help"
+                      onCheckedChange={(enabled) =>
                         editLocal({
                           ...local,
-                          gmail: { ...gmail, syncActions: v },
+                          gmail: {
+                            autoApplyAcknowledged:
+                              gmail.autoApplyAcknowledged ?? false,
+                            autoApplyActions: enabled,
+                          },
                         })
                       }
                     />
                   </div>
+
+                  {/* Driven by the SAVED setting, not the local form state:
+                      the dangerous claim must describe what the server will
+                      actually do. Turning the switch off used to hide this
+                      warning while auto-apply was still live. */}
+                  {settings?.gmail?.autoApplyActions && (
+                    <p className="flex items-center gap-2 text-sm font-medium text-destructive-text">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      Auto-apply is currently ON — actions change your Gmail
+                      without asking.
+                    </p>
+                  )}
+                  {gmail.autoApplyActions !==
+                    (settings?.gmail?.autoApplyActions ?? false) && (
+                    <p className="text-sm text-muted-foreground">
+                      Unsaved change — press Save to{" "}
+                      {gmail.autoApplyActions ? "turn auto-apply on" : "turn auto-apply off"}.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
+
           </Tabs>
         </main>
       </div>
