@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
     "@lancedb/lancedb",
     "apache-arrow",
     "@anthropic-ai/claude-agent-sdk",
+    // The action source guard parses generated actions with the TypeScript
+    // compiler. It is server-only; bundling it would add megabytes for nothing.
+    "typescript",
   ],
   webpack: (config) => {
     config.resolve.extensionAlias = {

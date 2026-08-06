@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 /**
  * Save-time guard for generated action source.
  *
@@ -7,12 +9,28 @@
  * before anything inspects the exported object. That ordering is why this
  * guard exists at SAVE time: once the module is imported, it is too late.
  *
- * Scope, honestly: this stops an innocently generated action from reaching
- * capabilities it was never supposed to have (the realistic failure, since the
- * author is a language model following a prompt). It is a denylist over source
- * text, so it is not a containment boundary against a determined attacker, and
- * it does not see a file dropped into ACTIONS_DIR by hand. See the approval
- * gate section of TODOS.md for the full threat model.
+ * This is an ALLOWLIST over the parsed syntax tree, deliberately not a
+ * denylist over source text. The first version of this guard blanked strings
+ * and comments and then regex-matched for `process`, `eval`, `Function(` and
+ * friends. Review broke it in one line:
+ *
+ *     const p = ({}).constructor.constructor("return process")();
+ *
+ * That recovers the Function constructor without ever writing the token
+ * `Function(`, and the dangerous keyword rides along inside a string argument,
+ * which the stripper had already blanked. A second bypass slipped a live
+ * `data:` URL past the type-only check with `export { default as type } from`.
+ * Both are instances of the same lesson: enumerating forbidden spellings
+ * cannot work, because the language has unbounded ways to name a value.
+ *
+ * So instead of asking "does this contain something bad?", the guard asks
+ * "is this exactly the small shape a data file is allowed to have?" A file
+ * with no call expression, no member access, and no `new` anywhere in its tree
+ * cannot execute anything at import time, whatever it is spelled like.
+ *
+ * Remaining limits, stated plainly: this runs only on save, so a file dropped
+ * into ACTIONS_DIR by hand is never seen, and files written before the guard
+ * existed are not re-checked. See the approval gate section of TODOS.md.
  */
 
 /** A single reason a source file was rejected. */
@@ -21,217 +39,177 @@ export interface ActionSourceViolation {
   detail: string;
 }
 
-/**
- * Replace every comment and string/template literal body with spaces, so the
- * remaining "skeleton" contains only code structure.
- *
- * This matters because an action's `prompt` is arbitrary English inside a
- * template literal. Scanning raw source would reject a perfectly good action
- * whose prompt says "look for emails about import tariffs" or "ignore fetch
- * confirmations". Only what survives stripping is real code.
- *
- * Length is preserved so any offsets stay meaningful for future callers.
- */
-export function stripStringsAndComments(source: string): {
-  skeleton: string;
-  hasTemplateInterpolation: boolean;
-} {
-  let skeleton = "";
-  let hasTemplateInterpolation = false;
-
-  type Mode = "code" | "line-comment" | "block-comment" | "single" | "double" | "template";
-  let mode: Mode = "code";
-
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i] as string;
-    const next = source[i + 1];
-
-    // Preserve newlines in every mode so line numbers survive.
-    const blank = char === "\n" ? "\n" : " ";
-
-    if (mode === "code") {
-      if (char === "/" && next === "/") {
-        mode = "line-comment";
-        skeleton += "  ";
-        i += 1;
-        continue;
-      }
-      if (char === "/" && next === "*") {
-        mode = "block-comment";
-        skeleton += "  ";
-        i += 1;
-        continue;
-      }
-      if (char === "'") {
-        mode = "single";
-        skeleton += " ";
-        continue;
-      }
-      if (char === '"') {
-        mode = "double";
-        skeleton += " ";
-        continue;
-      }
-      if (char === "`") {
-        mode = "template";
-        skeleton += " ";
-        continue;
-      }
-      skeleton += char;
-      continue;
-    }
-
-    if (mode === "line-comment") {
-      if (char === "\n") {
-        mode = "code";
-        skeleton += "\n";
-        continue;
-      }
-      skeleton += blank;
-      continue;
-    }
-
-    if (mode === "block-comment") {
-      if (char === "*" && next === "/") {
-        mode = "code";
-        skeleton += "  ";
-        i += 1;
-        continue;
-      }
-      skeleton += blank;
-      continue;
-    }
-
-    // String and template modes below.
-    if (char === "\\") {
-      // Skip the escaped character so a trailing \" does not end the literal.
-      skeleton += " ";
-      if (i + 1 < source.length) {
-        skeleton += source[i + 1] === "\n" ? "\n" : " ";
-        i += 1;
-      }
-      continue;
-    }
-
-    if (mode === "single" && char === "'") {
-      mode = "code";
-      skeleton += " ";
-      continue;
-    }
-    if (mode === "double" && char === '"') {
-      mode = "code";
-      skeleton += " ";
-      continue;
-    }
-    if (mode === "template") {
-      if (char === "`") {
-        mode = "code";
-        skeleton += " ";
-        continue;
-      }
-      // `${...}` can smuggle executable code into what should be static data.
-      // Flag it and keep the body blanked; the file is rejected either way.
-      if (char === "$" && next === "{") {
-        hasTemplateInterpolation = true;
-        skeleton += "  ";
-        i += 1;
-        continue;
-      }
-    }
-
-    skeleton += blank;
-  }
-
-  return { skeleton, hasTemplateInterpolation };
+/** Describes where in the file the problem is, for a human-readable message. */
+function describe(node: ts.Node, source: ts.SourceFile): string {
+  const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
+  const text = node.getText(source).replace(/\s+/g, " ").slice(0, 60);
+  return `line ${line + 1}:${character + 1} — ${text}`;
 }
 
-/** Patterns that must never appear in an action's executable code. */
-const forbiddenPatterns: ReadonlyArray<{ rule: string; pattern: RegExp; detail: string }> = [
-  {
-    rule: "dynamic-import",
-    pattern: /\bimport\s*\(/,
-    detail: "dynamic import() can load any module at runtime",
-  },
-  {
-    rule: "import-meta",
-    pattern: /\bimport\s*\.\s*meta\b/,
-    detail: "import.meta exposes the module URL, which resolves paths to the rest of the app",
-  },
-  {
-    rule: "require",
-    pattern: /\brequire\s*\(/,
-    detail: "require() can load any module at runtime",
-  },
-  {
-    rule: "eval",
-    pattern: /\beval\s*\(/,
-    detail: "eval() executes arbitrary code",
-  },
-  {
-    rule: "function-constructor",
-    pattern: /\bFunction\s*\(/,
-    detail: "the Function constructor executes arbitrary code",
-  },
-  {
-    rule: "process",
-    pattern: /\bprocess\b/,
-    detail: "process exposes the environment, credentials, and the ability to spawn commands",
-  },
-  {
-    rule: "globalThis",
-    pattern: /\bglobalThis\b/,
-    detail: "globalThis reaches every runtime capability",
-  },
-  {
-    rule: "network",
-    pattern: /\b(?:fetch|XMLHttpRequest)\s*\(/,
-    detail: "an action must not make network calls; it returns data for the runner to act on",
-  },
-];
+/**
+ * True when an expression is static data: literals, and objects/arrays built
+ * only from static data. Anything that could run — a call, a member access, a
+ * `new`, a function, a tagged or interpolated template — is not data.
+ */
+function isPureDataExpression(node: ts.Expression, safeNames: ReadonlySet<string>): boolean {
+  // A name is data only if this file already bound it to data. That admits the
+  // natural `const PROMPT = "..."` then `prompt: PROMPT` shape, while a name
+  // this file never declared (`process`, `globalThis`) resolves to a global and
+  // is refused.
+  if (ts.isIdentifier(node)) {
+    return safeNames.has(node.text);
+  }
+
+  switch (node.kind) {
+    case ts.SyntaxKind.StringLiteral:
+    case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+    case ts.SyntaxKind.NumericLiteral:
+    case ts.SyntaxKind.TrueKeyword:
+    case ts.SyntaxKind.FalseKeyword:
+    case ts.SyntaxKind.NullKeyword:
+      return true;
+    default:
+      break;
+  }
+
+  // Negative and explicitly positive numbers: `-1`, `+1`.
+  if (ts.isPrefixUnaryExpression(node)) {
+    const isSign =
+      node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken;
+    return isSign && ts.isNumericLiteral(node.operand);
+  }
+
+  // `{...} as EmailAction` / `{...} satisfies EmailAction` are type-level only.
+  if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return isPureDataExpression(node.expression, safeNames);
+  }
+
+  if (ts.isParenthesizedExpression(node)) {
+    return isPureDataExpression(node.expression, safeNames);
+  }
+
+  if (ts.isArrayLiteralExpression(node)) {
+    return node.elements.every((el) => ts.isExpression(el) && isPureDataExpression(el, safeNames));
+  }
+
+  if (ts.isObjectLiteralExpression(node)) {
+    return node.properties.every((prop) => {
+      // Shorthand (`{ a }`), spread (`{ ...x }`), methods, getters and setters
+      // all either reference or run something. Only `key: <data>` is allowed.
+      if (!ts.isPropertyAssignment(prop)) return false;
+      // A computed key can evaluate an expression, so require a literal name.
+      if (ts.isComputedPropertyName(prop.name)) return false;
+      return isPureDataExpression(prop.initializer, safeNames);
+    });
+  }
+
+  return false;
+}
 
 /**
  * Collect every reason `source` is not a safe action file. Empty array means
  * the source is acceptable.
  */
 export function findActionSourceViolations(source: string): ActionSourceViolation[] {
-  const { skeleton, hasTemplateInterpolation } = stripStringsAndComments(source);
   const violations: ActionSourceViolation[] = [];
+  const sourceFile = ts.createSourceFile(
+    "action.ts",
+    source,
+    ts.ScriptTarget.ESNext,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TS,
+  );
 
-  if (hasTemplateInterpolation) {
+  // A file we cannot parse is a file we cannot reason about. Refuse it rather
+  // than scanning a tree that may not reflect what Node will actually run.
+  const parseDiagnostics = (sourceFile as unknown as { parseDiagnostics?: ts.Diagnostic[] })
+    .parseDiagnostics;
+  if (parseDiagnostics && parseDiagnostics.length > 0) {
+    const first = parseDiagnostics[0] as ts.Diagnostic;
     violations.push({
-      rule: "template-interpolation",
-      detail:
-        "template literals must be static text; `${...}` can evaluate arbitrary code at module load",
+      rule: "unparseable",
+      detail: `the file is not valid TypeScript: ${ts.flattenDiagnosticMessageText(first.messageText, " ")}`,
     });
+    return violations;
   }
 
-  // Any import that is not erased at runtime is a capability. `import type`
-  // survives because TypeScript strips it before the module ever executes.
-  for (const match of skeleton.matchAll(/\bimport\b/g)) {
-    const rest = skeleton.slice(match.index + "import".length);
-    if (/^\s*type\b/.test(rest)) continue;
-    // Dynamic import and import.meta get their own, clearer messages below.
-    if (/^\s*[(.]/.test(rest)) continue;
-    violations.push({
-      rule: "value-import",
-      detail:
-        "actions may only `import type { EmailAction } from \"@email-agent/core\"`; a value import gives the action runtime capabilities",
-    });
-    break;
-  }
+  // Names this file has bound to static data, built up in source order so a
+  // declaration can only reference something declared above it.
+  const safeNames = new Set<string>();
 
-  // `export ... from` is a value import wearing a different hat.
-  if (/\bexport\b(?![^;\n]*\btype\b)[^;\n]*\bfrom\b/.test(skeleton)) {
-    violations.push({
-      rule: "re-export",
-      detail: "re-exporting from another module pulls that module's values into the action",
-    });
-  }
-
-  for (const { rule, pattern, detail } of forbiddenPatterns) {
-    if (pattern.test(skeleton)) {
-      violations.push({ rule, detail });
+  for (const statement of sourceFile.statements) {
+    // `import type { EmailAction } from "..."` — erased before the module runs.
+    if (ts.isImportDeclaration(statement)) {
+      const clause = statement.importClause;
+      if (clause?.isTypeOnly) continue;
+      violations.push({
+        rule: "value-import",
+        detail:
+          `only \`import type\` is allowed, because it is erased before the module runs (${describe(statement, sourceFile)})`,
+      });
+      continue;
     }
+
+    // `export type { X }` is fine. `export { default as type } from "data:..."`
+    // is NOT — the module specifier is fetched and executed on import, and only
+    // `isTypeOnly` distinguishes the two reliably.
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.isTypeOnly) continue;
+      violations.push({
+        rule: "value-export",
+        detail: `re-exporting loads and runs the other module (${describe(statement, sourceFile)})`,
+      });
+      continue;
+    }
+
+    // `export default action;` or `export default { ... };`
+    if (ts.isExportAssignment(statement)) {
+      if (isPureDataExpression(statement.expression, safeNames)) continue;
+      violations.push({
+        rule: "computed-export",
+        detail: `export default must be a name declared in this file or a literal, not an expression (${describe(statement, sourceFile)})`,
+      });
+      continue;
+    }
+
+    // `const action: EmailAction = { ... };`
+    if (ts.isVariableStatement(statement)) {
+      for (const decl of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(decl.name)) {
+          violations.push({
+            rule: "destructuring",
+            detail: `only plain names may be declared (${describe(decl, sourceFile)})`,
+          });
+          continue;
+        }
+        if (decl.initializer === undefined) continue;
+        if (isPureDataExpression(decl.initializer, safeNames)) {
+          safeNames.add(decl.name.text);
+          continue;
+        }
+        violations.push({
+          rule: "computed-value",
+          detail:
+            `an action is static data, so values may only be literals, objects and arrays — no calls, member access, \`new\`, functions or interpolation (${describe(decl, sourceFile)})`,
+        });
+      }
+      continue;
+    }
+
+    // Pure type declarations disappear at runtime.
+    if (
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) ||
+      statement.kind === ts.SyntaxKind.EmptyStatement
+    ) {
+      continue;
+    }
+
+    violations.push({
+      rule: "statement-not-allowed",
+      detail:
+        `an action file may only contain \`import type\`, type declarations, a data assignment and \`export default\` (${describe(statement, sourceFile)})`,
+    });
   }
 
   return violations;
