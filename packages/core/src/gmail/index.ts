@@ -1,5 +1,10 @@
 export { checkGcloudAuth, loginGcloud } from "./auth.js";
-export { createGmailClient, resetGmailClient, resolveAccountEmail } from "./client.js";
+// `createGmailClient` / `createGmailClientForAccount` are barrel-private for
+// the same reason as ./operations.js below: they hand back a raw googleapis
+// client scoped gmail.modify, so a public export is a one-import approval-gate
+// bypass (every write op is a one-line wrapper over this factory). Core code
+// imports ./client.js / ./account-manager.js relatively.
+export { resetGmailClient, resolveAccountEmail } from "./client.js";
 export {
   fetchEmailsWithMetadata,
   type FetchEmailsResult,
@@ -23,6 +28,5 @@ export {
   getOAuthCredentials,
   generateAuthUrl,
   exchangeCode,
-  createGmailClientForAccount,
 } from "./account-manager.js";
 export type { OAuthCredentials, StoredTokens } from "./account-types.js";
