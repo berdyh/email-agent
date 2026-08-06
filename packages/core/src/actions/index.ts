@@ -32,6 +32,12 @@ export {
 } from "./apply.js";
 export { parseActionOutput } from "./output-parser.js";
 export {
+  assertSafeActionSource,
+  findActionSourceViolations,
+  UnsafeActionSourceError,
+  type ActionSourceViolation,
+} from "./action-source-guard.js";
+export {
   extractActionIdFromSource,
   normalizeSnapshotFilename,
   normalizeUserActionFilename,

@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile, unlink, mkdir, copyFile } from "node:fs/p
 import { join, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ACTIONS_DIR } from "../config/defaults.js";
+import { assertSafeActionSource } from "./action-source-guard.js";
 import type { EmailAction } from "./types.js";
 import {
   extractActionIdFromSource,
@@ -60,6 +61,12 @@ export async function listUserActions(): Promise<UserActionMeta[]> {
 
 /** Save (or overwrite) a user action file. Snapshots previous version if it exists. */
 export async function saveUserAction(filename: string, content: string): Promise<void> {
+  // Reject before anything touches disk. A saved action is later imported
+  // in-process with full Node privileges, and its top-level code runs before
+  // the exported object is ever inspected — so this is the last point at which
+  // refusing is still cheap.
+  assertSafeActionSource(content);
+
   await mkdir(ACTIONS_DIR, { recursive: true });
 
   const safeFilename = normalizeUserActionFilename(filename);
