@@ -40,6 +40,7 @@ export function toPendingOperationRecords(
     error: "",
     claimToken: "",
     createdAt,
+    claimedAt: "",
     resolvedAt: "",
   }));
 }

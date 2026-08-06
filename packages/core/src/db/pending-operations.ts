@@ -59,14 +59,19 @@ export async function claimPendingOperations(
   token: string,
   status: Exclude<PendingOperationStatus, "pending">,
   resolvedAt = "",
+  claimedAt = new Date().toISOString(),
 ): Promise<PendingOperationRecord[]> {
   if (ids.length === 0) return [];
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
 
+  // `claimedAt` is stamped for every claim, not just `applying`. It records
+  // when the row left `pending`, which is the only correct age basis for
+  // spotting a row stranded by a crash mid-apply — `createdAt` is when the
+  // change was proposed and can be arbitrarily older.
   await table.update({
     where: buildPendingResolutionFilter(ids),
-    values: { status, claimToken: token, resolvedAt },
+    values: { status, claimToken: token, resolvedAt, claimedAt },
   });
 
   const results = await table
@@ -116,6 +121,70 @@ export async function getPendingOperations(options?: {
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return options?.limit ? records.slice(0, options.limit) : records;
+}
+
+/**
+ * How long a row may sit in `applying` before it is treated as stranded.
+ *
+ * A healthy apply moves a row out of `applying` within one Gmail round trip
+ * (chunked resolution keeps that to a handful of operations), so anything
+ * still claimed after this long means the process died between the Gmail call
+ * and the status write.
+ */
+export const STALE_APPLYING_THRESHOLD_MS = 15 * 60 * 1000;
+
+/**
+ * Rows claimed before `cutoffIso` and never resolved. Pure, so the age rule is
+ * testable without a DB.
+ *
+ * Age is measured from `claimedAt`, falling back to `createdAt` for rows
+ * migrated in from a table that predates the column — those have no recorded
+ * claim time, and `createdAt` is necessarily older, so they surface rather
+ * than hide.
+ */
+export function selectStaleApplyingOperations(
+  rows: readonly PendingOperationRecord[],
+  cutoffIso: string,
+): PendingOperationRecord[] {
+  const cutoff = new Date(cutoffIso).getTime();
+  return rows.filter((row) => {
+    if (row.status !== "applying") return false;
+    const stamp = row.claimedAt || row.createdAt;
+    const claimed = new Date(stamp).getTime();
+    // An unparsable timestamp must surface, not hide: a row we cannot age is
+    // exactly the row a crash left behind.
+    if (Number.isNaN(claimed)) return true;
+    return claimed <= cutoff;
+  });
+}
+
+/**
+ * Rows a crash left stranded mid-apply.
+ *
+ * The claim/lease means such a row is `applying`, not `pending`, so it can
+ * never be silently re-applied — but it is also invisible to every surface,
+ * which all list `status: "pending"`. Its Gmail mutation may or may not have
+ * landed, so this is deliberately a *report*, not an auto-retry: only the user
+ * can decide whether the change went through.
+ *
+ * Approval surfaces should call this and offer the rows for review; see
+ * TODOS.md ("Recover rows stranded in `applying`").
+ */
+export async function getStaleApplyingOperations(options?: {
+  olderThanMs?: number;
+  now?: Date;
+  accountId?: string;
+}): Promise<PendingOperationRecord[]> {
+  const olderThanMs = options?.olderThanMs ?? STALE_APPLYING_THRESHOLD_MS;
+  const now = options?.now ?? new Date();
+  const cutoffIso = new Date(now.getTime() - olderThanMs).toISOString();
+  const rows = await getPendingOperations({
+    status: "applying",
+    ...(options?.accountId !== undefined
+      ? { accountId: options.accountId }
+      : {}),
+  });
+  return selectStaleApplyingOperations(rows, cutoffIso);
 }
 
 export async function getPendingOperationsByIds(
