@@ -5,12 +5,65 @@ import type {
   AgentResult,
   AgentStreamChunk,
 } from "./types.js";
+import { anthropicTotalTokens, type AnthropicUsageLike } from "./tokens.js";
 
 /** Env with CLAUDECODE unset so spawned claude processes don't detect a nested session. */
 function cleanEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env["CLAUDECODE"];
   return env;
+}
+
+export interface ClaudeCliParseResult {
+  text: string;
+  tokensUsed: number;
+}
+
+/**
+ * Parse the JSON emitted by `claude -p --output-format json`.
+ *
+ * Pure so the token accounting can be unit-tested without spawning the CLI.
+ *
+ * Observed shape (CLI live run, one-word reply):
+ *   {"type":"result","subtype":"success","result":"pong",
+ *    "usage":{"input_tokens":2,"cache_creation_input_tokens":13901,
+ *             "cache_read_input_tokens":15242,"output_tokens":4}, ...}
+ *
+ * `tokensUsed` follows the canonical definition in `tokens.js`: all input
+ * (including cache traffic, which Anthropic reports *separately from*
+ * `input_tokens`) plus all output. Recording `output_tokens` alone — as this
+ * executor used to — under-reported that run by roughly four orders of
+ * magnitude.
+ *
+ * Non-JSON stdout is returned verbatim as the answer with 0 tokens, so a CLI
+ * that prints plain text still produces a usable result rather than an error.
+ */
+export function parseClaudeCliOutput(stdout: string): ClaudeCliParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { text: stdout, tokensUsed: 0 };
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return { text: stdout, tokensUsed: 0 };
+  }
+
+  const record = parsed as {
+    result?: unknown;
+    text?: unknown;
+    usage?: AnthropicUsageLike | null;
+  };
+
+  const text =
+    typeof record.result === "string"
+      ? record.result
+      : typeof record.text === "string"
+        ? record.text
+        : stdout;
+
+  return { text, tokensUsed: anthropicTotalTokens(record.usage) };
 }
 
 export class ClaudeExecutor implements AgentExecutor {
@@ -69,27 +122,13 @@ export class ClaudeExecutor implements AgentExecutor {
           return;
         }
 
-        try {
-          const parsed = JSON.parse(stdout) as {
-            result?: string;
-            text?: string;
-            usage?: { output_tokens?: number };
-          };
-
-          resolve({
-            text: parsed.result ?? parsed.text ?? stdout,
-            agentUsed: "claude",
-            tokensUsed: parsed.usage?.output_tokens ?? 0,
-            durationMs: Date.now() - start,
-          });
-        } catch {
-          resolve({
-            text: stdout,
-            agentUsed: "claude",
-            tokensUsed: 0,
-            durationMs: Date.now() - start,
-          });
-        }
+        const { text, tokensUsed } = parseClaudeCliOutput(stdout);
+        resolve({
+          text,
+          agentUsed: "claude",
+          tokensUsed,
+          durationMs: Date.now() - start,
+        });
       });
 
       child.on("error", (err) => {
