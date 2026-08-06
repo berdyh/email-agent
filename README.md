@@ -116,11 +116,13 @@ npm run dev    # Start development server
 npm run start  # Start on port 3847
 ```
 
-Then open [http://localhost:3847](http://localhost:3847).
+Then open [http://localhost:3847](http://localhost:3847), or
+[http://127.0.0.1:3847](http://127.0.0.1:3847) — the URL Next and
+`email-agent serve` print. Both address the same server and both work.
 
 **The server binds `127.0.0.1` only.** The API's "is this local?" checks read the
 `Host`, `Origin` and `Sec-Fetch-Site` headers, all of which a non-browser client
-sets for itself, so they stop cross-site pages and DNS rebinding but not a
+sets for itself, so they stop cross-site pages and DNS-rebound pages but not a
 determined caller. Binding to loopback is the part no header can talk its way
 past. Set `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` (or pass
 `email-agent serve --host <addr>`) if you genuinely want it reachable from

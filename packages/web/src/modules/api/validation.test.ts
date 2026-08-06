@@ -429,39 +429,49 @@ describe("web API validation", () => {
     assert.equal(armedOnly.gmail.autoApplyAcknowledged, true);
   });
 
-  it("blocks cross-site and non-local mutation requests", () => {
-    const crossSite = new Request("http://localhost:3847/api/actions", {
-      method: "POST",
-      headers: {
-        origin: "https://example.com",
-        "sec-fetch-site": "cross-site",
-      },
-    });
-    assert.equal(mutationGuardResponse(crossSite)?.status, 403);
+  // ---------------------------------------------------------------------
+  // Local-only guards.
+  //
+  // SHAPE MATTERS HERE. In an installed Next server the route handler never
+  // sees the caller's host in `request.url`: `attachRequestMeta` composes the
+  // URL from the server's own configured hostname, which the render server
+  // defaults to `localhost`. Measured against this app, `new URL(request.url)`
+  // reads `http://localhost:3847` for EVERY request under both
+  // `next dev --hostname 127.0.0.1` and `next start --hostname 127.0.0.1`.
+  //
+  // So every request below is built with that fixed URL and a separate `host`
+  // header, which is the only place the caller's real target appears. The
+  // previous tests constructed `new Request("http://evil.example…")`, a shape
+  // the runtime never produces, and so passed while the running server let a
+  // rebound read through and refused the browser at 127.0.0.1.
+  // ---------------------------------------------------------------------
 
-    const remoteHost = new Request("http://192.168.1.20:3847/api/actions", {
-      method: "POST",
-      headers: { origin: "http://192.168.1.20:3847" },
-    });
-    assert.equal(mutationGuardResponse(remoteHost)?.status, 403);
+  /** The origin Next hands the handler, regardless of what the caller sent. */
+  const NEXT_URL = "http://localhost:3847";
 
-    const sameOrigin = new Request("http://localhost:3847/api/actions", {
-      method: "POST",
-      headers: {
-        origin: "http://localhost:3847",
-        "sec-fetch-site": "same-origin",
-      },
+  function serverRequest(
+    path: string,
+    options: {
+      host: string;
+      origin?: string;
+      fetchSite?: string;
+      method?: string;
+    },
+  ): Request {
+    const headers: Record<string, string> = { host: options.host };
+    if (options.origin !== undefined) headers["origin"] = options.origin;
+    if (options.fetchSite !== undefined) headers["sec-fetch-site"] = options.fetchSite;
+    return new Request(`${NEXT_URL}${path}`, {
+      method: options.method ?? "GET",
+      headers,
     });
-    assert.equal(mutationGuardResponse(sameOrigin), undefined);
+  }
 
+  function withRemoteAllowed(body: () => void): void {
     const previous = process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
     process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = "1";
     try {
-      const allowedRemote = new Request("http://192.168.1.20:3847/api/actions", {
-        method: "POST",
-        headers: { origin: "http://192.168.1.20:3847" },
-      });
-      assert.equal(mutationGuardResponse(allowedRemote), undefined);
+      body();
     } finally {
       if (previous === undefined) {
         delete process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
@@ -469,79 +479,163 @@ describe("web API validation", () => {
         process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = previous;
       }
     }
+  }
+
+  it("accepts both local addresses the server is reachable at", () => {
+    // The regression: `http://127.0.0.1:3847` is the URL Next and
+    // `email-agent serve` PRINT, and every mutation from that tab used to be
+    // refused with "Cross-origin mutation requests are not allowed" because the
+    // guard compared the Origin against Next's `localhost` URL.
+    for (const host of ["localhost:3847", "127.0.0.1:3847", "[::1]:3847"]) {
+      const hostname = host.slice(0, host.lastIndexOf(":"));
+      const request = serverRequest("/api/approvals/apply", {
+        method: "POST",
+        host,
+        origin: `http://${hostname}:3847`,
+        fetchSite: "same-origin",
+      });
+      assert.equal(mutationGuardResponse(request), undefined, host);
+      assert.equal(readGuardResponse(request), undefined, host);
+    }
+  });
+
+  it("refuses a DNS-rebound page, on reads as well as mutations", () => {
+    // A page on evil.example that rebinds the name to 127.0.0.1 is same-origin
+    // WITH ITSELF, so its fetches carry no Origin and `Sec-Fetch-Site:
+    // same-origin`. The `Host` header is the only thing that gives it away, and
+    // the read guard used to answer 200 with the whole approval queue.
+    const rebound = serverRequest("/api/approvals", {
+      host: "evil.example:3847",
+      fetchSite: "same-origin",
+    });
+    assert.equal(readGuardResponse(rebound)?.status, 403);
+
+    const reboundWrite = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "evil.example:3847",
+      origin: "http://evil.example:3847",
+      fetchSite: "same-origin",
+    });
+    assert.equal(mutationGuardResponse(reboundWrite)?.status, 403);
+  });
+
+  it("does not let X-Forwarded-Host talk a rebound host back into the allowlist", () => {
+    // `x-forwarded-host` is not a forbidden header name, so the rebound page can
+    // set it. Nothing proxies this app, so the guard must ignore it.
+    const spoofed = new Request(`${NEXT_URL}/api/approvals`, {
+      headers: {
+        host: "evil.example:3847",
+        "x-forwarded-host": "localhost:3847",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(readGuardResponse(spoofed)?.status, 403);
+  });
+
+  it("refuses another app sharing loopback on a different port", () => {
+    const otherLocalApp = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "http://localhost:8080",
+      fetchSite: "same-origin",
+    });
+    assert.equal(mutationGuardResponse(otherLocalApp)?.status, 403);
+  });
+
+  it("refuses cross-site metadata and opaque origins", () => {
+    const crossSite = serverRequest("/api/actions", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "https://example.com",
+      fetchSite: "cross-site",
+    });
+    assert.equal(mutationGuardResponse(crossSite)?.status, 403);
+
+    // A sandboxed iframe sends the literal string "null" as its Origin.
+    const opaque = serverRequest("/api/actions", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "null",
+      fetchSite: "same-origin",
+    });
+    assert.equal(mutationGuardResponse(opaque)?.status, 403);
+
+    // Junk in the Host header must fail closed rather than throw.
+    const junkHost = serverRequest("/api/approvals", { host: "not a host/path" });
+    assert.equal(readGuardResponse(junkHost)?.status, 403);
   });
 
   it("refuses a mutation that carries no browser fetch metadata at all", () => {
     // The exact shape the old guard waved through:
     //   curl -X POST -H 'Host: localhost:3847' http://…/api/approvals/apply
-    // `Host` is caller-controlled, so `request.url` said "local" and neither
-    // Origin nor Sec-Fetch-Site was present to contradict it.
-    const headless = new Request("http://localhost:3847/api/approvals/apply", {
+    const headless = serverRequest("/api/approvals/apply", {
       method: "POST",
+      host: "localhost:3847",
     });
-    const response = mutationGuardResponse(headless);
-    assert.equal(response?.status, 403);
+    assert.equal(mutationGuardResponse(headless)?.status, 403);
 
-    // A real browser always sends at least Sec-Fetch-Site, so the UI is unaffected.
-    const browserFetch = new Request("http://localhost:3847/api/approvals/apply", {
-      method: "POST",
-      headers: { "sec-fetch-site": "same-origin" },
-    });
-    assert.equal(mutationGuardResponse(browserFetch), undefined);
+    // Reads deliberately stay reachable without it, so the address bar and
+    // local debugging still work.
+    assert.equal(readGuardResponse(headless), undefined);
 
-    // A same-origin Origin header alone is enough too (older browsers).
-    const originOnly = new Request("http://localhost:3847/api/approvals/apply", {
-      method: "POST",
-      headers: { origin: "http://localhost:3847" },
-    });
-    assert.equal(mutationGuardResponse(originOnly), undefined);
-  });
-
-  it("keeps EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS as the full escape hatch", () => {
-    const previous = process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
-    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = "1";
-    try {
-      // Remote host, no Origin, no Sec-Fetch-Site — the documented deployment
-      // where a non-browser client is expected to write.
-      const headlessRemote = new Request("http://192.168.1.20:3847/api/approvals/apply", {
+    // Either header on its own is enough for a mutation: Safari only shipped
+    // Fetch Metadata in 16.4, so Origin has to be sufficient by itself.
+    for (const headerSet of [{ fetchSite: "same-origin" }, { origin: "http://localhost:3847" }]) {
+      const browserFetch = serverRequest("/api/approvals/apply", {
         method: "POST",
+        host: "localhost:3847",
+        ...headerSet,
       });
-      assert.equal(mutationGuardResponse(headlessRemote), undefined);
-      assert.equal(readGuardResponse(headlessRemote), undefined);
-    } finally {
-      if (previous === undefined) {
-        delete process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"];
-      } else {
-        process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = previous;
-      }
+      assert.equal(mutationGuardResponse(browserFetch), undefined);
     }
   });
 
+  it("keeps EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS as the full escape hatch", () => {
+    withRemoteAllowed(() => {
+      // The real LAN shape: `serve --host 0.0.0.0` makes Next's own URL
+      // `http://0.0.0.0:3847`, while the browser addresses the LAN IP. Comparing
+      // the Origin against Next's URL used to 403 this even with the flag on.
+      const lanBrowser = new Request("http://0.0.0.0:3847/api/approvals/apply", {
+        method: "POST",
+        headers: {
+          host: "192.168.1.20:3847",
+          origin: "http://192.168.1.20:3847",
+          "sec-fetch-site": "same-origin",
+        },
+      });
+      assert.equal(mutationGuardResponse(lanBrowser), undefined);
+      assert.equal(readGuardResponse(lanBrowser), undefined);
+
+      // And the headless client the flag exists for.
+      const headlessRemote = new Request("http://0.0.0.0:3847/api/approvals/apply", {
+        method: "POST",
+        headers: { host: "192.168.1.20:3847" },
+      });
+      assert.equal(mutationGuardResponse(headlessRemote), undefined);
+      assert.equal(readGuardResponse(headlessRemote), undefined);
+    });
+  });
+
   it("guards mail reads against non-local and cross-origin callers", () => {
-    // GET /api/approvals returns subjects, senders and snippets and used to have
-    // no guard at all, so any page the user visited could read the queue.
-    const crossOrigin = new Request("http://localhost:3847/api/approvals", {
-      headers: { origin: "https://example.com", "sec-fetch-site": "cross-site" },
+    // GET /api/approvals returns subjects, senders and snippets.
+    const crossOrigin = serverRequest("/api/approvals", {
+      host: "localhost:3847",
+      origin: "https://example.com",
+      fetchSite: "cross-site",
     });
     assert.equal(readGuardResponse(crossOrigin)?.status, 403);
 
-    const rebound = new Request("http://evil.example.com:3847/api/approvals");
-    assert.equal(readGuardResponse(rebound)?.status, 403);
+    const remote = serverRequest("/api/approvals", { host: "192.168.1.20:3847" });
+    assert.equal(readGuardResponse(remote)?.status, 403);
 
-    const sameOrigin = new Request("http://localhost:3847/api/approvals", {
-      headers: { origin: "http://localhost:3847", "sec-fetch-site": "same-origin" },
-    });
-    assert.equal(readGuardResponse(sameOrigin), undefined);
-
-    // Typed into the address bar: Sec-Fetch-Site: none, no Origin. Reads stay
-    // reachable for local debugging — unlike mutations, they are not required
-    // to prove they came from the UI.
-    const addressBar = new Request("http://localhost:3847/api/approvals", {
-      headers: { "sec-fetch-site": "none" },
+    // Typed into the address bar: Sec-Fetch-Site: none, no Origin.
+    const addressBar = serverRequest("/api/approvals", {
+      host: "127.0.0.1:3847",
+      fetchSite: "none",
     });
     assert.equal(readGuardResponse(addressBar), undefined);
-    assert.equal(readGuardResponse(new Request("http://127.0.0.1:3847/api/approvals")), undefined);
   });
+
 
   it("returns generic internal errors", async () => {
     const originalError = console.error;

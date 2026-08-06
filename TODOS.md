@@ -504,12 +504,32 @@ escape hatch) also opens the bind to `0.0.0.0`, so "I meant to expose this" is
 one switch; `serve --host` overrides and prints what the exposure costs. Off-box
 processes no longer reach the socket at all, whatever `Host` they would have
 sent. Alongside that, mutations must now carry at least one of
-`Origin`/`Sec-Fetch-Site` — every browser since 2020 sends both, so the UI is
-unaffected, while the header-less one-liner is refused — and a new
-`readGuardResponse` applies the same host/origin/site checks to every route that
-returns mail (`/api/approvals`, `/api/approvals/count`, `/api/gmail`,
-`/api/gmail/[id]`, `/api/gmail/unread-count`). Reads deliberately do NOT require
-the fetch metadata, so the address bar and local debugging still work.
+`Origin`/`Sec-Fetch-Site` — a browser always sends at least one (`Origin` on
+every non-GET fetch since long before Fetch Metadata, which Safari only shipped
+in 16.4/2023), so the UI is unaffected while the header-less one-liner is
+refused — and a new `readGuardResponse` applies the same host/origin/site checks
+to every route that returns mail. Reads deliberately do NOT require the fetch
+metadata, so the address bar and local debugging still work.
+
+**Correction (review of PR #10).** The first version of the header half read the
+host from `new URL(request.url)`, which is not the caller's `Host`: installed
+Next composes that URL from the server's own configured hostname
+(`attachRequestMeta` in `next/dist/server/next-server.js`, whose render server
+defaults the hostname to `localhost`). Measured against a running server, under
+both `next dev --hostname 127.0.0.1` and `next start --hostname 127.0.0.1` every
+request arrived at the handler as `http://localhost:<port>` whatever `Host` was
+sent. That broke the guard in both directions: a browser on
+`http://127.0.0.1:3847` — the URL Next and `email-agent serve` both print — was
+403'd out of every mutation, and a DNS-rebound `Host: evil.example` never
+reached the allowlist at all, so `GET /api/approvals` answered 200 with the
+queue. The unit tests missed it because they built
+`new Request("http://evil.example…")`, a shape the runtime never produces. The
+guard now reads the `Host` header directly, accepts an `Origin` naming any local
+hostname on the port the caller addressed (so `localhost` and `127.0.0.1` both
+work and `localhost:8080` does not), and ignores `X-Forwarded-Host`, which a
+rebound page can set for itself. The tests were rebuilt around the real shape —
+Next's fixed URL plus a separate `Host` header — and the behaviour was re-checked
+against a live server.
 
 Stated honestly in the code, `CLAUDE.md`/`AGENTS.md`, the module cards and the
 README: the header checks buy anti-DNS-rebinding and anti-CSRF for browsers plus
