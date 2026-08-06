@@ -53,7 +53,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | For the `claude-sdk` executor | Claude Agent SDK access without the CLI |
 | `OPENROUTER_API_KEY` | For OpenRouter | Embeddings (Qwen3) + LLM access via openrouter.ai |
 | `OPENROUTER_MODEL` | No | OpenRouter LLM model (default: `qwen/qwen3-8b`) |
-| `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments that need non-local browser writes |
+| `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments. Relaxes the API's local-origin checks **and** makes `email-agent serve` bind `0.0.0.0` instead of loopback |
 
 The root `.env` is loaded by both the CLI and the web server at startup (it holds
 API keys). Agent selection, embedding provider, GCP project, and data dir are
@@ -89,9 +89,21 @@ npx email-agent approvals review       # decide per email: apply / reject / skip
 npx email-agent approvals apply        # approve everything pending, after a confirm
 npx email-agent approvals reject       # discard everything pending
 
-# Start the web UI
+# Recover a user action the edit flow overwrote
+npx email-agent actions snapshots                    # every saved version, newest first
+npx email-agent actions snapshots --action junk.action.ts
+npx email-agent actions snapshots restore junk.action.ts.2026-02-28T12-00-00-000Z.ts
+
+# Start the web UI (binds 127.0.0.1 by default)
 npx email-agent serve
+npx email-agent serve --host 0.0.0.0   # expose it deliberately; see the warning it prints
 ```
+
+A restore is re-validated by the same source guard that runs on save, so a
+snapshot taken before that guard existed — one that imports a value, for
+instance — is refused rather than restored. The command prints the specific
+rules it violated; copy what you need out of `~/.email-agent/actions/.snapshots/`
+by hand in that case.
 
 `review`, `apply`, and `reject` all take `--batch <id>` to scope the decision to a
 single action run. `approvals list` prints the batch id next to each group; a
@@ -105,6 +117,19 @@ npm run start  # Start on port 3847
 ```
 
 Then open [http://localhost:3847](http://localhost:3847).
+
+**The server binds `127.0.0.1` only.** The API's "is this local?" checks read the
+`Host`, `Origin` and `Sec-Fetch-Site` headers, all of which a non-browser client
+sets for itself, so they stop cross-site pages and DNS rebinding but not a
+determined caller. Binding to loopback is the part no header can talk its way
+past. Set `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` (or pass
+`email-agent serve --host <addr>`) if you genuinely want it reachable from
+elsewhere — and understand that anything that can then reach the port can read
+your mail and approve queued Gmail changes.
+
+None of this protects you from another process running as **you** on this
+machine: it can reach loopback, and it can read the OAuth tokens under
+`~/.email-agent/accounts/` and talk to Gmail without the app at all.
 
 **Pages:**
 - `/mail` — Three-panel inbox with email list, reader, and AI summaries

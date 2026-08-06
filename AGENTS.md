@@ -30,11 +30,13 @@ npx email-agent accounts remove <email>  # Remove account
 npx email-agent accounts default <email> # Set default account
 npx email-agent run-action <id>    # Run an action (priority, subscription, junk)
 npx email-agent list-actions       # List available actions
+npx email-agent actions snapshots  # List saved versions of user actions (--action <file>)
+npx email-agent actions snapshots restore <snapshot>  # Restore a snapshot (--action <file>, -y)
 npx email-agent approvals          # List Gmail changes queued for approval
 npx email-agent approvals review   # Approve/reject each queued change interactively (--batch <id>)
 npx email-agent approvals apply    # Approve and apply queued changes in bulk (--batch <id>)
 npx email-agent approvals reject   # Reject queued changes without applying (--batch <id>)
-npx email-agent serve              # Start web UI
+npx email-agent serve              # Start web UI (--port, --host; binds loopback unless --host/EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1)
 npx email-agent cron setup         # Install crontab for periodic fetching (--interval, --scope)
 npx email-agent cron status        # Show current crontab entry
 npx email-agent cron remove        # Remove crontab entry
@@ -60,7 +62,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - **Unread sync reconciliation**: Complete unread-scoped syncs should mark same-account local unread rows as read when Gmail no longer returns them; do not use whole-table overwrite to clear stale unread rows.
 - **Agent system**: Strategy pattern executors (Codex SDK/CLI + Codex/Gemini CLI + DirectAPI + OpenRouter) with AgentRouter; supports streaming via `executeStream()`
 - **Action system**: Plugin architecture — `*.action.ts` files auto-discovered from built-in + user dirs
-- **Approval gate**: Action runs never mutate Gmail directly. `ActionRunner` maps results to Gmail operations and always enqueues them in the LanceDB `pending_operations` table first (`actions/approval.ts`, batchId = action_results row id). Mutations then happen via `applyPendingOperationsByIds()` after explicit user approval: the web `ApprovalPanel` on `/actions` (`/api/approvals*`) or the CLI (`run-action` prompt, `approvals` command). Resolved rows stay as an audit trail. Manual per-email clicks in the mail UI stay immediate — the click is the approval.
+- **Approval gate**: Action runs never mutate Gmail directly. `ActionRunner` maps results to Gmail operations and always enqueues them in the LanceDB `pending_operations` table first (`actions/approval.ts`, batchId = action_results row id). Mutations then happen via `applyPendingOperationsByIds()` after explicit user approval: the web `ApprovalPanel` on `/actions` (`/api/approvals*`) or the CLI (`run-action` prompt, `approvals` command). Resolved rows stay as an audit trail. Both surfaces distinguish "already resolved elsewhere" from a no-op: core claims each row before touching Gmail, so `requested - (applied + failed)` is exactly the set of ids another tab/the CLI/auto-apply got to first — `POST /api/approvals/apply` reports it as `skipped` and answers 409 when nothing at all was claimed, and the CLI says so instead of "Applied 0 changes". Manual per-email clicks in the mail UI stay immediate — the click is the approval.
 - **Auto-apply opt-in** (`gmail.autoApplyActions` + `gmail.autoApplyAcknowledged`): applies the queued batch immediately instead of waiting for approval. Both flags are required — `normalizeSettings()` (core) and `normalizeGmailConfig()` (web validation) force the toggle off unless the acknowledgement is set, and CLI `config set` refuses both keys outright. Settings → Gmail is the only surface that shows the warnings before recording the acknowledgement; a direct PUT or a hand-edited settings.json setting both booleans is still honoured, so the invariant is "consent recorded", not "web UI only".
 - **Coding agent skills**: Two skill docs drive runtime action creation via `POST /api/actions/generate`:
   - `CREATE_ACTION_SKILLS.md` (CREATE skill) — system prompt teaching the AI to generate new `.action.ts` files from scratch (template, interface, examples)
@@ -85,6 +87,10 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - `packages/core/src/gmail/sync.ts` — Shared fetch→embed→store pipeline (used by CLI + web)
 - `packages/core/src/gmail/operations.ts` — Gmail write operations (trash, spam, labels, read/unread)
 - `packages/core/src/actions/apply.ts` — Maps action results → Gmail operations, applies them
+- `packages/web/src/modules/api/approvals-contract.ts` — The `/api/approvals*` wire types + stale-apply accounting, imported by BOTH the routes and `hooks/use-approvals`
+- `packages/web/src/modules/api/email-lookup.ts` / `packages/cli/src/email-lookup.ts` — Batched `(accountId, id IN …)` email fetch for the approval surfaces (duplicated; core-side follow-up in TODOS)
+- `packages/web/src/hooks/use-email-detail.ts` — The one email-detail query + its `["email", accountId, emailId]` key
+- `packages/cli/src/commands/action-snapshots.ts` — `actions snapshots list|restore`, the only reachable recovery path for an overwritten user action
 - `packages/web/src/app/api/` — All Next.js API routes
 - `packages/core/src/actions/built-in/` — Built-in actions
 - `~/.email-agent/actions/` — User-created actions (auto-discovered)
@@ -118,7 +124,7 @@ For module/submodule work, load `docs/architecture/module-index.md` first, then 
 - `next.config.ts` has webpack `extensionAlias` (`.js` → `.ts/.tsx/.js`) — required because core uses `.js` extensions but web resolves to `.ts` source via tsconfig `paths`
 - Dynamic filesystem patterns (`readdir`, `import.meta.url` dirs) in core don't work in webpack — use static imports in web routes (e.g. `ActionRegistry.loadStatic()`)
 - For runtime `import()` of files outside the bundle (e.g. user plugins in `~/.email-agent/actions/`), use the `new Function("p", "return import(p)")` escape hatch — webpack can't statically trace it, so Node's native loader handles the call. See `loadUserAction()` in `actions/user-actions.ts`. Without this, the import silently fails inside webpack and the route returns 404
-- State-changing API routes reject non-local or cross-site browser requests unless `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`; keep this guard aligned with `packages/web/src/modules/api/validation.ts`
+- **Local-only enforcement is the bind, not the headers.** `mutationGuardResponse`/`readGuardResponse` (`packages/web/src/modules/api/validation.ts`) check `Host` (via `request.url`), `Origin` and `Sec-Fetch-Site` — all of which a non-browser caller sets itself. They buy anti-DNS-rebinding and anti-CSRF for *browsers*, plus a speed bump: mutations now require at least one of `Origin`/`Sec-Fetch-Site` to be present, so a bare `curl -X POST -H 'Host: localhost:3847'` is refused. The actual boundary is that `next dev`/`next start`/`email-agent serve` bind `127.0.0.1`, so an off-box process cannot open the socket at all. Read routes that return mail (`/api/approvals`, `/api/approvals/count`, `/api/gmail`, `/api/gmail/[id]`, `/api/gmail/unread-count`) carry `readGuardResponse`; unlike mutations they do NOT require the fetch metadata, so the address bar and local debugging still work. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` relaxes every check *and* opens the bind to `0.0.0.0`. **Not stopped by any of this:** a process on the same machine as the same user — it reaches loopback and can read `~/.email-agent/accounts/{email}/token.json` and call Gmail directly. A shared-secret token would raise that to "same machine, same user *only*"; TODOS carries the design and why it needs an out-of-band launch URL
 - Settings updates are partial deep merges. Preserve omitted nested settings, normalize legacy nullable values such as `notifications.webhooks: null`, and keep stale UI-only fields like `panelWidths` out of persisted responses.
 - `packages/web/package-lock.json` is a **symlink** to `../../package-lock.json` — do NOT delete it. Next.js uses it to detect npm as the package manager; without it, it falls back to globally-installed pnpm and fails with `ENOWORKSPACES`
 - `packages/web/next.config.ts` has `outputFileTracingRoot` set to monorepo root — prevents Next.js from walking up to stray lockfiles in parent directories

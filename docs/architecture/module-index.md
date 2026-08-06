@@ -32,7 +32,8 @@ For a visual view of the same map (areas and their dependencies), open [`module-
 - Action generation: web action chat -> `/api/actions/generate` -> skill docs -> `core/agents`.
 - Analysis: web analysis routes -> `core/analysis` -> `core/agents` or `core/db`.
 - Settings: web settings route and CLI config command -> `core/config`.
-- Web mutations: browser-origin writes must pass `modules/api` mutation-origin checks before touching Gmail, DB, config, or user action files.
+- Web mutations: browser-origin writes must pass `modules/api` mutation-origin checks before touching Gmail, DB, config, or user action files; mail-returning reads must pass `readGuardResponse`.
+- Action recovery: CLI `actions snapshots` and `/api/actions/user/snapshots` -> `core/actions` `listSnapshots`/`restoreSnapshot`; restore re-validates through the save-time source guard, so a pre-guard snapshot can be refused.
 
 ## Validation
 
@@ -50,5 +51,5 @@ For a visual view of the same map (areas and their dependencies), open [`module-
 - Cluster labels/descriptions: `complete-now`; k-means clusters now derive names/descriptions from member terms and sender domains.
 - Cluster membership identity: `complete-now`; clustering stores account-scoped email keys so duplicate Gmail ids across accounts stay distinct.
 - Dynamic user action import escape hatch: `replace-with-contract`; required by Next webpack/runtime split and guarded by filename/path validation until a separate plugin sandbox exists.
-- Remote browser mutations: `replace-with-contract`; the local app blocks non-local/cross-site mutation requests unless `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` is explicitly set for a trusted deployment.
+- Remote browser mutations: `replace-with-contract`; the listener binds loopback and the API's header checks refuse non-local/cross-site requests (reads of mail included) unless `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` is explicitly set for a trusted deployment, which relaxes the checks and opens the bind. The header checks are caller-controlled and are not a boundary against a non-browser client; the bind is.
 - `ui.panelWidths`: `remove`; unused config/store field was removed after a reference scan found no layout consumer.
