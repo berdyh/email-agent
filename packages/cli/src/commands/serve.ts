@@ -11,13 +11,58 @@ function resolveRepoRoot(): string {
   return join(here, "..", "..", "..", "..");
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+/**
+ * Where the listener binds. This is the one part of the local-only story that a
+ * request header cannot argue with: the API's `Host`/`Origin`/`Sec-Fetch-*`
+ * checks are all caller-controlled, so on a `0.0.0.0` bind anything on the
+ * network can send `Host: localhost` and satisfy them. Binding to loopback means
+ * the connection is refused by the kernel before any handler runs.
+ *
+ * `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` — already the documented escape hatch
+ * for non-local browser writes — also opens the bind, so the two halves of
+ * "I meant to expose this" stay one switch. `--host` overrides both.
+ *
+ * What this does NOT stop: another process on this machine. It can reach
+ * loopback, and if it runs as this user it can also read the OAuth tokens under
+ * `~/.email-agent/accounts/` and skip the app entirely.
+ */
+export function resolveServeHost(
+  explicitHost: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  if (explicitHost) return explicitHost;
+  return env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] === "1" ? "0.0.0.0" : "127.0.0.1";
+}
+
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host);
+}
+
 export function registerServe(program: Command) {
   program
     .command("serve")
     .description("Start the Email Agent web UI")
     .option("-p, --port <port>", "Port to run on", "3847")
-    .action((options: { port: string }) => {
-      console.log(chalk.bold(`\nStarting Email Agent on port ${options.port}...\n`));
+    .option(
+      "-H, --host <host>",
+      "Interface to bind (default: loopback; 0.0.0.0 when EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1)",
+    )
+    .action((options: { port: string; host?: string }) => {
+      const host = resolveServeHost(options.host, process.env);
+      console.log(
+        chalk.bold(`\nStarting Email Agent on ${host}:${options.port}...\n`),
+      );
+      if (!isLoopbackHost(host)) {
+        console.log(
+          chalk.yellow(
+            `Binding to ${host}: anything that can reach this port can read your mail and\n` +
+              `approve queued Gmail changes. The API's origin checks are header-based and do\n` +
+              `not stop a non-browser client.\n`,
+          ),
+        );
+      }
 
       const repoRoot = resolveRepoRoot();
       const webDir = join(repoRoot, "packages", "web");
@@ -27,7 +72,7 @@ export function registerServe(program: Command) {
       // lose to the hardcoded flag. Spawn next directly instead.
       const child = spawn(
         "npx",
-        ["next", "dev", "--port", options.port],
+        ["next", "dev", "--port", options.port, "--hostname", host],
         {
           stdio: "inherit",
           env: { ...process.env, PORT: options.port },

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 3847",
+    "dev": "next dev --port 3847 --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start --port 3847",
+    "start": "next start --port 3847 --hostname 127.0.0.1",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
