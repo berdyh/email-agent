@@ -27,6 +27,19 @@ the CLI's own approvals flow.
 Found by: scoping the barrel-export fix (worktree-approval-gate-bypass,
 2026-08-06).
 
+### No end-to-end denied-case test through `loadUserAction()`
+**Priority:** P3
+`barrel-surface.test.ts` pins the surface at the namespace/resolution level
+(source barrels, dist barrels, `exports`-map keys, deep-path refusal), but the
+actual attack vector — a real `.action.ts` file loaded through
+`loadUserAction()`'s native-import escape hatch trying to reach Gmail mutation
+— has no test. Write a temp action file that imports `@email-agent/core/gmail`
+(and one that tries the deep operations path), load it through the real code
+path, and assert the mutating names are unreachable / the import rejects. This
+also documents empirically how bare specifiers resolve from
+`~/.email-agent/actions/`.
+Found by: testing specialist during /review (2026-08-06).
+
 ### The consent flag records consent, it does not prove the warnings were seen
 **Priority:** P3
 `normalizeSettings` checks only that `autoApplyAcknowledged` is `true`, never
@@ -365,10 +378,13 @@ classification, are pure but inlined where tests cannot reach them.
 Was P1. A generated `.action.ts` (dynamically imported in-process) could
 `import { applyOperations } from "@email-agent/core"` — or any raw Gmail write
 op — and mutate Gmail with no queue row, no approval, no audit trail. Closed by
-construction with fix (a)+(d) of the original entry: `applyOperations` and the
+construction with fix (a)+(d) of the original entry: `applyOperations`, the
 six write operations (`markAsRead`, `markAsUnread`, `trashMessage`,
-`markAsSpam`, `addLabels`, `removeLabels`) are no longer exported from any
-public barrel, and the package `exports` map (exact keys, no wildcards) is the
+`markAsSpam`, `addLabels`, `removeLabels`), and — caught by the /review
+security pass — the raw client factories (`createGmailClient`,
+`createGmailClientForAccount`, whose gmail.modify-scoped client every write op
+wraps in one line) are no longer exported from any public barrel, and the
+package `exports` map (exact keys, no wildcards, key set pinned by test) is the
 only thing Node's loader consults for user-action imports, so no public
 specifier reaches mutation. Core keeps using relative imports; web's manual
 mail actions (the click-is-the-approval path) moved to a webpack-only
