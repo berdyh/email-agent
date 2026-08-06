@@ -70,13 +70,28 @@ export async function applyOperationIds(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const spinner = ora(`Applying ${ids.length} changes to Gmail...`).start();
   const result = await applyPendingOperationsByIds(ids);
+  // Core claims each row before touching Gmail and reports one applied-or-failed
+  // entry per claimed row, so the remainder was already resolved elsewhere.
+  const skipped = Math.max(0, ids.length - (result.applied + result.failed));
+
+  if (result.applied === 0 && result.failed === 0 && skipped > 0) {
+    spinner.warn(
+      `None of the ${skipped} change${skipped === 1 ? "" : "s"} was still pending — ` +
+        `already applied or rejected elsewhere. Nothing was sent to Gmail.`,
+    );
+    return;
+  }
+
+  const skippedNote = skipped > 0 ? `, ${skipped} already resolved elsewhere` : "";
   if (result.failed > 0) {
     spinner.warn(
-      `Applied ${result.applied} changes, ${chalk.red(`${result.failed} failed`)}`,
+      `Applied ${result.applied} changes, ${chalk.red(`${result.failed} failed`)}${skippedNote}`,
     );
     for (const err of result.errors) {
       console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
     }
+  } else if (skipped > 0) {
+    spinner.warn(`Applied ${result.applied} changes to Gmail${skippedNote}`);
   } else {
     spinner.succeed(`Applied ${result.applied} changes to Gmail`);
   }
@@ -85,7 +100,98 @@ export async function applyOperationIds(ids: string[]): Promise<void> {
 export async function rejectOperationIds(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const rejected = await rejectPendingOperationsByIds(ids);
-  console.log(chalk.dim(`Rejected ${rejected} pending changes.`));
+  const skipped = Math.max(0, ids.length - rejected);
+  console.log(
+    chalk.dim(
+      `Rejected ${rejected} pending changes.` +
+        (skipped > 0 ? ` ${skipped} were already resolved elsewhere.` : ""),
+    ),
+  );
+}
+
+export interface ReviewCommitResult {
+  approvedIds: string[];
+  rejectedIds: string[];
+  rejectError?: unknown;
+  applyError?: unknown;
+}
+
+/**
+ * Commits the answers from `reviewOperations`.
+ *
+ * REJECT FIRST. Rejecting only rewrites queue rows and never calls Gmail, so it
+ * is the half that cannot fail halfway through a mailbox mutation. Applying
+ * first meant a network failure mid-batch threw before any rejection was
+ * written, silently discarding every explicit "no" the user had just typed.
+ *
+ * Both halves run even if the other throws — the approved and rejected id sets
+ * are disjoint, so neither failure makes the other unsafe — and the errors are
+ * returned rather than propagated so the caller can say exactly what was and
+ * was not recorded.
+ */
+export async function commitReviewDecisions(
+  decisions: { approved: string[]; rejected: string[] },
+  handlers: {
+    applyIds: (ids: string[]) => Promise<void>;
+    rejectIds: (ids: string[]) => Promise<void>;
+  } = { applyIds: applyOperationIds, rejectIds: rejectOperationIds },
+): Promise<ReviewCommitResult> {
+  const result: ReviewCommitResult = {
+    approvedIds: decisions.approved,
+    rejectedIds: decisions.rejected,
+  };
+
+  try {
+    await handlers.rejectIds(decisions.rejected);
+  } catch (err) {
+    result.rejectError = err;
+  }
+
+  try {
+    await handlers.applyIds(decisions.approved);
+  } catch (err) {
+    result.applyError = err;
+  }
+
+  return result;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Turns a commit result into the lines the user sees. Pure so the honesty of
+ * the failure wording — which decisions were recorded and which were not — is
+ * covered by tests rather than by reading the code.
+ */
+export function describeReviewCommit(result: ReviewCommitResult): string[] {
+  const lines: string[] = [];
+
+  if (result.rejectError) {
+    lines.push(
+      `Failed to record ${result.rejectedIds.length} rejection${result.rejectedIds.length === 1 ? "" : "s"}: ${errorText(result.rejectError)}`,
+    );
+    lines.push(
+      "Those changes are still pending — nothing was applied to Gmail for them. Re-run `email-agent approvals review` to answer again.",
+    );
+  }
+
+  if (result.applyError) {
+    lines.push(
+      `Failed to apply ${result.approvedIds.length} approved change${result.approvedIds.length === 1 ? "" : "s"}: ${errorText(result.applyError)}`,
+    );
+    if (result.rejectedIds.length > 0 && !result.rejectError) {
+      lines.push(
+        `Your ${result.rejectedIds.length} rejection${result.rejectedIds.length === 1 ? " was" : "s were"} already recorded and are not affected.`,
+      );
+    }
+    lines.push(
+      "Some of the approved changes may have reached Gmail before the failure; the rest stay queued. Run `email-agent approvals list` to see what is left.",
+    );
+  }
+
+  return lines;
 }
 
 /**
@@ -168,15 +274,20 @@ export function registerApprovals(program: Command) {
         console.log(chalk.dim("No Gmail changes awaiting approval."));
         return;
       }
-      const { approved, rejected } = await reviewOperations(
-        await loadOperationDisplays(ops),
-      );
-      await applyOperationIds(approved);
-      await rejectOperationIds(rejected);
-      const remaining = ops.length - approved.length - rejected.length;
+      const decisions = await reviewOperations(await loadOperationDisplays(ops));
+      const commit = await commitReviewDecisions(decisions);
+
+      for (const line of describeReviewCommit(commit)) {
+        console.error(chalk.red(line));
+      }
+
+      const remaining =
+        ops.length - decisions.approved.length - decisions.rejected.length;
       if (remaining > 0) {
         console.log(chalk.dim(`${remaining} changes left pending.`));
       }
+
+      if (commit.applyError || commit.rejectError) process.exitCode = 1;
     });
 
   approvals
