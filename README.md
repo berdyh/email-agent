@@ -15,7 +15,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
 
 ## Prerequisites
 
-- **Node.js** 22.18+ or 23.6+ (needed for unflagged TypeScript type stripping, which the native loader uses to import user-created `.action.ts` files; also covers `process.loadEnvFile`, used to load the root `.env`). Note 23.0–23.5 are excluded: they are newer than 22.18 but still gate type stripping behind a flag
+- **Node.js** 22.18+ or 23.6+ (needed for unflagged TypeScript type stripping, which the native loader uses to import the built-in `.action.ts` files when running from source; also covers `process.loadEnvFile`, used to load the root `.env`). User-created `.action.ts` files are parsed rather than imported, so they no longer depend on type stripping. Note 23.0–23.5 are excluded: they are newer than 22.18 but still gate type stripping behind a flag
 - **Google Cloud CLI** (`gcloud`) — for Gmail API authentication
 - **At least one AI agent CLI** (optional but recommended):
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
@@ -156,6 +156,21 @@ export default action;
 ```
 
 User actions are auto-discovered and run from either the CLI (`npx email-agent run-action <id>`) or the web `/actions` page alongside built-ins.
+
+**An action file must be pure data, and it is never executed.** Files in
+`~/.email-agent/actions/` are *parsed*, not imported: the loader statically
+evaluates the file and lifts the exported object out of it, so nothing in that
+directory ever runs in the app's process. A file may contain only `import type`,
+type declarations, variables whose values are literals/objects/arrays, and
+`export default`. Anything that computes — a value import, a function call,
+`a.b`, `new`, an arrow function, a spread, a computed key, or `${...}`
+interpolation — is refused, and the refusal is logged with the exact rules
+broken, so an action that does not appear is diagnosable rather than silently
+missing. Prompt text is never read as code, so a prompt that talks about
+importing, fetching or processing email is fine. If you hand-wrote an action
+that builds its prompt at load time, hoist the value into a plain constant
+(`const PROMPT = "..."` then `prompt: PROMPT`) — that works; computing it does
+not.
 
 See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creation guide with examples, and [EDIT_ACTION_SKILLS.md](EDIT_ACTION_SKILLS.md) for modifying existing actions.
 

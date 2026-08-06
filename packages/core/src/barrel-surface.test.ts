@@ -6,12 +6,20 @@ import * as gmailBarrel from "./gmail/index.js";
 import * as actionsBarrel from "./actions/index.js";
 import * as gmailOps from "./gmail/operations.js";
 
-// Defense in depth, NOT a sandbox. A user action runs in-process with full
-// Node privileges, so a hostile one reaches dist by path regardless of what
-// the barrels export (see TODOS.md). What this pins is the naive route: no
-// public specifier resolves to Gmail mutation, so an action that imports the
-// mutating surface by name fails loudly instead of silently mutating a
-// mailbox. These names must never come back to a public barrel; only
+// Defense in depth, NOT a sandbox — and no longer the layer the approval gate
+// rests on. User action files are now PARSED as pure data and never imported
+// (`extractActionData`), so no code from `ACTIONS_DIR` runs in this process at
+// all; every caller of the approval surface below is therefore the repo's own
+// code. That is what makes the surface safe: not that callers prove who they
+// are — inside one process they cannot — but that there is no untrusted caller
+// in the process to begin with. Malicious local code OUTSIDE the action
+// pathway is still out of scope: it can read the stored OAuth tokens and call
+// the Gmail REST API directly, touching nothing in this repo (see TODOS.md).
+//
+// What this file pins is the naive route: no public specifier resolves to
+// Gmail mutation, so anything that imports the mutating surface by name fails
+// loudly instead of silently mutating a mailbox. These names must never come
+// back to a public barrel; only
 // core-internal relative imports may use them. The deny list is DERIVED from
 // operations.ts so a newly added
 // write op is denied by construction, plus the raw client factories (every
@@ -67,9 +75,10 @@ describe("public barrel surface (approval-gate enforcement)", () => {
     // approvals routes drive the flow through them. They are NOT an
     // enforcement boundary — `applyPendingOperationsByIds` takes row ids and
     // checks only that the rows are `pending`, carrying no approval
-    // provenance, so this same pair is the residual enqueue-then-self-apply
-    // hole tracked in TODOS.md. Recorded rows keep the audit trail intact,
-    // which is what separates it from the silent bypass this file pins shut.
+    // provenance, and it never could: ESM module identity is process-global,
+    // so any function the CLI can call, in-process code can call with
+    // identical standing. The protection is upstream — action files are parsed
+    // as data, so nothing untrusted is in the process to make the call.
     assert.equal(typeof actionsBarrel.enqueueOperations, "function");
     assert.equal(typeof actionsBarrel.applyPendingOperationsByIds, "function");
     assert.equal(typeof actionsBarrel.rejectPendingOperationsByIds, "function");
