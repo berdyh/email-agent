@@ -35,9 +35,11 @@ if ! command -v node &>/dev/null; then
   fail "Node.js not found. Install v22.18+: https://nodejs.org"
 fi
 
-# v22.18+ required: user actions are saved as .action.ts files and loaded via
-# Node's native ESM loader, which needs unflagged TypeScript type stripping
-# (default on in Node 22.18 / 23.6+). Earlier Nodes can't import them at all.
+# v22.18+ required for unflagged TypeScript type stripping (default on in Node
+# 22.18 / 23.6+): the native ESM loader uses it to import the BUILT-IN
+# .action.ts files when running from source, and process.loadEnvFile needs the
+# same floor. User-created .action.ts files are parsed as data, never imported,
+# so they no longer depend on type stripping at all.
 # Note the gap: 23.0-23.5 are NEWER than 22.18 but still lack unflagged
 # stripping, so a plain ">= 22.18" test would wave them through.
 NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
