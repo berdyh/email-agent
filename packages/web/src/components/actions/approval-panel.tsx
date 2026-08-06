@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -10,20 +9,12 @@ import {
   useRejectOperations,
   type ApprovalOperation,
 } from "@/hooks/use-approvals";
+import { useEmailDetail } from "@/hooks/use-email-detail";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog } from "@/components/ui/dialog";
-
-interface EmailDetail {
-  subject: string;
-  from: string;
-  to: string;
-  date: string;
-  snippet: string;
-  bodyText: string;
-}
 
 function operationBadgeVariant(op: ApprovalOperation): "destructive" | "secondary" {
   return op.destructive ? "destructive" : "secondary";
@@ -41,17 +32,13 @@ function EmailReviewDialog({
   operation: ApprovalOperation | null;
   onClose: () => void;
 }) {
-  const { data: email, isLoading, isError } = useQuery<EmailDetail>({
-    queryKey: ["email", operation?.emailId, operation?.accountId],
-    enabled: operation !== null,
-    queryFn: async (): Promise<EmailDetail> => {
-      const res = await fetch(
-        `/api/gmail/${encodeURIComponent(operation!.emailId)}?accountId=${encodeURIComponent(operation!.accountId)}`,
-      );
-      if (!res.ok) throw new Error("Failed to load email");
-      return res.json() as Promise<EmailDetail>;
-    },
-  });
+  // Shared with MailDisplay: one fetcher, one query key order. Building the key
+  // by hand here used to cache the same email a second time under a reversed
+  // key, so an invalidation after an apply refreshed only one of the two.
+  const { data: email, isLoading, isError } = useEmailDetail(
+    operation?.accountId ?? null,
+    operation?.emailId ?? null,
+  );
 
   return (
     <Dialog

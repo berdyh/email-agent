@@ -1,7 +1,7 @@
 "use client";
 
 import { useEmailStore } from "@/store/email-store";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,20 +10,11 @@ import { Mail, MailOpen } from "lucide-react";
 import { MailSummary } from "./mail-summary";
 import { MailContent } from "./mail-content";
 import { useEffect, useRef } from "react";
-
-interface EmailDetail {
-  id: string;
-  accountId: string;
-  threadId: string;
-  from: string;
-  to: string;
-  subject: string;
-  date: string;
-  bodyText: string;
-  bodyHtml: string;
-  labels: string;
-  isUnread: boolean;
-}
+import {
+  emailDetailPath,
+  emailDetailQueryKey,
+  useEmailDetail,
+} from "@/hooks/use-email-detail";
 
 export function MailDisplay() {
   const selectedEmailId = useEmailStore((s) => s.selectedEmailId);
@@ -32,15 +23,10 @@ export function MailDisplay() {
 
   const queryClient = useQueryClient();
 
-  const { data: email, isLoading } = useQuery<EmailDetail>({
-    queryKey: ["email", selectedEmailAccountId, selectedEmailId],
-    queryFn: async (): Promise<EmailDetail> => {
-      const res = await fetch(emailDetailPath(selectedEmailId, selectedEmailAccountId));
-      if (!res.ok) throw new Error("Failed to fetch email");
-      return res.json() as Promise<EmailDetail>;
-    },
-    enabled: selectedEmailId !== null && selectedEmailAccountId !== null,
-  });
+  const { data: email, isLoading } = useEmailDetail(
+    selectedEmailAccountId,
+    selectedEmailId,
+  );
 
   const toggleRead = useMutation<
     { id: string; isUnread: boolean },
@@ -58,7 +44,7 @@ export function MailDisplay() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["email", selectedEmailAccountId, selectedEmailId],
+        queryKey: emailDetailQueryKey(selectedEmailAccountId, selectedEmailId),
       });
       void queryClient.invalidateQueries({ queryKey: ["emails"] });
       void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
@@ -171,13 +157,6 @@ export function MailDisplay() {
       </div>
     </ScrollArea>
   );
-}
-
-function emailDetailPath(emailId: string | null, accountId: string | null): string {
-  const path = `/api/gmail/${emailId ?? ""}`;
-  if (accountId === null) return path;
-  const params = new URLSearchParams({ accountId });
-  return `${path}?${params}`;
 }
 
 function safeParseLabels(labels: string): string[] {
