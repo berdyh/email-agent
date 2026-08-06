@@ -6,10 +6,14 @@ import * as gmailBarrel from "./gmail/index.js";
 import * as actionsBarrel from "./actions/index.js";
 import * as gmailOps from "./gmail/operations.js";
 
-// The approval gate rests on user actions (dynamically imported, in-process)
-// having no public specifier that reaches Gmail mutation. These names must
-// never come back to a public barrel; only core-internal relative imports may
-// use them. The deny list is DERIVED from operations.ts so a newly added
+// Defense in depth, NOT a sandbox. A user action runs in-process with full
+// Node privileges, so a hostile one reaches dist by path regardless of what
+// the barrels export (see TODOS.md). What this pins is the naive route: no
+// public specifier resolves to Gmail mutation, so an action that imports the
+// mutating surface by name fails loudly instead of silently mutating a
+// mailbox. These names must never come back to a public barrel; only
+// core-internal relative imports may use them. The deny list is DERIVED from
+// operations.ts so a newly added
 // write op is denied by construction, plus the raw client factories (every
 // write op is a one-line wrapper over createGmailClient) and applyOperations.
 const deniedNames = [
@@ -82,8 +86,11 @@ describe("public barrel surface (approval-gate enforcement)", () => {
 
   it("Node's exports map refuses the deep operations path", () => {
     // Web reaches gmail/operations through a webpack-only tsconfig path; the
-    // same specifier must stay unresolvable for runtime import(), which is
-    // how user actions are loaded.
+    // same specifier must stay unresolvable for a runtime import(). Note the
+    // parent context matters and this test's is the workspace: from the real
+    // ACTIONS_DIR (~/.email-agent/actions) NO bare specifier resolves at all,
+    // not even `googleapis`. So this pins the workspace-resolvable case (web
+    // bundling, future in-tree action loading), not the user-action path.
     assert.throws(
       () => import.meta.resolve("@email-agent/core/gmail/operations"),
       (err: unknown) =>

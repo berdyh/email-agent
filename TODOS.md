@@ -27,6 +27,38 @@ the CLI's own approvals flow.
 Found by: scoping the barrel-export fix (worktree-approval-gate-bypass,
 2026-08-06).
 
+### `saveSettings` lets plugin code arm auto-apply for itself
+**Priority:** P2
+`config/index.ts` exports `saveSettings`, which accepts both auto-apply
+booleans. `normalizeSettings` only checks that `autoApplyAcknowledged` is
+`true` — never who set it — so in-process code that can reach the config
+module writes a fabricated acknowledgement and arms unattended Gmail writes
+for every subsequent run. Same shape as the existing "consent flag records
+consent" entry below, but this is the programmatic route rather than a
+hand-edited file, and it persists. Gated by the same resolution reality as the
+entries above (nothing resolves by name from `ACTIONS_DIR`), so it is a
+hostile-plugin route, not a naive one. Fix shape is the same approval
+provenance work: settings writes that arm mutation should require a
+user-surface credential rather than trusting any in-process caller.
+Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
+(2026-08-06).
+
+### User actions are silently broken on the declared Node floor
+**Priority:** P2
+`package.json` engines says `>=20.12.0`, actions are saved as
+`~/.email-agent/actions/<id>.action.ts`, and `loadUserAction()` imports them
+with Node's native loader. Node 20.12 cannot import a `.ts` file at all
+(type stripping arrived in 22.6 behind a flag, on by default from 23.6), so on
+the declared floor every user action fails to load — and
+`user-actions.ts:124` swallows the error with `catch { // Skip invalid files }`,
+so the web lists the action and then reports "Action not found" while the CLI
+just omits it. Nobody has hit this because development runs a much newer Node.
+Decide the fix: raise the engines floor to a Node that strips types, save
+generated actions as `.js`, or run them through a loader. Pre-existing, not
+introduced by the approval-gate work.
+Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
+(2026-08-06).
+
 ### No end-to-end denied-case test through `loadUserAction()`
 **Priority:** P3
 `barrel-surface.test.ts` pins the surface at the namespace/resolution level
@@ -385,8 +417,23 @@ security pass — the raw client factories (`createGmailClient`,
 `createGmailClientForAccount`, whose gmail.modify-scoped client every write op
 wraps in one line) are no longer exported from any public barrel, and the
 package `exports` map (exact keys, no wildcards, key set pinned by test) is the
-only thing Node's loader consults for user-action imports, so no public
-specifier reaches mutation. Core keeps using relative imports; web's manual
+only thing Node's loader consults for a by-name import, so no public
+specifier reaches mutation.
+
+**Scope of what this actually closed, measured during /review.** Weaker than
+the original entry implied, and worth stating so nobody re-derives it: from the
+real `ACTIONS_DIR` (`~/.email-agent/actions`) NO bare specifier resolves —
+`@email-agent/core`, `@email-agent/core/gmail` and even `googleapis` all give
+`ERR_MODULE_NOT_FOUND`, because the resolver walks up from that directory and
+finds no `node_modules` containing them. So the literal one-line bypass the
+entry described was already failing there; what the barrel change buys is
+defense in depth for workspace-resolvable contexts and a loud failure instead
+of a silent mutation. It is NOT an enforcement boundary: a user action runs
+in-process with full Node privileges, and
+`new URL("./gmail/operations.js", import.meta.resolve("@email-agent/core"))`
+reaches every raw mutator by path from any context where the package name
+resolves. Real enforcement needs approval provenance (see the P2 entries above)
+or out-of-process isolation. Core keeps using relative imports; web's manual
 mail actions (the click-is-the-approval path) moved to a webpack-only
 `@email-agent/core/gmail/operations` tsconfig path that Node refuses at runtime
 (`ERR_PACKAGE_PATH_NOT_EXPORTED`). Both skill docs now prohibit any import
