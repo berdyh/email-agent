@@ -5,11 +5,17 @@ import {
   mergeSettingsUpdate,
   mutationGuardResponse,
   parseSettingsUpdateRequest,
+  readGuardResponse,
   sanitizeSettingsForResponse,
   validationResponse,
 } from "@/modules/api/validation";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Secrets are stripped by `sanitizeSettingsForResponse`, but the response
+  // still names every configured account, the GCP project and the data dir.
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   try {
     const settings = await loadSettings();
     return NextResponse.json(sanitizeSettingsForResponse(settings));

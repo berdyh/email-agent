@@ -511,6 +511,18 @@ refused — and a new `readGuardResponse` applies the same host/origin/site chec
 to every route that returns mail. Reads deliberately do NOT require the fetch
 metadata, so the address bar and local debugging still work.
 
+The first pass at that guarded the routes someone thought of and then claimed
+the set was complete. `GET /api/actions/[id]/results` was not in it, and it
+returns `resultData` — the model's raw text, the email ids it decided about, its
+reasons, and whatever a user action chose to return. `GET /api/accounts`,
+`GET /api/actions`, `GET /api/actions/user` and `GET /api/settings` were open
+too. All are guarded now, and the completeness claim is no longer a claim:
+`packages/web/src/modules/api/route-guards.test.ts` walks `app/api`, fails on
+any unguarded handler, and holds a named exemption list containing exactly one
+entry — `GET /api/auth/callback`, which Google reaches as a top-level
+cross-site navigation the guard would refuse and which is protected by its
+one-time OAuth state cookie instead.
+
 **Correction (review of PR #10).** The first version of the header half read the
 host from `new URL(request.url)`, which is not the caller's `Host`: installed
 Next composes that URL from the server's own configured hostname

@@ -10,6 +10,16 @@ import {
   isValidOAuthState,
 } from "@/modules/api/oauth-state";
 
+/**
+ * DELIBERATELY UNGUARDED — the one route with no `readGuardResponse`.
+ *
+ * Google redirects the browser here as a top-level navigation from
+ * accounts.google.com, so the request arrives with `Sec-Fetch-Site:
+ * cross-site` and would be refused by the shared guard. Its CSRF protection is
+ * the one-time `state` cookie checked below, which is stronger than the header
+ * checks anyway. It returns no mail and no settings — only a redirect, or an
+ * error string.
+ */
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
   const state = request.nextUrl.searchParams.get("state");

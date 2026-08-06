@@ -12,18 +12,24 @@ import {
   mutationGuardResponse,
   parseUserActionDeleteRequest,
   parseUserActionSaveRequest,
+  readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
 import { extractActionId } from "@/lib/action-id";
 
 export async function GET(request: NextRequest) {
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   try {
     const filename = request.nextUrl.searchParams.get("filename");
 
     // If filename is provided, return the raw source code
     if (filename) {
-      const guard = mutationGuardResponse(request);
-      if (guard) return guard;
+      // Returning an action's source is held to the stricter mutation guard:
+      // it must prove it came from the UI, not just from something local.
+      const sourceGuard = mutationGuardResponse(request);
+      if (sourceGuard) return sourceGuard;
 
       const parsed = parseUserActionDeleteRequest({ filename });
       const source = await readUserActionSource(parsed.filename);

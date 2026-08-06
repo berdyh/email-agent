@@ -12,6 +12,7 @@ import {
   internalErrorResponse,
   mutationGuardResponse,
   parseActionRunRequest,
+  readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
 
@@ -26,7 +27,10 @@ function ensureLoaded() {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   try {
     ensureLoaded();
     const builtIns = registry.getAll().map((a) => ({ ...a, builtIn: true }));
