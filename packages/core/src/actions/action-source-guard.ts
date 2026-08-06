@@ -262,6 +262,19 @@ export function findActionSourceViolations(
 
     // `const action: EmailAction = { ... };`
     if (ts.isVariableStatement(statement)) {
+      // `using` / `await using` parse as ordinary variable statements, but
+      // leaving the module scope looks up and CALLS Symbol.dispose /
+      // Symbol.asyncDispose on the value. That is a call this file never
+      // spells, so it would run behind the allowlist's back. (NodeFlags.Using
+      // is a distinct bit from Const/Let, so this matches both forms and no
+      // plain declaration.)
+      if ((statement.declarationList.flags & ts.NodeFlags.Using) !== 0) {
+        violations.push({
+          rule: "using-declaration",
+          detail: `\`using\` invokes a disposal hook when the module finishes; declare with \`const\` (${describe(statement, sourceFile)})`,
+        });
+        continue;
+      }
       for (const decl of statement.declarationList.declarations) {
         if (!ts.isIdentifier(decl.name)) {
           violations.push({

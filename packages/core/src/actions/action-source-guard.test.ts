@@ -204,6 +204,15 @@ export default action;
     assert.ok(rules.includes("ambient-declaration"), `got ${rules.join(",")}`);
   });
 
+  it("rejects `using`, whose disposal hook is a call the file never spells", () => {
+    assert.ok(rulesFor(`using r = {};\nexport default { id: "a", prompt: "p" };\n`).includes("using-declaration"));
+    assert.ok(
+      rulesFor(`await using r = {};\nexport default { id: "a", prompt: "p" };\n`).includes("using-declaration"),
+    );
+    // ...while plain declarations are unaffected.
+    accepts(`const a = "x";\nlet b = "y";\nvar c = "z";\nexport default { id: "a", prompt: a };\n`);
+  });
+
   it("rejects decorators, which are calls attached to a declaration", () => {
     assert.ok(
       rulesFor(`@((globalThis as any).evil) class C {}\n`).length > 0,
