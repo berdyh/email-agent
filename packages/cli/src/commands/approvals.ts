@@ -4,7 +4,6 @@ import chalk from "chalk";
 import ora from "ora";
 import {
   initDb,
-  getEmailById,
   getPendingOperations,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
@@ -12,6 +11,7 @@ import {
   parseLabelIds,
 } from "@email-agent/core";
 import type { PendingOperationRecord } from "@email-agent/core";
+import { emailRefKey, getEmailsByRefs } from "../email-lookup.js";
 
 export function describeOperation(op: PendingOperationRecord): string {
   return describeGmailOperation(op.type, parseLabelIds(op.labelIds));
@@ -27,17 +27,22 @@ interface OperationDisplay {
 export async function loadOperationDisplays(
   ops: PendingOperationRecord[],
 ): Promise<OperationDisplay[]> {
-  const displays: OperationDisplay[] = [];
-  for (const op of ops) {
-    const email = await getEmailById(op.emailId, op.accountId);
-    displays.push({
+  // One batched scan for the whole queue rather than one per operation. The
+  // queue routinely holds dozens of rows over a handful of emails, and the
+  // per-row version walked the emails table every time.
+  const emails = await getEmailsByRefs(
+    ops.map((op) => ({ accountId: op.accountId, emailId: op.emailId })),
+  );
+
+  return ops.map((op) => {
+    const email = emails.get(emailRefKey(op.accountId, op.emailId));
+    return {
       op,
       subject: email?.subject ?? `(not in local DB: ${op.emailId})`,
       from: email?.from ?? "",
       snippet: email?.snippet ?? "",
-    });
-  }
-  return displays;
+    };
+  });
 }
 
 export function printOperationList(displays: OperationDisplay[]): void {
