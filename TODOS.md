@@ -31,11 +31,13 @@ Two facts that scope the residuals below, both measured 2026-08-06:
   (Verify with `--experimental-import-meta-resolve` and an explicit parent —
   the two-arg `import.meta.resolve` silently ignores the parent without it and
   reports a false positive.)
-- The declared Node floor (20.12) cannot strip TS types, so `.action.ts` files
-  do not import at all there. The attack surface is inert on the runtime we
-  claim to support and live only on newer Node — see the P2 entry below. The
-  security posture depends on which Node actually runs, which nobody had
-  stated.
+- The declared Node floor was 20.12, which cannot strip TS types, so
+  `.action.ts` files did not import at all there — the attack surface was
+  inert on the runtime we claimed to support and live only on newer Node (see
+  Completed: "User actions are silently broken on the declared Node floor").
+  The floor is now `>=22.18.0`, which strips types unflagged, so this is no
+  longer a hypothetical: `.action.ts` files import for real on the Node
+  version we ship against, and the residuals below apply there directly.
 
 ### A user action can still approve its own queue rows
 **Priority:** P2
@@ -68,22 +70,6 @@ entries above (nothing resolves by name from `ACTIONS_DIR`), so it is a
 hostile-plugin route, not a naive one. Fix shape is the same approval
 provenance work: settings writes that arm mutation should require a
 user-surface credential rather than trusting any in-process caller.
-Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
-(2026-08-06).
-
-### User actions are silently broken on the declared Node floor
-**Priority:** P2
-`package.json` engines says `>=20.12.0`, actions are saved as
-`~/.email-agent/actions/<id>.action.ts`, and `loadUserAction()` imports them
-with Node's native loader. Node 20.12 cannot import a `.ts` file at all
-(type stripping arrived in 22.6 behind a flag, on by default from 23.6), so on
-the declared floor every user action fails to load — and
-`user-actions.ts:124` swallows the error with `catch { // Skip invalid files }`,
-so the web lists the action and then reports "Action not found" while the CLI
-just omits it. Nobody has hit this because development runs a much newer Node.
-Decide the fix: raise the engines floor to a Node that strips types, save
-generated actions as `.js`, or run them through a loader. Pre-existing, not
-introduced by the approval-gate work.
 Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
 (2026-08-06).
 
@@ -432,6 +418,27 @@ The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
 classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
+
+### User actions are silently broken on the declared Node floor
+**Completed:** worktree-approval-gate-bypass (2026-08-06)
+Was P2. `package.json` engines said `>=20.12.0`; Node at that floor cannot
+strip `.ts` type annotations at all (unflagged support landed in 22.18), so
+`loadUserAction()`'s native-loader import failed for every user action, and the
+failure was swallowed by `catch { // Skip invalid files }` — the web listed the
+action and then reported "Action not found", the CLI just omitted it. Nobody
+had hit this because development runs a much newer Node. Fixed by raising the
+engines floor to `>=22.18.0` (root `package.json`; the workspace packages don't
+declare their own `engines`, so nothing else needed updating there), updating
+`setup.sh`'s version-gate check and failure message, and updating the two
+Node-version mentions in README.md. `loadUserAction`'s import now has its own
+`catch` that `console.warn`s the filename and error before continuing to the
+next file — a future load failure (malformed export, runtime error in the
+action's own code) is diagnosable instead of invisible; skip semantics are
+unchanged. This also retires the "inert on the declared floor" scoping fact
+above — `.action.ts` files now import for real on the Node version we claim to
+support, not just on whatever a developer happens to have installed.
+Found by: codex (gpt-5.6-sol xhigh) adversarial pass during /review
+(2026-08-06); fixed in worktree-approval-gate-bypass.
 
 ### User actions can bypass the gate entirely
 **Completed:** worktree-approval-gate-bypass (2026-08-06)

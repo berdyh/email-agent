@@ -111,10 +111,16 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
       if (fileId !== id) continue;
 
       const fileUrl = pathToFileURL(resolveUserActionFilePath(ACTIONS_DIR, filename));
-      const mod = (await nativeImport(fileUrl.href)) as {
-        default?: EmailAction;
-        action?: EmailAction;
-      };
+      let mod: { default?: EmailAction; action?: EmailAction };
+      try {
+        mod = (await nativeImport(fileUrl.href)) as {
+          default?: EmailAction;
+          action?: EmailAction;
+        };
+      } catch (err) {
+        console.warn(`[loadUserAction] Failed to import ${filename}:`, err);
+        continue;
+      }
       const action = mod.default ?? mod.action;
       if (action?.id && action?.name && action?.prompt) {
         action.builtIn = false;
