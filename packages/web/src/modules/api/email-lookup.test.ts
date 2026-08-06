@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { buildEmailLookupFilter, emailRefKey } from "./email-lookup.js";
 
@@ -40,5 +41,16 @@ describe("batched email lookup filter", () => {
   it("keys the result map on the full identity, not the email id alone", () => {
     // The same Gmail id can exist under two accounts.
     assert.notEqual(emailRefKey("a@example.com", "1"), emailRefKey("b@example.com", "1"));
+  });
+
+  it("separates the key halves with a NUL written as an escape, not a literal byte", async () => {
+    // A literal NUL in the source makes git classify the file as binary: `git
+    // diff` prints `Bin 0 -> N bytes` with no patch, and the file reaches review
+    // unread. It shipped that way once; this pins the escape form.
+    const source = await readFile(new URL("./email-lookup.ts", import.meta.url), "utf8");
+    assert.equal(source.includes("\u0000"), false, "source must not contain a literal NUL byte");
+
+    const key = emailRefKey("a@x.com", "m1");
+    assert.deepEqual(key.split("\u0000"), ["a@x.com", "m1"]);
   });
 });
