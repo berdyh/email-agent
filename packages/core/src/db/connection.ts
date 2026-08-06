@@ -1,5 +1,6 @@
 import { connect, type Connection } from "@lancedb/lancedb";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Schema,
   Field,
@@ -9,9 +10,18 @@ import {
   Int32,
   FixedSizeList,
 } from "apache-arrow";
-import { LANCEDB_DIR } from "../config/defaults.js";
+import { DATA_DIR, LANCEDB_DIR } from "../config/defaults.js";
 import { VECTOR_DIMENSION } from "../shared/vector.js";
-import { missingColumns, projectRowsToSchema } from "./migrations.js";
+import { ensurePendingOperationsTable } from "./pending-operations-migration.js";
+
+/**
+ * Where interrupted-migration snapshots and the migration lock live.
+ *
+ * Deliberately a sibling of `LANCEDB_DIR`, not a child: LanceDB owns the
+ * contents of its own directory, and a stray `.json` there is at best noise in
+ * `tableNames()` and at worst something a future version cleans up.
+ */
+export const MIGRATION_STATE_DIR = join(DATA_DIR, "migrations");
 
 let dbPromise: Promise<Connection> | null = null;
 
@@ -68,37 +78,6 @@ const actionResultSchema = new Schema([
   new Field("createdAt", new Utf8()),
 ]);
 
-const pendingOperationSchema = new Schema([
-  new Field("id", new Utf8()),
-  new Field("batchId", new Utf8()),
-  new Field("actionId", new Utf8()),
-  new Field("actionName", new Utf8()),
-  new Field("accountId", new Utf8()),
-  new Field("emailId", new Utf8()),
-  new Field("type", new Utf8()),
-  new Field("labelIds", new Utf8()),
-  new Field("status", new Utf8()),
-  new Field("error", new Utf8()),
-  new Field("claimToken", new Utf8()),
-  new Field("createdAt", new Utf8()),
-  new Field("claimedAt", new Utf8()),
-  new Field("resolvedAt", new Utf8()),
-]);
-
-/**
- * Values for `pending_operations` columns a legacy table predates. Every
- * column is Utf8 and "" is the schema's documented "unset" sentinel, so a
- * migrated row lands in exactly the state a fresh enqueue would produce.
- */
-const pendingOperationMigrationDefaults: Record<string, unknown> = {
-  claimToken: "",
-  claimedAt: "",
-  resolvedAt: "",
-  error: "",
-  labelIds: "[]",
-  accountId: "",
-};
-
 const clusterSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("name", new Utf8()),
@@ -114,6 +93,12 @@ export function initDb(): Promise<void> {
   // Cache the in-flight migration promise (mirroring getDb) so concurrent
   // callers share a single init pass instead of racing the drop/create
   // sequence. Clear on rejection so a later caller can retry.
+  //
+  // This is a module-local promise, so it serializes callers within ONE
+  // process and nothing more. Cross-process serialization of the
+  // `pending_operations` migration is the on-disk lock in
+  // `ensurePendingOperationsTable`; the `emails` and `action_results`
+  // migrations below have neither that nor a durable backup (see TODOS.md).
   if (!initPromise) {
     initPromise = runInit().catch((err) => {
       initPromise = null;
@@ -181,50 +166,9 @@ async function runInit(): Promise<void> {
     await conn.createEmptyTable("clusters", clusterSchema);
   }
 
-  if (!tableNames.includes("pending_operations")) {
-    await conn.createEmptyTable("pending_operations", pendingOperationSchema);
-  } else {
-    // Migration: probe for ANY missing column, not just the one the last
-    // schema change added (LanceDB has no ALTER TABLE). This is the same
-    // pattern `emails`/`action_results` use, generalized so the next added
-    // column is handled by construction.
-    const pendingOps = await conn.openTable("pending_operations");
-    const existingSchema = await pendingOps.schema();
-    const requiredColumns = pendingOperationSchema.fields.map(
-      (f: { name: string }) => f.name,
-    );
-    const absent = missingColumns(
-      existingSchema.fields.map((f: { name: string }) => f.name),
-      requiredColumns,
-    );
-    if (absent.length > 0) {
-      console.warn(
-        `Migrating pending_operations table: adding column(s) ${absent.join(", ")}. Existing rows — including the applied/rejected audit trail — are preserved; queued rows stay queued and unclaimed.`,
-      );
-      // Preserve every row. The earlier version dropped the table outright,
-      // which took the applied/rejected audit trail — the record of Gmail
-      // changes that really happened, and the whole point of the feature —
-      // with it, while the warning mentioned only "queued (unapproved)"
-      // changes. Re-inserting is safe rather than a guess: every new column
-      // is filled with its documented unset sentinel, which reproduces the
-      // exact state a fresh enqueue produces, and the projection drops any
-      // column the current schema no longer declares.
-      const legacyRows = (await pendingOps
-        .query()
-        .toArray()) as unknown as Array<Record<string, unknown>>;
-      const preserved = projectRowsToSchema(
-        legacyRows,
-        requiredColumns,
-        pendingOperationMigrationDefaults,
-      );
-      await conn.dropTable("pending_operations");
-      const migrated = await conn.createEmptyTable(
-        "pending_operations",
-        pendingOperationSchema,
-      );
-      if (preserved.length > 0) {
-        await migrated.add(preserved);
-      }
-    }
-  }
+  // `pending_operations` carries the audit trail of Gmail mutations that
+  // really happened, so its drop/recreate migration is the one that must
+  // survive a crash. It owns its own module: durable pre-drop snapshot,
+  // startup recovery from a leftover snapshot, and a cross-process lock.
+  await ensurePendingOperationsTable(conn, MIGRATION_STATE_DIR);
 }

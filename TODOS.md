@@ -199,17 +199,57 @@ Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
 ### Queue helpers with real-table behaviour are unit-tested only
 **Priority:** P2
-Everything wave 1 added is covered at the pure-helper level — filters,
-projections, chunking, the dedupe key, the age rule, the retention cutoff.
-What no test touches is the LanceDB behaviour they depend on: that
-`table.delete(filter)` removes exactly the rows `buildPruneFilter` selects,
-that `getPendingOperationsForEmails` returns the pending rows a dedupe check
-needs, that a chunked apply leaves the unprocessed rows claimed rather than
-pending, and above all that the drop/recreate migration really does
-round-trip an audit trail. Belongs to the integration harness below; listed
-separately because the migration case is the one whose failure mode is
-silent, irreversible data loss.
-Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
+Most of what wave 1 added is covered at the pure-helper level only — filters,
+the dedupe key, the age rule, the retention cutoff. What no test touches is
+the LanceDB behaviour they depend on: that `table.delete(filter)` removes
+exactly the rows `buildPruneFilter` selects, and that
+`getPendingOperationsForEmails` returns the pending rows a dedupe check needs.
+Belongs to the integration harness below.
+
+Two of the original items here are now genuinely covered and should not be
+re-listed: the `pending_operations` drop/recreate migration runs against a
+real temp-directory LanceDB in `db/pending-operations-migration.test.ts`
+(including a crash injected after the drop, and recovery from a leftover
+snapshot in all four post-crash table states), and the chunked apply's
+claim/apply/resolve ordering is pinned in `actions/approval.test.ts` through
+injected dependencies.
+Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); narrowed after the
+PR #8 review pass, 2026-08-07.
+
+### `action_results` migrates with no snapshot and no lock
+**Priority:** P2
+`runInit()` in `db/connection.ts` still migrates `action_results` the naive
+way: read every row, `dropTable`, `createEmptyTable`, `add`. That is exactly
+the sequence that was found unrecoverable for `pending_operations` — a crash
+or a failing `add()` after the drop loses every row, and the retry sees a
+current-schema table and skips recovery. Action results are not
+reconstructable (the agent run that produced them is gone), so this is real
+data loss, just less severe than losing the Gmail-mutation audit trail.
+`emails` has the same shape but is re-fetchable, so it is fine as is.
+The machinery already exists and is table-agnostic:
+`db/table-backup.ts` (`writeTableBackup` / `readTableBackup` /
+`mergeRowsById`) and `db/migration-lock.ts` (`withMigrationLock`).
+`db/pending-operations-migration.ts` is the template — generalize it to take
+a table name, an Arrow schema and a defaults map, then point both callers at
+it.
+Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
+
+### Ordinary queue writes ignore the migration lock
+**Priority:** P3
+`withMigrationLock` serializes *migrations* against each other, which is the
+catastrophic case (two processes running drop/recreate over one table). It
+does not make the table safe to write during a migration: `savePendingOperations`,
+`claimPendingOperations` and `resolveClaimedOperations` do not take the lock,
+because a filesystem lock on every queue write is too costly. So a process
+already past `initDb()` can write into the drop window and lose that write.
+The durable snapshot bounds the damage — recovery merges the snapshot with
+whatever the table holds — but a write landing strictly between the snapshot
+and the drop is gone. Closing it needs either migration-aware write paths (a
+shared/exclusive lock, read side held only for the duration of one write) or
+a startup barrier that refuses queue writes until init completes across
+processes. Note the realistic exposure is small: the window exists only on
+the first start after a schema-changing upgrade.
+Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 
 ### Tighten the two fields declared optional for the surfaces' benefit
 **Priority:** P4
@@ -571,10 +611,31 @@ Nine entries closed together because they are one path. In queue order:
 - **The claimToken migration dropped the audit trail** (was P3). It dropped
   the whole table, taking applied/rejected rows — the record of Gmail changes
   that really happened — while warning only about "queued (unapproved)"
-  changes. It now reads every row, drops, recreates and re-inserts, the way
-  `action_results` does. Re-inserting is not a guess: each new column is
-  filled with its documented unset sentinel, so a queued row comes back
-  exactly as a fresh enqueue writes it.
+  changes. It now reads every row, drops, recreates and re-inserts. Each new
+  column is filled with its documented unset sentinel, so a queued row comes
+  back exactly as a fresh enqueue writes it.
+
+  The first version of that fix was **not durable and not concurrency-safe**,
+  and its warning text, commit title and test all said otherwise. Read →
+  drop → create → add has no atomicity of its own: a crash, a full disk or a
+  failing `add()` after the drop destroyed every row, and the retry then saw
+  a fresh current-schema table and skipped recovery — so the loss was both
+  silent and permanent. `initPromise` is module-local and never serialized a
+  `serve` against a CLI run.
+
+  Settled shape, in `db/pending-operations-migration.ts` +
+  `db/table-backup.ts` + `db/migration-lock.ts`: the projected rows are
+  written to a durable snapshot (temp file → fsync → atomic rename → dir
+  fsync) BEFORE the drop; the re-inserted row count is read back and
+  verified; the snapshot is deleted only then. A snapshot found on startup is
+  proof a migration was interrupted, and is replayed — merged by `id` with
+  whatever the table currently holds, on-disk rows winning, so a concurrent
+  write made after the snapshot is not erased by the recovery. An unreadable
+  snapshot aborts init loudly instead of being read as "nothing happened". A
+  cross-process `mkdir` lock (stale after 5 min, 60 s wait, then throw rather
+  than migrate unlocked) serializes migrations; the fast path — no snapshot,
+  table already current — takes no lock at all.
+  Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 - **Column-probe self-heal for pending_operations** (was P3). Generalized
   from "is `claimToken` there" to "which of the current schema's columns are
   missing", so the next added column is handled by construction. The

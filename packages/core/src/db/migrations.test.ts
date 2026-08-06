@@ -1,3 +1,10 @@
+// SCOPE: these cover the PURE helpers only — the column probe and the row
+// projection. They map in-memory objects and never touch LanceDB, so nothing
+// here says anything about the read → snapshot → drop → create → add sequence
+// that consumes them. That sequence, its crash recovery and its lock are
+// covered against a real temp-directory LanceDB in
+// `pending-operations-migration.test.ts`; this file is not a substitute for it.
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -25,7 +32,7 @@ describe("column probe", () => {
   });
 });
 
-describe("row projection for a drop/recreate migration", () => {
+describe("row projection helper for a drop/recreate migration (pure)", () => {
   const fields = ["id", "status", "claimToken", "claimedAt"];
   const defaults = { claimToken: "", claimedAt: "" };
 
@@ -69,8 +76,11 @@ describe("row projection for a drop/recreate migration", () => {
     );
   });
 
-  it("preserves resolved rows across the whole table", () => {
-    // The audit trail is exactly what the previous migration threw away.
+  it("projects every row's status through unchanged", () => {
+    // NOT a claim that the migration preserves the audit trail — this maps
+    // three plain objects and never runs a migration. It pins only that the
+    // projection is status-blind and fills the new columns. The preservation
+    // claim is tested for real in `pending-operations-migration.test.ts`.
     const rows = [
       { id: "a", status: "applied" },
       { id: "b", status: "rejected" },
