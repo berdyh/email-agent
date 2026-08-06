@@ -1,13 +1,25 @@
 import ts from "typescript";
+import type { EmailAction } from "./types.js";
 
 /**
- * Save-time guard for generated action source.
+ * Guard and static evaluator for action source.
  *
  * Actions are pure data: an id, a name, a description, and a prompt. They are
- * written by an LLM (`POST /api/actions/generate`) and then dynamically
- * imported IN-PROCESS with full Node privileges, and their top-level code runs
- * before anything inspects the exported object. That ordering is why this
- * guard exists at SAVE time: once the module is imported, it is too late.
+ * written by an LLM (`POST /api/actions/generate`), and they used to be
+ * dynamically imported IN-PROCESS with full Node privileges, which ran their
+ * top-level code before anything inspected the exported object.
+ *
+ * They are no longer imported at all. `extractActionData()` walks the same
+ * allowlist this guard enforces and RETURNS the values it proves are literal,
+ * so a file in `ACTIONS_DIR` is read as data and never enters the module graph
+ * (see `user-actions.ts` and `registry.ts`). The guard still runs at save time,
+ * where refusing is cheap and the message can be fed back to the model — but
+ * the load path no longer depends on it having run.
+ *
+ * The save-time check and the load-time extractor are deliberately the SAME
+ * traversal: `findActionSourceViolations()` is `analyzeActionSource()` with the
+ * values thrown away. A second, parallel allowlist would drift, and the drift
+ * would be a bypass.
  *
  * This is an ALLOWLIST over the parsed syntax tree, deliberately not a
  * denylist over source text. The first version of this guard blanked strings
@@ -28,9 +40,10 @@ import ts from "typescript";
  * with no call expression, no member access, and no `new` anywhere in its tree
  * cannot execute anything at import time, whatever it is spelled like.
  *
- * Remaining limits, stated plainly: this runs only on save, so a file dropped
- * into ACTIONS_DIR by hand is never seen, and files written before the guard
- * existed are not re-checked. See the approval gate section of TODOS.md.
+ * Remaining limits, stated plainly: this stops code in `ACTIONS_DIR` files from
+ * running, whatever put them there — it does nothing about malicious local code
+ * outside the action pathway, which can read the stored OAuth tokens and drive
+ * the Gmail REST API itself. See the approval gate section of TODOS.md.
  */
 
 /** A single reason a source file was rejected. */
@@ -74,6 +87,14 @@ function forbiddenModifier(statement: ts.Statement): ActionSourceViolation | und
   return undefined;
 }
 
+/** True for a statement carrying the `export` modifier. */
+function isExported(statement: ts.Statement): boolean {
+  if (!ts.canHaveModifiers(statement)) return false;
+  return (
+    ts.getModifiers(statement)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) === true
+  );
+}
+
 /** Describes where in the file the problem is, for a human-readable message. */
 function describe(node: ts.Node, source: ts.SourceFile): string {
   const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
@@ -82,82 +103,160 @@ function describe(node: ts.Node, source: ts.SourceFile): string {
 }
 
 /**
- * True when an expression is static data: literals, and objects/arrays built
- * only from static data. Anything that could run — a call, a member access, a
- * `new`, a function, a tagged or interpolated template — is not data.
+ * Static evaluation of an expression that is pure data: literals, and
+ * objects/arrays built only from pure data. Anything that could run — a call, a
+ * member access, a `new`, a function, a tagged or interpolated template — is
+ * not data.
+ *
+ * This is the predicate the guard used to be, made value-producing. Where it
+ * once answered "yes, that is inert", it now answers "yes, and here is the
+ * value", so the load path can obtain an action without importing its file.
+ * `reason` carries a specific violation when one exists; otherwise the caller
+ * reports its own generic message for the position.
  */
+type DataResult =
+  | { ok: true; value: unknown }
+  | { ok: false; reason?: ActionSourceViolation };
+
+const NOT_DATA: DataResult = { ok: false };
+
 interface DataContext {
-  safeNames: ReadonlySet<string>;
+  /** Names this file has BOUND to data, mapped to the value they were bound to. */
+  safeNames: ReadonlyMap<string, unknown>;
   /** True when the target file is .js, where TypeScript syntax cannot run. */
   isJs: boolean;
 }
 
-function isPureDataExpression(node: ts.Expression, ctx: DataContext): boolean {
+/**
+ * The literal text of a non-computed property key, or undefined when the key
+ * is computed or private (both of which this guard refuses anyway).
+ */
+function staticPropertyKey(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return undefined;
+}
+
+function evaluatePureData(node: ts.Expression, ctx: DataContext): DataResult {
   // A name is data only if this file already bound it to data. That admits the
   // natural `const PROMPT = "..."` then `prompt: PROMPT` shape, while a name
   // this file never declared (`process`, `globalThis`) resolves to a global and
-  // is refused.
+  // is refused. `safeNames` is filled in source order, so a name can only
+  // resolve to something declared above it — matching what the file would do.
   if (ts.isIdentifier(node)) {
-    return ctx.safeNames.has(node.text);
+    if (!ctx.safeNames.has(node.text)) return NOT_DATA;
+    return { ok: true, value: ctx.safeNames.get(node.text) };
   }
 
   switch (node.kind) {
     case ts.SyntaxKind.StringLiteral:
     case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
-    case ts.SyntaxKind.NumericLiteral:
+      return { ok: true, value: (node as unknown as ts.LiteralLikeNode).text };
+    case ts.SyntaxKind.NumericLiteral: {
+      // `.text` is the scanner's normalised form (separators removed, radix
+      // prefix kept), so `Number()` reproduces the runtime value. Refuse
+      // anything that does not, rather than inventing a number.
+      const value = Number((node as ts.NumericLiteral).text);
+      return Number.isNaN(value) ? NOT_DATA : { ok: true, value };
+    }
     case ts.SyntaxKind.TrueKeyword:
+      return { ok: true, value: true };
     case ts.SyntaxKind.FalseKeyword:
+      return { ok: true, value: false };
     case ts.SyntaxKind.NullKeyword:
-      return true;
+      return { ok: true, value: null };
     default:
       break;
   }
 
   // Negative and explicitly positive numbers: `-1`, `+1`.
   if (ts.isPrefixUnaryExpression(node)) {
-    const isSign =
-      node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken;
-    return isSign && ts.isNumericLiteral(node.operand);
+    if (!ts.isNumericLiteral(node.operand)) return NOT_DATA;
+    const magnitude = Number(node.operand.text);
+    if (Number.isNaN(magnitude)) return NOT_DATA;
+    if (node.operator === ts.SyntaxKind.MinusToken) return { ok: true, value: -magnitude };
+    if (node.operator === ts.SyntaxKind.PlusToken) return { ok: true, value: magnitude };
+    return NOT_DATA;
   }
 
   // `{...} as EmailAction` / `{...} satisfies EmailAction` are type-level only.
   if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
     // `as`/`satisfies` are TypeScript-only; in a .js file they never run.
-    if (ctx.isJs) return false;
-    return isPureDataExpression(node.expression, ctx);
+    if (ctx.isJs) return NOT_DATA;
+    return evaluatePureData(node.expression, ctx);
   }
 
   if (ts.isParenthesizedExpression(node)) {
-    return isPureDataExpression(node.expression, ctx);
+    return evaluatePureData(node.expression, ctx);
   }
 
   if (ts.isArrayLiteralExpression(node)) {
-    return node.elements.every((el) => ts.isExpression(el) && isPureDataExpression(el, ctx));
+    const values: unknown[] = [];
+    for (const element of node.elements) {
+      // A hole (`[, 1]`) and a spread are both not plain data.
+      if (!ts.isExpression(element) || element.kind === ts.SyntaxKind.OmittedExpression) {
+        return NOT_DATA;
+      }
+      const evaluated = evaluatePureData(element, ctx);
+      if (!evaluated.ok) return evaluated;
+      values.push(evaluated.value);
+    }
+    return { ok: true, value: values };
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    return node.properties.every((prop) => {
+    const value: Record<string, unknown> = {};
+    for (const prop of node.properties) {
       // Shorthand (`{ a }`), spread (`{ ...x }`), methods, getters and setters
       // all either reference or run something. Only `key: <data>` is allowed.
-      if (!ts.isPropertyAssignment(prop)) return false;
+      if (!ts.isPropertyAssignment(prop)) return NOT_DATA;
       // A computed key can evaluate an expression, so require a literal name.
-      if (ts.isComputedPropertyName(prop.name)) return false;
-      return isPureDataExpression(prop.initializer, ctx);
-    });
+      const key = staticPropertyKey(prop.name);
+      if (key === undefined) return NOT_DATA;
+      // `{ __proto__: x }` does NOT bind a property called `__proto__` — in an
+      // object literal (identifier or string key alike; only a COMPUTED key is
+      // exempt, and those are already refused) it invokes the prototype setter.
+      // Same lesson as `declare`: ask whether the syntax binds what it appears
+      // to bind. Refusing keeps the extracted object identical to the source's
+      // apparent shape instead of quietly differing from it.
+      if (key === "__proto__") {
+        return {
+          ok: false,
+          reason: {
+            rule: "proto-key",
+            detail:
+              "`__proto__` in an object literal sets the prototype instead of defining a property; use a different key",
+          },
+        };
+      }
+      const evaluated = evaluatePureData(prop.initializer, ctx);
+      if (!evaluated.ok) return evaluated;
+      // Later duplicates win, as they would at runtime.
+      value[key] = evaluated.value;
+    }
+    return { ok: true, value };
   }
 
-  return false;
+  return NOT_DATA;
 }
 
 /**
- * Collect every reason `source` is not a safe action file. Empty array means
- * the source is acceptable.
+ * The result of one traversal: every reason the source is not a safe action
+ * file, plus the values of whatever it legitimately exports. Both the save-time
+ * guard and the load-time extractor read this, so they can never disagree.
  */
-export function findActionSourceViolations(
-  source: string,
-  filename = "action.ts",
-): ActionSourceViolation[] {
+interface ActionSourceAnalysis {
+  violations: ActionSourceViolation[];
+  /** Value of `export default <data>`, when the expression was pure data. */
+  defaultExport?: { value: unknown };
+  /** Value of `export const action = <data>`, mirroring `mod.action`. */
+  namedActionExport?: { value: unknown };
+}
+
+function analyzeActionSource(source: string, filename: string): ActionSourceAnalysis {
   const violations: ActionSourceViolation[] = [];
+  const analysis: ActionSourceAnalysis = { violations };
   // Actions may be saved as .action.js as well as .action.ts. TypeScript-only
   // syntax in a .js file saves fine and then fails to import — a dead action.
   // ScriptKind alone does not catch it (the parser accepts TS syntax in JS mode
@@ -182,12 +281,13 @@ export function findActionSourceViolations(
       rule: "unparseable",
       detail: `the file is not valid TypeScript: ${ts.flattenDiagnosticMessageText(first.messageText, " ")}`,
     });
-    return violations;
+    return analysis;
   }
 
-  // Names this file has bound to static data, built up in source order so a
-  // declaration can only reference something declared above it.
-  const safeNames = new Set<string>();
+  // Names this file has bound to static data, mapped to the value bound, built
+  // up in source order so a declaration can only reference something declared
+  // above it.
+  const safeNames = new Map<string, unknown>();
   const ctx: DataContext = { safeNames, isJs };
 
   for (const statement of sourceFile.statements) {
@@ -252,11 +352,17 @@ export function findActionSourceViolations(
         });
         continue;
       }
-      if (isPureDataExpression(statement.expression, ctx)) continue;
-      violations.push({
-        rule: "computed-export",
-        detail: `export default must be a name declared in this file or a literal, not an expression (${describe(statement, sourceFile)})`,
-      });
+      const evaluated = evaluatePureData(statement.expression, ctx);
+      if (evaluated.ok) {
+        analysis.defaultExport = { value: evaluated.value };
+        continue;
+      }
+      violations.push(
+        evaluated.reason ?? {
+          rule: "computed-export",
+          detail: `export default must be a name declared in this file or a literal, not an expression (${describe(statement, sourceFile)})`,
+        },
+      );
       continue;
     }
 
@@ -291,15 +397,24 @@ export function findActionSourceViolations(
           continue;
         }
         if (decl.initializer === undefined) continue;
-        if (isPureDataExpression(decl.initializer, ctx)) {
-          safeNames.add(decl.name.text);
+        const evaluated = evaluatePureData(decl.initializer, ctx);
+        if (evaluated.ok) {
+          safeNames.set(decl.name.text, evaluated.value);
+          // `export const action = {...}` is what a runtime import would have
+          // surfaced as `mod.action`. An unexported `const action` exports
+          // nothing, so it is deliberately not treated as an export here.
+          if (decl.name.text === "action" && isExported(statement)) {
+            analysis.namedActionExport = { value: evaluated.value };
+          }
           continue;
         }
-        violations.push({
-          rule: "computed-value",
-          detail:
-            `an action is static data, so values may only be literals, objects and arrays — no calls, member access, \`new\`, functions or interpolation (${describe(decl, sourceFile)})`,
-        });
+        violations.push(
+          evaluated.reason ?? {
+            rule: "computed-value",
+            detail:
+              `an action is static data, so values may only be literals, objects and arrays — no calls, member access, \`new\`, functions or interpolation (${describe(decl, sourceFile)})`,
+          },
+        );
       }
       continue;
     }
@@ -326,17 +441,74 @@ export function findActionSourceViolations(
     });
   }
 
-  return violations;
+  return analysis;
 }
 
-/** Thrown when generated action source fails the guard. */
+/**
+ * Collect every reason `source` is not a safe action file. Empty array means
+ * the source is acceptable. This is `analyzeActionSource()` with the extracted
+ * values discarded — same traversal, same allowlist, by construction.
+ */
+export function findActionSourceViolations(
+  source: string,
+  filename = "action.ts",
+): ActionSourceViolation[] {
+  return analyzeActionSource(source, filename).violations;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Statically evaluate a pure-data action file and return the action it
+ * describes, WITHOUT ever executing it. Throws `UnsafeActionSourceError` when
+ * the source is not the pure-data shape — the same allowlist enforced at save
+ * time — and returns undefined when the file is safe but exports no usable
+ * action.
+ *
+ * This replaces `import()` on the load path. Nothing from `ACTIONS_DIR` enters
+ * the module graph, so a file that was hand-dropped, or written before the
+ * save-time guard existed, gets the same treatment as a generated one.
+ */
+export function extractActionData(
+  source: string,
+  filename = "action.ts",
+): EmailAction | undefined {
+  const analysis = analyzeActionSource(source, filename);
+  if (analysis.violations.length > 0) {
+    throw new UnsafeActionSourceError(analysis.violations);
+  }
+
+  // Mirrors the runtime resolution this replaces: `mod.default ?? mod.action`.
+  const exported = analysis.defaultExport ?? analysis.namedActionExport;
+  if (!exported) return undefined;
+
+  const value = exported.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+
+  // The same three fields every caller checked after importing. Anything else
+  // the file declares is carried through untouched, as an import would.
+  const record = value as Record<string, unknown>;
+  if (
+    !isNonEmptyString(record.id) ||
+    !isNonEmptyString(record.name) ||
+    !isNonEmptyString(record.prompt)
+  ) {
+    return undefined;
+  }
+
+  return record as unknown as EmailAction;
+}
+
+/** Thrown when action source fails the guard, at save time or at load time. */
 export class UnsafeActionSourceError extends Error {
   readonly violations: ActionSourceViolation[];
 
   constructor(violations: ActionSourceViolation[]) {
     const lines = violations.map((v) => `  - ${v.rule}: ${v.detail}`).join("\n");
     super(
-      `Refusing to save this action: its code does more than describe an analysis.\n${lines}\n` +
+      `Refusing this action file: its code does more than describe an analysis.\n${lines}\n` +
         "Actions are pure data (id, name, description, prompt). Gmail changes happen " +
         "through the approval queue after the user approves them, never inside an action file.",
     );
