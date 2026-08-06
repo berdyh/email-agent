@@ -40,6 +40,22 @@ import type { EmailAction } from "./types.js";
  * with no call expression, no member access, and no `new` anywhere in its tree
  * cannot execute anything at import time, whatever it is spelled like.
  *
+ * Not executing the file is only half the job. The other half is that the value
+ * this returns must be the value the runtime WOULD have produced — otherwise
+ * the evaluator is describing a different module than the one on disk, and the
+ * difference is exploitable. Two consequences run through the code below:
+ *
+ *  - Where the evaluator cannot be sure it matches, it REFUSES. Every construct
+ *    it does not model (a live `import()`, `export { x as action }`, a getter, a
+ *    BigInt literal, a computed key) is a violation, never a best guess.
+ *  - Where the runtime would refuse, the evaluator refuses too. A module is
+ *    strict code, and strict code has early errors that plain parsing does not
+ *    report — a duplicate lexical declaration, a binding called `eval`, a
+ *    duplicate export. `ts.createSourceFile().parseDiagnostics` covers syntax
+ *    only, so those classes are detected explicitly (`FORBIDDEN_BINDING_NAMES`,
+ *    `duplicate-declaration`, `duplicate-export`). Accepting a file Node would
+ *    reject with `SyntaxError` means loading an action that could not exist.
+ *
  * Remaining limits, stated plainly: this stops code in `ACTIONS_DIR` files from
  * running, whatever put them there — it does nothing about malicious local code
  * outside the action pathway, which can read the stored OAuth tokens and drive
@@ -50,6 +66,55 @@ import type { EmailAction } from "./types.js";
 export interface ActionSourceViolation {
   rule: string;
   detail: string;
+}
+
+/**
+ * Names a MODULE may not bind. Module code is always strict, and strict code
+ * adds early errors that plain parsing does not produce — so a file using one
+ * of these parses cleanly here and then throws `SyntaxError` in Node. A file
+ * the runtime would refuse must be refused here too, or the evaluator is
+ * answering a question about a module that could never exist.
+ *
+ * The list is deliberate, not a guess:
+ *
+ *  - `eval` and `arguments` — early error for any BindingIdentifier in strict
+ *    code (ES2025 13.1.1).
+ *  - the future reserved words that are reserved ONLY in strict mode:
+ *    `implements`, `interface`, `let`, `package`, `private`, `protected`,
+ *    `public`, `static`, `yield` (ES2025 12.7.2).
+ *  - `await`, reserved specifically in module code.
+ *
+ * The always-reserved words (`class`, `const`, `enum`, `function`, `new`,
+ * `this`, `typeof`, `void`, `with`, …) are NOT listed, because they are not
+ * parseable as a binding name at all: `ts.createSourceFile` already reports a
+ * parse diagnostic for each of them, which the `unparseable` rule catches.
+ * That was verified for every word in the ES2025 ReservedWord production
+ * rather than assumed.
+ *
+ * Matching is on the identifier's COOKED text, so `const eval` — which
+ * Node also rejects — cannot spell its way past this.
+ */
+const FORBIDDEN_BINDING_NAMES: ReadonlySet<string> = new Set([
+  "eval",
+  "arguments",
+  "implements",
+  "interface",
+  "let",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "static",
+  "yield",
+  "await",
+]);
+
+/** `let`/`const` create a lexical binding; `var` creates a var-scoped one. */
+type BindingKind = "lexical" | "var";
+
+function bindingKindOf(declarationList: ts.VariableDeclarationList): BindingKind {
+  const flags = declarationList.flags;
+  return (flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0 ? "lexical" : "var";
 }
 
 /**
@@ -290,6 +355,53 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
   const safeNames = new Map<string, unknown>();
   const ctx: DataContext = { safeNames, isJs };
 
+  // Module-scope binding bookkeeping, for the early errors `parseDiagnostics`
+  // cannot see (they are binding-time, not parse-time). Every top-level name
+  // this file declares, whether or not its initializer turned out to be data —
+  // an illegal redeclaration is illegal regardless of what it was assigned.
+  const declaredNames = new Map<string, BindingKind>();
+  // Exported names, for the "duplicate export" early error. `default` is
+  // tracked under its own key, which no binding name can collide with because
+  // `default` is an always-reserved word and cannot be bound.
+  const exportedNames = new Set<string>();
+
+  const declareName = (name: ts.Identifier, kind: BindingKind, node: ts.Node): void => {
+    const text = name.text;
+    if (FORBIDDEN_BINDING_NAMES.has(text)) {
+      violations.push({
+        rule: "reserved-binding",
+        detail:
+          `\`${text}\` cannot be bound in a module — module code is strict, so Node throws SyntaxError before the file loads (${describe(node, sourceFile)})`,
+      });
+      return;
+    }
+    const previous = declaredNames.get(text);
+    // `var` may redeclare `var`. Anything involving a lexical binding is an
+    // early error, so the file would never load.
+    if (previous !== undefined && (previous === "lexical" || kind === "lexical")) {
+      violations.push({
+        rule: "duplicate-declaration",
+        detail:
+          `\`${text}\` is already declared in this file, and a lexical redeclaration makes Node throw SyntaxError before the file loads (${describe(node, sourceFile)})`,
+      });
+      return;
+    }
+    // Only `var` after `var` reaches here, so the recorded kind stays `var`.
+    declaredNames.set(text, kind);
+  };
+
+  const declareExport = (name: string, node: ts.Node): void => {
+    if (exportedNames.has(name)) {
+      violations.push({
+        rule: "duplicate-export",
+        detail:
+          `\`${name}\` is exported twice, which Node rejects as a duplicate export before the file loads (${describe(node, sourceFile)})`,
+      });
+      return;
+    }
+    exportedNames.add(name);
+  };
+
   for (const statement of sourceFile.statements) {
     const modifierViolation = forbiddenModifier(statement);
     if (modifierViolation) {
@@ -352,6 +464,9 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
         });
         continue;
       }
+      // Two `export default`s is a duplicate-export early error, not a
+      // last-one-wins overwrite.
+      declareExport("default", statement);
       const evaluated = evaluatePureData(statement.expression, ctx);
       if (evaluated.ok) {
         analysis.defaultExport = { value: evaluated.value };
@@ -381,6 +496,8 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
         });
         continue;
       }
+      const kind = bindingKindOf(statement.declarationList);
+      const exported = isExported(statement);
       for (const decl of statement.declarationList.declarations) {
         if (!ts.isIdentifier(decl.name)) {
           violations.push({
@@ -389,6 +506,11 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
           });
           continue;
         }
+        // Record the binding before looking at the initializer: an illegal
+        // name, or an illegal redeclaration, makes the file fail to load
+        // whatever it was assigned.
+        declareName(decl.name, kind, decl);
+        if (exported) declareExport(decl.name.text, decl);
         if (isJs && decl.type !== undefined) {
           violations.push({
             rule: "typescript-in-js",

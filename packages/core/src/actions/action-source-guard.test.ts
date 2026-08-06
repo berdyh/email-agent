@@ -285,6 +285,95 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
   });
 });
 
+describe("action source guard — early errors a module would throw on", () => {
+  // `ts.createSourceFile().parseDiagnostics` reports SYNTAX only. A module is
+  // strict code, and strict code adds early errors at binding time that the
+  // parser never sees. Every source below parses cleanly and then throws
+  // SyntaxError in Node, so the evaluator must refuse it rather than compute a
+  // value for a module that could not exist.
+
+  // Reserved only in strict-mode / module code — the always-reserved words are
+  // already parse errors, verified separately.
+  const ILLEGAL_BINDINGS = [
+    "eval",
+    "arguments",
+    "implements",
+    "interface",
+    "let",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "static",
+    "yield",
+    "await",
+  ];
+
+  it("refuses every binding name that is illegal in module code", () => {
+    for (const name of ILLEGAL_BINDINGS) {
+      for (const decl of ["var", "let", "const"]) {
+        const rules = rulesFor(
+          `${decl} ${name} = "p";\nexport default { id: "a", name: "A", prompt: "p" };\n`,
+        );
+        assert.ok(
+          rules.includes("reserved-binding"),
+          `\`${decl} ${name}\` should be refused, got ${rules.join(",") || "nothing"}`,
+        );
+      }
+    }
+  });
+
+  it("matches the cooked identifier, so an escape cannot spell past it", () => {
+    // Node rejects `const eval` for exactly the same reason it rejects
+    // `const eval`; the escape is not a different name.
+    assert.ok(
+      rulesFor(`const ev\\u0061l = "p";\nexport default { id: "a", name: "A", prompt: "p" };\n`)
+        .includes("reserved-binding"),
+    );
+  });
+
+  it("refuses a duplicate lexical declaration", () => {
+    const duplicates = [
+      `const X = "first";\nconst X = "second";`,
+      `let X = "first";\nlet X = "second";`,
+      `let X = "first";\nvar X = "second";`,
+      `var X = "first";\nlet X = "second";`,
+      `const X = "first";\nvar X = "second";`,
+      `const X = "first", X = "second";`,
+    ];
+    for (const head of duplicates) {
+      const rules = rulesFor(`${head}\nexport default { id: "a", name: "A", prompt: X };\n`);
+      assert.ok(
+        rules.includes("duplicate-declaration"),
+        `should be refused: ${head} — got ${rules.join(",") || "nothing"}`,
+      );
+    }
+    // ...while `var` redeclaring `var` is legal, and the later value wins.
+    assert.equal(
+      extractActionData(
+        `var X = "first";\nvar X = "second";\nexport default { id: "a", name: "A", prompt: X };\n`,
+        "x.action.ts",
+      )?.prompt,
+      "second",
+    );
+  });
+
+  it("refuses a duplicate export", () => {
+    assert.ok(
+      rulesFor(
+        `export default { id: "a", name: "A", prompt: "p" };\nexport default { id: "b", name: "B", prompt: "q" };\n`,
+      ).includes("duplicate-export"),
+    );
+    assert.ok(
+      rulesFor(
+        `export var action = { id: "a", name: "A", prompt: "p" };\nexport var action = { id: "b", name: "B", prompt: "q" };\n`,
+      ).includes("duplicate-export"),
+    );
+    // Two distinct exported names are fine.
+    accepts(`export var action = { id: "a", name: "A", prompt: "p" };\nexport var other = 1;\n`);
+  });
+});
+
 describe("action source extraction (load path)", () => {
   const CANONICAL = `import type { EmailAction } from "@email-agent/core";
 
