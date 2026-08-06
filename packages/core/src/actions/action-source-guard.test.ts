@@ -180,6 +180,26 @@ describe("action source guard — anything that could execute", () => {
     assert.ok(rulesFor(`if (true) { }\n`).includes("statement-not-allowed"));
   });
 
+  it("rejects TypeScript constructs that emit runtime code", () => {
+    // enum and namespace both compile to an IIFE, so they run on import.
+    assert.ok(rulesFor(`enum E { A = 1 }\n`).includes("statement-not-allowed"));
+    assert.ok(rulesFor(`namespace N { export const x = 1; }\n`).includes("statement-not-allowed"));
+    assert.ok(rulesFor(`import fs = require("node:fs");\n`).includes("statement-not-allowed"));
+    assert.ok(rulesFor(`class C { static { } }\n`).includes("statement-not-allowed"));
+  });
+
+  it("rejects `export =`, which Node cannot type-strip", () => {
+    // Harmless on its own, but the file would save and then never load.
+    assert.ok(rulesFor(`const a = { id: "a" };\nexport = a;\n`).includes("export-equals"));
+  });
+
+  it("treats a local binding as shadowing, not as the global it names", () => {
+    // `var process = "safe"` really does shadow the global inside a module, so
+    // referencing it is data. Referencing an undeclared `process` is not.
+    accepts(`var process = "safe";\nvar prompt2 = process;\nexport default { id: "a", prompt: prompt2 };\n`);
+    rejects(`const leaked = process;\nexport default { id: "a", prompt: "p" };\n`);
+  });
+
   it("rejects a getter, which runs on property read", () => {
     rejects(`const action = { get prompt() { return "p"; } };\n`);
   });

@@ -164,6 +164,16 @@ export function findActionSourceViolations(source: string): ActionSourceViolatio
 
     // `export default action;` or `export default { ... };`
     if (ts.isExportAssignment(statement)) {
+      // `export =` is CommonJS-only TypeScript. It cannot execute anything on
+      // its own, but Node's type stripper cannot erase it either, so the file
+      // would save and then fail to import — a silent dead action.
+      if (statement.isExportEquals) {
+        violations.push({
+          rule: "export-equals",
+          detail: `use \`export default\`; \`export =\` cannot be type-stripped, so the action would never load (${describe(statement, sourceFile)})`,
+        });
+        continue;
+      }
       if (isPureDataExpression(statement.expression, safeNames)) continue;
       violations.push({
         rule: "computed-export",
