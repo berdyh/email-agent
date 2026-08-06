@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import ts from "typescript";
 import {
   assertSafeActionSource,
   extractActionData,
@@ -698,20 +701,103 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
   });
 
   it("keeps every ACTIONS_DIR import out of the load path", async () => {
-    // `new Function("p", "return import(p)")` was the webpack-proof route that
-    // ran ACTIONS_DIR files in-process. Nothing may reintroduce it.
-    const loader = await readFile(new URL("./user-actions.ts", import.meta.url), "utf8");
-    assert.doesNotMatch(loader, /return import\(/);
-    assert.doesNotMatch(loader, /new Function/);
-    assert.doesNotMatch(loader, /\bimport\(/);
+    // This test used to match the literal text `await import(`, which is the
+    // denylist mistake the guard itself exists to avoid: reintroducing the
+    // hatch as `const nativeImport = new Function("p", "return import(p)")`
+    // and then `await nativeImport(path)` passed it, and so did moving the
+    // import into a different loader module. So scan the AST instead, for
+    // ANY construct that can reach a module loader or a code evaluator,
+    // however it is spelled, across every module that could be on the path.
 
-    // The registry may only import from its own built-in directory. Any
-    // `import()` there must be reachable from BUILT_IN_DIR and nothing else.
-    const registry = await readFile(new URL("./registry.ts", import.meta.url), "utf8");
-    for (const line of registry.split("\n")) {
-      if (!/\bawait import\(/.test(line)) continue;
-      assert.match(line, /BUILT_IN_DIR/, `registry imports something that is not a built-in: ${line}`);
+    /** Names that hand back a loader or an evaluator when called. */
+    const EVALUATOR_NAMES = new Set([
+      "Function",
+      "eval",
+      "require",
+      "createRequire",
+      "runInThisContext",
+      "runInNewContext",
+      "runInContext",
+      "compileFunction",
+      "SourceTextModule",
+    ]);
+    /** Modules whose whole purpose is to load or evaluate code. */
+    const LOADER_MODULES = new Set(["module", "node:module", "vm", "node:vm"]);
+
+    const scan = (file: string, source: string): string[] => {
+      const found: string[] = [];
+      const sf = ts.createSourceFile(file, source, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+      const at = (node: ts.Node): string => {
+        const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+        return `${file}:${line + 1} ${node.getText(sf).replace(/\s+/g, " ").slice(0, 80)}`;
+      };
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          found.push(at(node));
+        } else if (
+          (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
+          ts.isIdentifier(node.expression) &&
+          EVALUATOR_NAMES.has(node.expression.text)
+        ) {
+          found.push(at(node));
+        } else if (
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          node.moduleSpecifier !== undefined &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          LOADER_MODULES.has(node.moduleSpecifier.text)
+        ) {
+          found.push(at(node));
+        }
+        ts.forEachChild(node, visit);
+      };
+      ts.forEachChild(sf, visit);
+      return found;
+    };
+
+    const readTsFiles = async (dir: string): Promise<Map<string, string>> => {
+      const out = new Map<string, string>();
+      for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+        if (!entry.isFile()) continue;
+        if (!/\.tsx?$/.test(entry.name) || entry.name.endsWith(".test.ts")) continue;
+        const full = join(entry.parentPath, entry.name);
+        out.set(full, await readFile(full, "utf8"));
+      }
+      return out;
+    };
+
+    const actionsDir = fileURLToPath(new URL("./", import.meta.url));
+    const coreSrc = fileURLToPath(new URL("../", import.meta.url));
+
+    // 1. No module in the actions directory — where loading lives — may do it.
+    const candidates = await readTsFiles(actionsDir);
+    // 2. Nor may any module anywhere in core that so much as names ACTIONS_DIR,
+    //    which is how "just move the hatch somewhere else" would look.
+    for (const [file, source] of await readTsFiles(coreSrc)) {
+      if (source.includes("ACTIONS_DIR")) candidates.set(file, source);
     }
-    assert.match(registry, /extractActionData/);
+    assert.ok(candidates.size >= 5, `expected to scan the loader modules, saw ${candidates.size}`);
+    assert.ok([...candidates.keys()].some((f) => f.endsWith("user-actions.ts")));
+    assert.ok([...candidates.keys()].some((f) => f.endsWith("registry.ts")));
+
+    const hits: string[] = [];
+    for (const [file, source] of candidates) hits.push(...scan(file.slice(coreSrc.length), source));
+
+    // Exactly one loader call is allowed anywhere on this path: the built-in
+    // directory, whose files are in-repo and reviewed. It must be spelled
+    // against BUILT_IN_DIR so it cannot be pointed anywhere else.
+    const allowed = hits.filter((h) => h.startsWith("actions/registry.ts:") && h.includes("BUILT_IN_DIR"));
+    const unexpected = hits.filter((h) => !allowed.includes(h));
+    assert.deepEqual(
+      unexpected,
+      [],
+      `only the built-in directory may be imported; found:\n${unexpected.join("\n")}`,
+    );
+    assert.equal(allowed.length, 1, `expected exactly one built-in import, got:\n${allowed.join("\n")}`);
+
+    // ...and the ACTIONS_DIR path really goes through the static evaluator.
+    for (const name of ["registry.ts", "user-actions.ts"]) {
+      const [, source] = [...candidates].find(([f]) => f.endsWith(name)) ?? [];
+      assert.match(source ?? "", /extractActionData/, `${name} must extract, not import`);
+    }
   });
 });
