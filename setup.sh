@@ -32,15 +32,16 @@ echo -e "${RESET}"
 progress "Checking Node.js..."
 
 if ! command -v node &>/dev/null; then
-  fail "Node.js not found. Install v20+: https://nodejs.org"
+  fail "Node.js not found. Install v22.18+: https://nodejs.org"
 fi
 
-# v20.12+ required: the CLI and web server load the root .env via
-# process.loadEnvFile, which was added in Node 20.12.
+# v22.18+ required: user actions are saved as .action.ts files and loaded via
+# Node's native ESM loader, which needs unflagged TypeScript type stripping
+# (default on in Node 22.18 / 23.6+). Earlier Nodes can't import them at all.
 NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
 NODE_MINOR=$(node -v | sed 's/v//' | cut -d. -f2)
-if [ "$NODE_MAJOR" -lt 20 ] || { [ "$NODE_MAJOR" -eq 20 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
-  fail "Node.js v20.12+ required (found v$(node -v))"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 18 ]; }; then
+  fail "Node.js v22.18+ required (found v$(node -v))"
 fi
 ok "Node.js $(node -v)"
 
