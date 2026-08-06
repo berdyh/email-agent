@@ -19,8 +19,20 @@ symbol at all: `import("node:fs")`, read the stored OAuth tokens at
 `~/.email-agent/accounts/{email}/token.json` (scope `gmail.modify`), and call
 the Gmail REST API over https directly — mailbox mutated, zero queue rows,
 nothing in this repo touched. Every residual below is therefore about raising
-the bar for innocent code and keeping the audit trail honest. Real containment
-would need out-of-process isolation or validating action source before import.
+the bar for innocent code and keeping the audit trail honest.
+
+**The main defense is now the save-time source guard**, not the barrels:
+`assertSafeActionSource()` (`actions/action-source-guard.ts`) runs inside
+`saveUserAction()` and refuses any generated file whose code contains a value
+import, `import()`/`require`/`eval`/`Function`/`import.meta`, `process`,
+`globalThis`, `fetch`, a re-export, or `${...}` in a template literal. That is
+the right layer, because it inspects the file BEFORE it can ever be imported,
+which is the only moment refusing is still possible. It closes the
+generate→save path for every residual below, including the ones the barrel
+work could not reach. Its limits, stated plainly: it is a denylist over source
+text, it never sees a file hand-dropped into `ACTIONS_DIR`, and it does not
+re-check files saved before it existed. Full containment would still need
+out-of-process isolation.
 
 Two facts that scope the residuals below, both measured 2026-08-06:
 - From the real `ACTIONS_DIR` (`~/.email-agent/actions`) NO bare specifier
@@ -47,9 +59,12 @@ barrel, and `approvals apply` / the web approvals routes legitimately need
 `enqueueOperations` and `applyPendingOperationsByIds`. So a generated action
 that goes out of its way can enqueue a batch and immediately apply it by id —
 the rows ARE recorded (audit trail intact, unlike the closed bypass), but the
-user never approved them. The skill docs now prohibit any import beyond
-`type { EmailAction }`, which covers the model-emits-it-innocently path but is
-prompt-level only. The real fix is option (b) from the closed item: approval
+user never approved them. The generate→save path is now closed by the source
+guard, which rejects the value import this route needs before the file is ever
+written — so what remains is a hand-dropped file, i.e. the hostile-local-code
+case the section header scopes out. Downgraded from the P0 codex assigned it
+for that reason, and because the recorded rows keep the audit trail intact.
+The real fix is still option (b) from the closed item: approval
 provenance — make `applyPendingOperationsByIds` require proof that the approval
 came from a user surface (web route / CLI prompt), e.g. a token minted outside
 the module graph reachable by actions. Do not remove the exports; that breaks
@@ -66,7 +81,8 @@ module writes a fabricated acknowledgement and arms unattended Gmail writes
 for every subsequent run. Same shape as the existing "consent flag records
 consent" entry below, but this is the programmatic route rather than a
 hand-edited file, and it persists. Gated by the same resolution reality as the
-entries above (nothing resolves by name from `ACTIONS_DIR`), so it is a
+entries above (nothing resolves by name from `ACTIONS_DIR`) and now by the
+save-time source guard, which refuses the value import this needs — so it is a
 hostile-plugin route, not a naive one. Fix shape is the same approval
 provenance work: settings writes that arm mutation should require a
 user-surface credential rather than trusting any in-process caller.
@@ -83,7 +99,11 @@ actual attack vector — a real `.action.ts` file loaded through
 (and one that tries the deep operations path), load it through the real code
 path, and assert the mutating names are unreachable / the import rejects. This
 also documents empirically how bare specifiers resolve from
-`~/.email-agent/actions/`.
+`~/.email-agent/actions/`. Partly superseded: `action-source-guard.test.ts`
+now covers the save-time denial thoroughly (including the token-exfiltration
+shape), so what is still missing is only the load-side half — which needs
+`ACTIONS_DIR` to be injectable, since it is currently a homedir constant and a
+test cannot write there safely.
 Found by: testing specialist during /review (2026-08-06).
 
 ### The consent flag records consent, it does not prove the warnings were seen
