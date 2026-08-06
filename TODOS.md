@@ -23,15 +23,27 @@ the bar for innocent code and keeping the audit trail honest.
 
 **The main defense is now the save-time source guard**, not the barrels:
 `assertSafeActionSource()` (`actions/action-source-guard.ts`) runs inside
-`saveUserAction()` and refuses any generated file whose code contains a value
-import, `import()`/`require`/`eval`/`Function`/`import.meta`, `process`,
-`globalThis`, `fetch`, a re-export, or `${...}` in a template literal. That is
-the right layer, because it inspects the file BEFORE it can ever be imported,
-which is the only moment refusing is still possible. It closes the
-generate→save path for every residual below, including the ones the barrel
-work could not reach. Its limits, stated plainly: it is a denylist over source
-text, it never sees a file hand-dropped into `ACTIONS_DIR`, and it does not
-re-check files saved before it existed. Full containment would still need
+`saveUserAction()`. It parses the file with the TypeScript compiler and accepts
+only a pure-data shape — type-only imports/exports, type declarations,
+variables initialised to literals/objects/arrays, and `export default`. A file
+that passes contains no call, member access, `new`, function, tagged or
+interpolated template, spread, computed key or getter, so there is nothing in
+it that can execute at import time. That is the right layer, because it
+inspects the file BEFORE it can ever be imported, which is the only moment
+refusing is still possible, and it closes the generate→save path for every
+residual below.
+
+It must stay an AST allowlist. The first version was a regex denylist over a
+string-stripped skeleton, and review defeated it completely in one line —
+`({}).constructor.constructor("return process")()` names the Function
+constructor without spelling it, and the payload rides inside a string the
+scanner had already blanked. A second bypass, `export { default as type } from
+"data:text/javascript,..."`, executed a live data URL because the type-only
+check matched the word `type` anywhere. Both are regression tests now.
+
+Its remaining limits, stated plainly: it runs only on save, so a file
+hand-dropped into `ACTIONS_DIR` is never inspected, and files written before
+the guard existed are not re-checked. Full containment would still need
 out-of-process isolation.
 
 Two facts that scope the residuals below, both measured 2026-08-06:
