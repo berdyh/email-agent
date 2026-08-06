@@ -38,10 +38,14 @@ fi
 # v22.18+ required: user actions are saved as .action.ts files and loaded via
 # Node's native ESM loader, which needs unflagged TypeScript type stripping
 # (default on in Node 22.18 / 23.6+). Earlier Nodes can't import them at all.
+# Note the gap: 23.0-23.5 are NEWER than 22.18 but still lack unflagged
+# stripping, so a plain ">= 22.18" test would wave them through.
 NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
 NODE_MINOR=$(node -v | sed 's/v//' | cut -d. -f2)
-if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 18 ]; }; then
-  fail "Node.js v22.18+ required (found v$(node -v))"
+if [ "$NODE_MAJOR" -lt 22 ] ||
+  { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 18 ]; } ||
+  { [ "$NODE_MAJOR" -eq 23 ] && [ "$NODE_MINOR" -lt 6 ]; }; then
+  fail "Node.js v22.18+ or v23.6+ required (found $(node -v))"
 fi
 ok "Node.js $(node -v)"
 
