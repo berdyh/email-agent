@@ -56,6 +56,10 @@ import type { EmailAction } from "./types.js";
  *    `duplicate-declaration`, `duplicate-export`). Accepting a file Node would
  *    reject with `SyntaxError` means loading an action that could not exist.
  *
+ * And the module semantics themselves are modelled, not assumed: a named export
+ * is a LIVE binding read at the end of evaluation, while `export default`
+ * snapshots its operand where it stands.
+ *
  * Remaining limits, stated plainly: this stops code in `ACTIONS_DIR` files from
  * running, whatever put them there — it does nothing about malicious local code
  * outside the action pathway, which can read the stored OAuth tokens and drive
@@ -313,9 +317,18 @@ function evaluatePureData(node: ts.Expression, ctx: DataContext): DataResult {
  */
 interface ActionSourceAnalysis {
   violations: ActionSourceViolation[];
-  /** Value of `export default <data>`, when the expression was pure data. */
+  /**
+   * Value of `export default <data>`. `export default` SNAPSHOTS its operand
+   * where it appears — it is not a live binding — so this is recorded at the
+   * statement, which is what the runtime does too.
+   */
   defaultExport?: { value: unknown };
-  /** Value of `export const action = <data>`, mirroring `mod.action`. */
+  /**
+   * Value of the exported `action` binding at the END of module evaluation,
+   * mirroring `mod.action`. A named ESM export is a LIVE binding, so it must be
+   * read after the whole file has been walked; snapshotting it at the exported
+   * declaration would report a value a legal later `var action = …` overwrote.
+   */
   namedActionExport?: { value: unknown };
 }
 
@@ -364,6 +377,9 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
   // tracked under its own key, which no binding name can collide with because
   // `default` is an always-reserved word and cannot be bound.
   const exportedNames = new Set<string>();
+  // Whether the file exports a binding literally called `action`, which is what
+  // `mod.action` would have read. Its VALUE is resolved after the walk.
+  let exportsNamedAction = false;
 
   const declareName = (name: ts.Identifier, kind: BindingKind, node: ts.Node): void => {
     const text = name.text;
@@ -510,7 +526,14 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
         // name, or an illegal redeclaration, makes the file fail to load
         // whatever it was assigned.
         declareName(decl.name, kind, decl);
-        if (exported) declareExport(decl.name.text, decl);
+        if (exported) {
+          declareExport(decl.name.text, decl);
+          // `export const action = {...}` is what a runtime import surfaces as
+          // `mod.action`. An unexported `const action` exports nothing, so it
+          // is deliberately not treated as an export here. The VALUE is read
+          // after the walk, because a named export is a live binding.
+          if (decl.name.text === "action") exportsNamedAction = true;
+        }
         if (isJs && decl.type !== undefined) {
           violations.push({
             rule: "typescript-in-js",
@@ -518,16 +541,12 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
           });
           continue;
         }
+        // `var x;` after `var x = <data>` does NOT reset the binding, so an
+        // initializer-less declaration must leave `safeNames` alone.
         if (decl.initializer === undefined) continue;
         const evaluated = evaluatePureData(decl.initializer, ctx);
         if (evaluated.ok) {
           safeNames.set(decl.name.text, evaluated.value);
-          // `export const action = {...}` is what a runtime import would have
-          // surfaced as `mod.action`. An unexported `const action` exports
-          // nothing, so it is deliberately not treated as an export here.
-          if (decl.name.text === "action" && isExported(statement)) {
-            analysis.namedActionExport = { value: evaluated.value };
-          }
           continue;
         }
         violations.push(
@@ -561,6 +580,22 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
       detail:
         `an action file may only contain \`import type\`, type declarations, a data assignment and \`export default\` (${describe(statement, sourceFile)})`,
     });
+  }
+
+  // A named ESM export is a LIVE binding: `mod.action` reads whatever the name
+  // holds when the importer looks, not what it held at the `export` keyword. So
+  // the value is taken from `safeNames` AFTER the whole file has been walked.
+  //
+  //     export var action = { id: "junk", … };
+  //     var action = null;                      // legal `var` redeclaration
+  //
+  // is `mod.action === null` at runtime. Snapshotting at the exported
+  // declaration reported the object instead, which would resurrect an action
+  // the file deliberately unset. `export var action;` with no initializer
+  // anywhere leaves the binding `undefined`, and `safeNames` has no entry, so
+  // no export is recorded — matching the runtime again.
+  if (exportsNamedAction && safeNames.has("action")) {
+    analysis.namedActionExport = { value: safeNames.get("action") };
   }
 
   return analysis;

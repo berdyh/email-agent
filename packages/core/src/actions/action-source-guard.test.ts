@@ -374,6 +374,68 @@ describe("action source guard — early errors a module would throw on", () => {
   });
 });
 
+describe("action source extraction — ESM export semantics", () => {
+  it("reads a named export as a LIVE binding, not a snapshot", () => {
+    // `var` may legally redeclare `var`, and `mod.action` reads whatever the
+    // binding holds at the end of evaluation. Recording the value at the
+    // exported declaration resurrected an action the file had unset.
+    assert.equal(
+      extractActionData(
+        `export var action = { id: "junk", name: "J", description: "d", prompt: "p" };
+var action = null;
+`,
+        "x.action.ts",
+      ),
+      undefined,
+    );
+    // The last assignment wins, whatever it is.
+    assert.equal(
+      extractActionData(
+        `export var action = { id: "first", name: "J", description: "d", prompt: "p" };
+var action = { id: "second", name: "J", description: "d", prompt: "p" };
+`,
+        "x.action.ts",
+      )?.id,
+      "second",
+    );
+    // `var action;` with no initializer does NOT reset the binding.
+    assert.equal(
+      extractActionData(
+        `export var action = { id: "first", name: "J", description: "d", prompt: "p" };
+var action;
+`,
+        "x.action.ts",
+      )?.id,
+      "first",
+    );
+    // Declared first, exported later: the export still sees the final value.
+    assert.equal(
+      extractActionData(
+        `export var action;
+var action = { id: "late", name: "J", description: "d", prompt: "p" };
+`,
+        "x.action.ts",
+      )?.id,
+      "late",
+    );
+  });
+
+  it("snapshots `export default`, which is not a live binding", () => {
+    // The mirror image of the case above: `export default action` copies the
+    // value where it stands, so a later redeclaration must NOT change it.
+    assert.equal(
+      extractActionData(
+        `var action = { id: "first", name: "J", description: "d", prompt: "p" };
+export default action;
+var action = { id: "second", name: "J", description: "d", prompt: "p" };
+`,
+        "x.action.ts",
+      )?.id,
+      "first",
+    );
+  });
+});
+
 describe("action source extraction (load path)", () => {
   const CANONICAL = `import type { EmailAction } from "@email-agent/core";
 
