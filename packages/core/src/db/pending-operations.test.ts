@@ -5,6 +5,8 @@ import {
   buildIdListFilter,
   buildPendingOperationFilters,
   buildPendingResolutionFilter,
+  buildPruneFilter,
+  PRUNABLE_STATUSES,
   selectStaleApplyingOperations,
 } from "./pending-operations.js";
 import type { PendingOperationRecord } from "./schema.js";
@@ -172,5 +174,32 @@ describe("stranded `applying` rows", () => {
       applyingRow({ id: "f", status: "failed" }),
     ];
     assert.deepEqual(selectStaleApplyingOperations(rows, cutoff), []);
+  });
+});
+
+describe("retention prune filter", () => {
+  it("only ever targets resolved rows", () => {
+    // Pruning a pending row discards a change the user was never asked about;
+    // pruning an `applying` row destroys the only evidence that a Gmail
+    // mutation may have landed unrecorded. `failed` is kept as a diagnostic.
+    assert.deepEqual([...PRUNABLE_STATUSES], ["applied", "rejected"]);
+    const filter = buildPruneFilter("2025-08-07T00:00:00.000Z");
+    assert.equal(filter.includes("'pending'"), false);
+    assert.equal(filter.includes("'applying'"), false);
+    assert.equal(filter.includes("'failed'"), false);
+  });
+
+  it("compares resolvedAt as a date and excludes the unresolved sentinel", () => {
+    // "" sorts before every real ISO timestamp, so without the != '' guard a
+    // row that slipped into a prunable status without a resolvedAt would be
+    // swept away by any cutoff.
+    assert.equal(
+      buildPruneFilter("2025-08-07T00:00:00.000Z"),
+      "status IN ('applied', 'rejected') AND `resolvedAt` != '' AND `resolvedAt` < '2025-08-07T00:00:00.000Z'",
+    );
+  });
+
+  it("escapes the cutoff it interpolates", () => {
+    assert.ok(buildPruneFilter("a'b").includes("'a''b'"));
   });
 });

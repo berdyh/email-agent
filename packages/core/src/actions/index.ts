@@ -19,6 +19,7 @@ export {
   chunkList,
   mergeApplyResults,
   toOperationOutcomes,
+  resolveRetentionCutoff,
   APPLY_RESOLUTION_CHUNK_SIZE,
   type EnqueueOperationsInput,
 } from "./approval.js";

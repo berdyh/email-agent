@@ -8,9 +8,11 @@ import {
   toOperationOutcomes,
   isDestructiveOperation,
   parseLabelIds,
+  resolveRetentionCutoff,
   recordToGmailOperation,
   toPendingOperationRecords,
 } from "./approval.js";
+import { defaultConfig } from "../config/defaults.js";
 
 describe("queued operation descriptions", () => {
   it("names each mutation in the words the user approves", () => {
@@ -266,5 +268,28 @@ describe("merging per-chunk apply results", () => {
       errors: [],
       outcomes: [],
     });
+  });
+});
+
+describe("retention cutoff", () => {
+  const now = new Date("2026-08-07T12:00:00.000Z");
+
+  it("keeps rows newer than the configured window", () => {
+    assert.equal(
+      resolveRetentionCutoff(30, now),
+      "2026-07-08T12:00:00.000Z",
+    );
+  });
+
+  it("disables pruning rather than pruning everything on a bad value", () => {
+    // Wrong-direction failure here destroys the audit trail of real Gmail
+    // mutations, which cannot be reconstructed. Keep too much, never too few.
+    for (const days of [0, -1, NaN, Infinity, undefined]) {
+      assert.equal(resolveRetentionCutoff(days, now), null);
+    }
+  });
+
+  it("defaults to a full year of history", () => {
+    assert.equal(defaultConfig.retention?.approvalQueueDays, 365);
   });
 });

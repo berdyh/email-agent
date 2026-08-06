@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   savePendingOperations,
   claimPendingOperations,
+  prunePendingOperations,
   resolveClaimedOperations,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
 import type { PendingOperationRecord } from "../db/schema.js";
+import { loadSettings } from "../config/settings.js";
 import { applyOperations } from "./apply.js";
 import type {
   ActionApplyResult,
@@ -119,6 +121,45 @@ export async function enqueueOperations(
   const records = toPendingOperationRecords(input);
   await savePendingOperations(records);
   return records.map((record) => record.id);
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Cutoff timestamp for a retention sweep, or null when retention is disabled.
+ *
+ * A non-finite or non-positive window disables pruning rather than pruning
+ * everything — the failure direction for a misconfigured retention value must
+ * be "keep too much", because the rows are the audit trail of real Gmail
+ * mutations and cannot be reconstructed.
+ */
+export function resolveRetentionCutoff(
+  days: number | undefined,
+  now: Date = new Date(),
+): string | null {
+  if (days === undefined || !Number.isFinite(days) || days <= 0) return null;
+  return new Date(now.getTime() - days * MS_PER_DAY).toISOString();
+}
+
+/**
+ * Opportunistic retention sweep, run after a batch is resolved — the moment
+ * the table just grew, and the only routine point where the queue is already
+ * being written.
+ *
+ * Never throws: a housekeeping failure must not turn a successful approval
+ * into a reported failure, which would tell the user their Gmail changes did
+ * not happen when they did.
+ */
+async function pruneResolvedOperationsQuietly(): Promise<void> {
+  try {
+    const settings = await loadSettings();
+    const cutoff = resolveRetentionCutoff(settings.retention?.approvalQueueDays);
+    if (cutoff === null) return;
+    await prunePendingOperations(cutoff);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`Failed to prune resolved approval-queue rows: ${message}`);
+  }
 }
 
 /**
@@ -239,6 +280,7 @@ export async function applyPendingOperationsByIds(
     );
   }
 
+  await pruneResolvedOperationsQuietly();
   return mergeApplyResults(results);
 }
 
@@ -260,5 +302,6 @@ export async function rejectPendingOperationsByIds(
     "rejected",
     new Date().toISOString(),
   );
+  await pruneResolvedOperationsQuietly();
   return claimed.length;
 }

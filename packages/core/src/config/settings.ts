@@ -46,6 +46,7 @@ export function normalizeSettings(
   const embedding = asRecord(input["embedding"]);
   const gmail = asRecord(input["gmail"]);
   const ui = asRecord(input["ui"]);
+  const retention = asRecord(input["retention"]);
 
   const autoApplyAcknowledged =
     "autoApplyAcknowledged" in gmail
@@ -96,6 +97,12 @@ export function normalizeSettings(
         "fetchScope" in ui
           ? (ui["fetchScope"] as AppConfig["ui"]["fetchScope"])
           : defaults.ui.fetchScope,
+    },
+    retention: {
+      approvalQueueDays:
+        "approvalQueueDays" in retention
+          ? (retention["approvalQueueDays"] as number)
+          : (defaults.retention?.approvalQueueDays ?? 0),
     },
     dataDir: "dataDir" in input ? (input["dataDir"] as string) : defaults.dataDir,
     accounts: Array.isArray(input["accounts"])

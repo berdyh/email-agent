@@ -197,6 +197,62 @@ export async function getPendingOperationsByIds(
   return results as unknown as PendingOperationRecord[];
 }
 
+/**
+ * Statuses a retention sweep may delete.
+ *
+ * `pending` and `applying` are excluded because they are unresolved: pruning a
+ * pending row silently discards a change the user was never asked about, and
+ * pruning an `applying` row destroys the only evidence that a Gmail mutation
+ * may have landed without being recorded.
+ *
+ * `failed` is excluded too, deliberately. It looks resolved, but it is the
+ * diagnostic record of an attempted mutation whose outcome the user may still
+ * be chasing — and failed rows are rare, so keeping them forever costs nothing
+ * that pruning `applied`/`rejected` does not already recover.
+ */
+export const PRUNABLE_STATUSES = ["applied", "rejected"] as const;
+
+/**
+ * Rows resolved strictly before `olderThanIso`.
+ *
+ * `resolvedAt` holds `Date#toISOString()` output — fixed-width UTC with a
+ * trailing `Z` — which orders lexicographically exactly as it orders
+ * chronologically, so a string comparison is a date comparison here. The
+ * explicit `!= ''` guard matters because "" sorts before every real timestamp
+ * and would otherwise sweep away any unresolved row that slipped into a
+ * prunable status.
+ */
+export function buildPruneFilter(olderThanIso: string): string {
+  const statuses = PRUNABLE_STATUSES.map(
+    (status) => `'${escapeSql(status)}'`,
+  ).join(", ");
+  return [
+    `status IN (${statuses})`,
+    "`resolvedAt` != ''",
+    `\`resolvedAt\` < '${escapeSql(olderThanIso)}'`,
+  ].join(" AND ");
+}
+
+/**
+ * Deletes resolved queue rows older than `olderThanIso`, returning how many
+ * went. Without this the table is append-only for the life of the install and
+ * every approvals query scans the whole history.
+ */
+export async function prunePendingOperations(
+  olderThanIso: string,
+): Promise<number> {
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+  const filter = buildPruneFilter(olderThanIso);
+  // Count first: a LanceDB delete rewrites the table, so a no-op sweep should
+  // not pay for one. This runs after every apply/reject, where nothing to
+  // prune is the common case.
+  const doomed = await table.countRows(filter);
+  if (doomed === 0) return 0;
+  await table.delete(filter);
+  return doomed;
+}
+
 export async function countPendingOperations(
   status: PendingOperationStatus = "pending",
 ): Promise<number> {
