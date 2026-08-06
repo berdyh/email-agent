@@ -132,7 +132,8 @@ export function operationDedupeKey(record: PendingOperationRecord): string {
 }
 
 /**
- * Indexes of `records` that are not already awaiting approval.
+ * Indexes of `records` that are not already awaiting approval, given a
+ * snapshot `existingKeys` of what was pending when the caller looked.
  *
  * Deduping is deliberately scoped to rows that are still PENDING. A
  * re-proposal after a rejection is legitimate — the user said no to one
@@ -144,7 +145,11 @@ export function operationDedupeKey(record: PendingOperationRecord): string {
  * which is exactly what re-running an action over the same unread mail before
  * approving produced.
  *
- * Duplicates inside the incoming batch are collapsed too, keeping the first.
+ * Duplicates inside the incoming batch are collapsed too, keeping the first —
+ * that part IS exact, because the whole batch is in hand.
+ *
+ * Against rows already in the table it is only as good as the snapshot: see
+ * `enqueueOperationsDetailed` for why this is best-effort.
  */
 export function selectNewOperationIndexes(
   records: readonly PendingOperationRecord[],
@@ -171,8 +176,30 @@ export interface EnqueueOperationsResult {
 }
 
 /**
- * Persist a batch of Gmail operations awaiting the user's approval, skipping
- * proposals identical to one already queued and unapproved.
+ * Persist a batch of Gmail operations awaiting the user's approval.
+ *
+ * BEST-EFFORT DEDUPE, for the common serial case. This is a check-then-insert:
+ * it reads the still-pending rows for these emails, then writes. Two action
+ * runs racing (a `serve` and a CLI run, or two runs of the same action) can
+ * both complete the read before either writes, and both will then insert rows
+ * with distinct UUIDs. The queue shows the duplicate pending proposals and
+ * will let the user apply both. It is NOT a uniqueness guarantee — do not
+ * document or rely on it as one.
+ *
+ * Not made race-free, deliberately. LanceDB's only insert-if-absent primitive
+ * is `mergeInsert(on).whenNotMatchedInsertAll()`, which matches on column
+ * equality alone: it cannot express "insert unless a matching row is PENDING".
+ * Keying on the dedupe identity would therefore also suppress re-proposals
+ * after a rejection or an apply, which is the behaviour this dedupe exists to
+ * NOT have — a suppressed re-proposal is invisible, leaving the user nothing
+ * to act on. Trading a visible duplicate for a hidden proposal is the wrong
+ * direction. (Whether two concurrent LanceDB commits can both land on the
+ * local-filesystem backend is separately unconfirmed; see TODOS.md
+ * "Cross-process claim atomicity is unconfirmed".)
+ *
+ * The failure is benign in the direction that matters: a duplicate is a
+ * redundant proposal the user can see and reject, never a mutation applied
+ * without approval.
  */
 export async function enqueueOperationsDetailed(
   input: EnqueueOperationsInput,
@@ -181,6 +208,7 @@ export async function enqueueOperationsDetailed(
   if (records.length === 0) return { ids: [], operations: [], duplicates: 0 };
 
   // Scoped to the emails in this batch rather than reading the whole queue.
+  // A snapshot, not a lock — see the note above.
   const existing = await getPendingOperationsForEmails([
     ...new Set(records.map((record) => record.emailId)),
   ]);
@@ -199,7 +227,9 @@ export async function enqueueOperationsDetailed(
 /**
  * Persist a batch of Gmail operations awaiting the user's approval.
  * Returns the queue row ids, in operation order. Proposals identical to a row
- * already pending are skipped, so this can be shorter than `input.operations`.
+ * already pending are skipped on a best-effort basis (see
+ * `enqueueOperationsDetailed`), so this can be shorter than
+ * `input.operations`.
  */
 export async function enqueueOperations(
   input: EnqueueOperationsInput,

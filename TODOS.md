@@ -184,6 +184,29 @@ rather than composing new copy.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); adoption deferred to
 the surfaces wave.
 
+### Enqueue dedupe is best-effort, not race-free
+**Priority:** P3
+`enqueueOperationsDetailed` is a check-then-insert: it reads the still-pending
+rows for the batch's emails, then writes. Two concurrent action runs (a
+`serve` and a CLI run, or two runs of the same action) can both finish the
+read before either writes, and both then insert rows with distinct UUIDs. The
+queue shows duplicate pending proposals for the same change and permits both
+to be applied. Documented as best-effort everywhere it is described; do not
+restate it as a uniqueness guarantee.
+
+Not fixed, deliberately. LanceDB's only insert-if-absent primitive is
+`mergeInsert(on).whenNotMatchedInsertAll()`, which matches on column equality
+alone and cannot express "insert unless a matching row is PENDING". Keying on
+the dedupe identity would suppress re-proposals after a rejection or an apply
+— and a suppressed re-proposal is invisible, leaving the user nothing to act
+on, which is strictly worse than a duplicate they can see and reject. Fixing
+it properly needs either a `pending`-scoped uniqueness mechanism LanceDB does
+not offer, or an application-level lock around enqueue (the migration lock in
+`db/migration-lock.ts` is the same primitive and could be reused per
+`batchId`'s email set, at the cost of a filesystem lock per run). Do not
+weaken the PENDING scoping to get it.
+Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
+
 ### The retention window has no surface
 **Priority:** P3
 `retention.approvalQueueDays` (default 365) governs pruning of resolved
@@ -552,7 +575,21 @@ Nine entries closed together because they are one path. In queue order:
 - **Dedupe identical pending operations** (was P3). An enqueue now looks up
   still-pending rows for the batch's emails and drops proposals whose
   `(account, message, type, sorted labels)` identity already appears there,
-  plus duplicates inside the incoming batch. Scoped to PENDING only, and
+  plus duplicates inside the incoming batch.
+
+  **Best-effort, for the common serial case — not a uniqueness guarantee.**
+  It is a check-then-insert: two concurrent action runs can both finish the
+  read before either writes, and both then insert rows with distinct UUIDs.
+  The queue shows the duplicate pending proposals and will let the user apply
+  both. Left that way deliberately. LanceDB's only insert-if-absent primitive
+  is `mergeInsert(on).whenNotMatchedInsertAll()`, which matches on column
+  equality alone and cannot express "insert unless a matching row is
+  PENDING"; keying on the dedupe identity would also suppress re-proposals
+  after a rejection or an apply, and a suppressed re-proposal is invisible,
+  leaving the user nothing to act on. Trading a visible duplicate for a
+  hidden proposal is the wrong direction. The collapse of duplicates *within*
+  one batch is exact, because the whole batch is in hand. Scoped to PENDING
+  only, and
   that is the judgement call: a re-proposal after a rejection is legitimate
   — the user said no to one instance, and suppressing the next would hide
   the proposal entirely, leaving them nothing to act on. Same argument for

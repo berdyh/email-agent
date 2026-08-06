@@ -524,4 +524,30 @@ describe("dedupe of identical pending proposals", () => {
     ]);
     assert.deepEqual(selectNewOperationIndexes(incoming, new Set()), [0, 1]);
   });
+
+  it("is best-effort: two runs that both read before either wrote each keep their rows", () => {
+    // Pins the ACTUAL guarantee rather than the one the docs used to imply.
+    // `enqueueOperationsDetailed` is a check-then-insert, so two concurrent
+    // action runs can both complete their pending-rows read before either
+    // insert lands. Each then sees an empty snapshot and writes a row with its
+    // own UUID: the queue shows the duplicate and permits both to be applied.
+    // Documented as best-effort for the common serial case — not a uniqueness
+    // guarantee. The failure direction is benign: a visible redundant proposal
+    // the user can reject, never an unapproved mutation.
+    const proposal = () => records([{ emailId: "m1", type: "trash" }]);
+    const snapshotBeforeEitherWrote = new Set<string>();
+
+    assert.deepEqual(
+      selectNewOperationIndexes(proposal(), snapshotBeforeEitherWrote),
+      [0],
+    );
+    assert.deepEqual(
+      selectNewOperationIndexes(proposal(), snapshotBeforeEitherWrote),
+      [0],
+    );
+
+    // Serialized, the second run does dedupe — which is the case it is for.
+    const afterFirstWrote = new Set(proposal().map(operationDedupeKey));
+    assert.deepEqual(selectNewOperationIndexes(proposal(), afterFirstWrote), []);
+  });
 });
