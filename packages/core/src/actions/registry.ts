@@ -84,7 +84,9 @@ export class ActionRegistry {
       let action: EmailAction | undefined;
       try {
         const content = await readFile(join(ACTIONS_DIR, entry), "utf-8");
-        action = extractActionData(content, entry);
+        action = extractActionData(content, entry, {
+          onDiagnostic: (message) => console.warn(`[ActionRegistry] ${message}`),
+        });
       } catch (err) {
         console.warn(`[ActionRegistry] ${describeActionSourceRefusal(entry, err)}`);
         continue;

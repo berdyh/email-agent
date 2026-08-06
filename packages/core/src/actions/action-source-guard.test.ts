@@ -559,6 +559,47 @@ export default { id: "defaulted", name: "D", description: "d", prompt: "p" };
     );
   });
 
+  it("says out loud why a safe file yielded no action", () => {
+    // The old loaders only tested `id && name && prompt` for truthiness, so
+    // this object loaded. Requiring strings is a deliberate tightening; failing
+    // SILENTLY was not — the file just vanished from the action list.
+    const messages: string[] = [];
+    assert.equal(
+      extractActionData(`export default { id: 1, name: true, prompt: ["p"] };\n`, "x.action.ts", {
+        onDiagnostic: (m) => messages.push(m),
+      }),
+      undefined,
+    );
+    assert.equal(messages.length, 1);
+    const [message = ""] = messages;
+    assert.match(message, /x\.action\.ts/);
+    assert.match(message, /`id` is a number/);
+    assert.match(message, /`name` is a boolean/);
+    assert.match(message, /`prompt` is an array/);
+
+    // Missing fields, and a non-object export, are reported too.
+    const more: string[] = [];
+    extractActionData(`export default { id: "a" };\n`, "x.action.ts", {
+      onDiagnostic: (m) => more.push(m),
+    });
+    extractActionData(`export default "not an action";\n`, "x.action.ts", {
+      onDiagnostic: (m) => more.push(m),
+    });
+    assert.equal(more.length, 2);
+    assert.match(more[0] ?? "", /`name` is missing, `prompt` is missing/);
+    assert.match(more[1] ?? "", /exported value is a string, not an action object/);
+
+    // A file that exports nothing at all is not a problem to report.
+    const quiet: string[] = [];
+    extractActionData(`type X = { a: string };\n`, "x.action.ts", {
+      onDiagnostic: (m) => quiet.push(m),
+    });
+    extractActionData(`export default null;\n`, "x.action.ts", {
+      onDiagnostic: (m) => quiet.push(m),
+    });
+    assert.deepEqual(quiet, []);
+  });
+
   it("returns undefined for a safe file that exports no usable action", () => {
     assert.equal(extractActionData(`export default "not an action";\n`, "x.action.ts"), undefined);
     assert.equal(extractActionData(`export default { id: "a" };\n`, "x.action.ts"), undefined);

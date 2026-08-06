@@ -130,7 +130,9 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
 
       let action: EmailAction | undefined;
       try {
-        action = extractActionData(content, filename);
+        action = extractActionData(content, filename, {
+          onDiagnostic: (message) => console.warn(`[loadUserAction] ${message}`),
+        });
       } catch (err) {
         console.warn(`[loadUserAction] ${describeActionSourceRefusal(filename, err)}`);
         continue;

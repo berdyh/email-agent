@@ -618,12 +618,53 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
+}
+
+/**
+ * Why a syntactically fine action file still yields no action, or undefined
+ * when it yields one.
+ *
+ * DELIBERATE TIGHTENING, stated rather than hidden: the loaders this replaced
+ * only tested `action?.id && action?.name && action?.prompt` for truthiness, so
+ * `{ id: 1, name: true, prompt: ["p"] }` used to load and then flow a number
+ * into every place an action id is treated as a string. This requires the three
+ * fields to be non-empty strings. That is a stricter rule than the old loader's
+ * — the point of saying so here is that the file is refused OUT LOUD, with the
+ * field that is wrong, instead of vanishing from the action list.
+ */
+function describeUnusableAction(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return `its exported value is ${describeType(value)}, not an action object`;
+  }
+  const record = value as Record<string, unknown>;
+  const bad = (["id", "name", "prompt"] as const).filter((k) => !isNonEmptyString(record[k]));
+  if (bad.length === 0) return undefined;
+  return `${bad
+    .map((k) => `\`${k}\` is ${record[k] === undefined ? "missing" : describeType(record[k])}`)
+    .join(", ")} — an action needs \`id\`, \`name\` and \`prompt\` as non-empty strings`;
+}
+
+/** Options for `extractActionData()`. */
+export interface ExtractActionDataOptions {
+  /**
+   * Called when the file parses as pure data and exports something, but that
+   * something is not a usable action. Nothing on this path may fail silently:
+   * without this, a file with a numeric `id` just disappeared from the list
+   * with no way to find out why.
+   */
+  onDiagnostic?: (message: string) => void;
+}
+
 /**
  * Statically evaluate a pure-data action file and return the action it
  * describes, WITHOUT ever executing it. Throws `UnsafeActionSourceError` when
  * the source is not the pure-data shape — the same allowlist enforced at save
  * time — and returns undefined when the file is safe but exports no usable
- * action.
+ * action, reporting why through `onDiagnostic`.
  *
  * This replaces `import()` on the load path. Nothing from `ACTIONS_DIR` enters
  * the module graph, so a file that was hand-dropped, or written before the
@@ -632,6 +673,7 @@ function isNonEmptyString(value: unknown): value is string {
 export function extractActionData(
   source: string,
   filename = "action.ts",
+  options: ExtractActionDataOptions = {},
 ): EmailAction | undefined {
   const analysis = analyzeActionSource(source, filename);
   if (analysis.violations.length > 0) {
@@ -645,20 +687,20 @@ export function extractActionData(
   // absent default export is `undefined`, which the same expression covers, so
   // presence never needs to be consulted separately.
   const value = analysis.defaultExport?.value ?? analysis.namedActionExport?.value;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 
-  // The same three fields every caller checked after importing. Anything else
-  // the file declares is carried through untouched, as an import would.
-  const record = value as Record<string, unknown>;
-  if (
-    !isNonEmptyString(record.id) ||
-    !isNonEmptyString(record.name) ||
-    !isNonEmptyString(record.prompt)
-  ) {
+  // Nothing exported at all, or everything exported was nullish — the runtime
+  // would have produced no action either, and there is nothing to report.
+  if (value === undefined || value === null) return undefined;
+
+  const problem = describeUnusableAction(value);
+  if (problem !== undefined) {
+    options.onDiagnostic?.(`${filename} exports no usable action: ${problem}`);
     return undefined;
   }
 
-  return record as unknown as EmailAction;
+  // Anything else the file declares is carried through untouched, as an import
+  // would.
+  return value as EmailAction;
 }
 
 /** Thrown when action source fails the guard, at save time or at load time. */
