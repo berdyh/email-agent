@@ -122,6 +122,83 @@ export async function enqueueOperations(
 }
 
 /**
+ * How many claimed rows are applied before their outcomes are written back.
+ *
+ * Status used to be written once, after every Gmail call in the batch had
+ * completed, so a crash anywhere in a 200-operation batch left all 200 rows
+ * saying "applying" while up to 200 mailbox changes had really happened. The
+ * other extreme — one status write per operation — closes that window
+ * completely but costs one LanceDB update per row, and a LanceDB update
+ * rewrites the table.
+ *
+ * 10 is the compromise. `applyOperations` awaits one Gmail round trip per
+ * operation (~100-300ms each), so a chunk is roughly 1-3s of exposure
+ * regardless of how large the batch is, while the number of table rewrites
+ * stays at batch/10 instead of batch. Approval batches in practice are tens
+ * of rows, so this is usually 1-3 rewrites total.
+ */
+export const APPLY_RESOLUTION_CHUNK_SIZE = 10;
+
+/** Splits a list into fixed-size chunks, preserving order. */
+export function chunkList<T>(items: readonly T[], size: number): T[][] {
+  if (size < 1) throw new Error("chunkList requires a chunk size of at least 1");
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Maps one chunk's Gmail outcomes onto queue-row resolutions.
+ *
+ * Fails CLOSED. `applyOperations` returns one outcome per input operation, in
+ * order, so a missing entry means that contract broke — never assume the Gmail
+ * mutation happened. Recording it "applied" would retire the row from the
+ * queue and silently drop a change the user approved.
+ */
+export function toOperationOutcomes(
+  rows: readonly PendingOperationRecord[],
+  result: ActionApplyResult,
+): PendingOperationOutcome[] {
+  return rows.map((row, index) => {
+    const outcome = result.outcomes[index];
+    if (!outcome) {
+      return {
+        id: row.id,
+        status: "failed",
+        error: "No apply outcome was recorded for this operation",
+      };
+    }
+    if (outcome.ok) return { id: row.id, status: "applied" };
+    return { id: row.id, status: "failed", error: outcome.error ?? "" };
+  });
+}
+
+/**
+ * Concatenates per-chunk apply results back into one batch result. Chunks are
+ * processed in order, so concatenating outcomes preserves the caller's input
+ * ordering, which `toOperationOutcomes` and every surface rely on.
+ */
+export function mergeApplyResults(
+  results: readonly ActionApplyResult[],
+): ActionApplyResult {
+  const merged: ActionApplyResult = {
+    applied: 0,
+    failed: 0,
+    errors: [],
+    outcomes: [],
+  };
+  for (const result of results) {
+    merged.applied += result.applied;
+    merged.failed += result.failed;
+    merged.errors.push(...result.errors);
+    merged.outcomes.push(...result.outcomes);
+  }
+  return merged;
+}
+
+/**
  * Applies queued operations the user approved, by queue row id.
  * Only rows still in "pending" state are applied; each row is marked
  * applied/failed afterwards. Returns the aggregate apply result.
@@ -142,28 +219,27 @@ export async function applyPendingOperationsByIds(
     return { applied: 0, failed: 0, errors: [], outcomes: [] };
   }
 
-  const result = await applyOperations(rows.map(recordToGmailOperation));
+  // Apply and resolve in chunks rather than mutating the whole batch and then
+  // writing every status at the end. A crash (or a LanceDB failure) can now
+  // strand at most one chunk in `applying`, instead of the entire batch.
+  const results: ActionApplyResult[] = [];
+  for (const rowChunk of chunkList(rows, APPLY_RESOLUTION_CHUNK_SIZE)) {
+    const chunkResult = await applyOperations(
+      rowChunk.map(recordToGmailOperation),
+    );
+    results.push(chunkResult);
+    // Deliberately NOT wrapped: if outcomes cannot be recorded, stop rather
+    // than keep mutating mail whose fate we are unable to write down. The
+    // unprocessed rows stay claimed and surface via
+    // `getStaleApplyingOperations()`.
+    await resolveClaimedOperations(
+      toOperationOutcomes(rowChunk, chunkResult),
+      token,
+      new Date().toISOString(),
+    );
+  }
 
-  const resolvedAt = new Date().toISOString();
-  const outcomes: PendingOperationOutcome[] = rows.map((row, index) => {
-    const outcome = result.outcomes[index];
-    // Fail CLOSED. `applyOperations` returns one outcome per input operation,
-    // in order, so a missing entry means that contract broke — never assume
-    // the Gmail mutation happened. Recording it "applied" would retire the row
-    // from the queue and silently drop a change the user approved.
-    if (!outcome) {
-      return {
-        id: row.id,
-        status: "failed",
-        error: "No apply outcome was recorded for this operation",
-      };
-    }
-    if (outcome.ok) return { id: row.id, status: "applied" };
-    return { id: row.id, status: "failed", error: outcome.error ?? "" };
-  });
-  await resolveClaimedOperations(outcomes, token, resolvedAt);
-
-  return result;
+  return mergeApplyResults(results);
 }
 
 /**

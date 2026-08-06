@@ -16,6 +16,10 @@ export {
   isDestructiveOperation,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
+  chunkList,
+  mergeApplyResults,
+  toOperationOutcomes,
+  APPLY_RESOLUTION_CHUNK_SIZE,
   type EnqueueOperationsInput,
 } from "./approval.js";
 export { ActionRegistry } from "./registry.js";

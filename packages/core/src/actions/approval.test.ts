@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  APPLY_RESOLUTION_CHUNK_SIZE,
+  chunkList,
   describeGmailOperation,
+  mergeApplyResults,
+  toOperationOutcomes,
   isDestructiveOperation,
   parseLabelIds,
   recordToGmailOperation,
@@ -158,5 +162,109 @@ describe("pending operation records", () => {
     assert.equal("labelIds" in operation, false);
     // The explicit gcloud sentinel survives the round-trip.
     assert.equal(operation.accountEmail, "");
+  });
+});
+
+describe("chunked apply resolution", () => {
+  it("splits a batch into ordered fixed-size chunks", () => {
+    assert.deepEqual(chunkList([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+    assert.deepEqual(chunkList([1, 2, 3, 4], 4), [[1, 2, 3, 4]]);
+    assert.deepEqual(chunkList([1], 10), [[1]]);
+    assert.deepEqual(chunkList([], 3), []);
+  });
+
+  it("refuses a chunk size that would never advance", () => {
+    // A size of 0 would loop forever over a non-empty batch, mid-mutation.
+    assert.throws(() => chunkList([1], 0), /at least 1/);
+  });
+
+  it("keeps the configured chunk size small enough to bound the lying window", () => {
+    assert.ok(APPLY_RESOLUTION_CHUNK_SIZE >= 1);
+    assert.ok(APPLY_RESOLUTION_CHUNK_SIZE <= 50);
+  });
+});
+
+describe("mapping Gmail outcomes onto queue rows", () => {
+  const rows = toPendingOperationRecords({
+    batchId: "batch-1",
+    actionId: "junk",
+    actionName: "Junk Detector",
+    operations: [
+      { emailId: "m1", type: "trash" },
+      { emailId: "m2", type: "spam" },
+    ],
+  });
+
+  it("records applied and failed per row, in order", () => {
+    const outcomes = toOperationOutcomes(rows, {
+      applied: 1,
+      failed: 1,
+      errors: [{ emailId: "m2", error: "boom" }],
+      outcomes: [
+        { emailId: "m1", type: "trash", ok: true },
+        { emailId: "m2", type: "spam", ok: false, error: "boom" },
+      ],
+    });
+
+    assert.deepEqual(outcomes, [
+      { id: rows[0]?.id, status: "applied" },
+      { id: rows[1]?.id, status: "failed", error: "boom" },
+    ]);
+  });
+
+  it("fails closed when an outcome is missing", () => {
+    // A short outcome list means applyOperations' one-per-operation contract
+    // broke. Recording "applied" would retire the row and silently drop a
+    // change the user approved.
+    const outcomes = toOperationOutcomes(rows, {
+      applied: 1,
+      failed: 0,
+      errors: [],
+      outcomes: [{ emailId: "m1", type: "trash", ok: true }],
+    });
+
+    assert.equal(outcomes[1]?.status, "failed");
+    assert.match(String(outcomes[1]?.error), /No apply outcome was recorded/);
+  });
+});
+
+describe("merging per-chunk apply results", () => {
+  it("sums counts and concatenates outcomes in chunk order", () => {
+    const merged = mergeApplyResults([
+      {
+        applied: 2,
+        failed: 0,
+        errors: [],
+        outcomes: [
+          { emailId: "m1", type: "trash", ok: true },
+          { emailId: "m2", type: "trash", ok: true },
+        ],
+      },
+      {
+        applied: 0,
+        failed: 1,
+        errors: [{ emailId: "m3", error: "boom" }],
+        outcomes: [{ emailId: "m3", type: "spam", ok: false, error: "boom" }],
+      },
+    ]);
+
+    assert.equal(merged.applied, 2);
+    assert.equal(merged.failed, 1);
+    assert.deepEqual(merged.errors, [{ emailId: "m3", error: "boom" }]);
+    // Order is the contract: every surface pairs outcomes with the operations
+    // it submitted, positionally.
+    assert.deepEqual(
+      merged.outcomes.map((o) => o.emailId),
+      ["m1", "m2", "m3"],
+    );
+  });
+
+  it("returns an empty result for a batch that produced no chunks", () => {
+    assert.deepEqual(mergeApplyResults([]), {
+      applied: 0,
+      failed: 0,
+      errors: [],
+      outcomes: [],
+    });
   });
 });
