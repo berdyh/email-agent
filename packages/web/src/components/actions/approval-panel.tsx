@@ -10,6 +10,10 @@ import {
   type ApprovalOperation,
 } from "@/hooks/use-approvals";
 import { useEmailDetail } from "@/hooks/use-email-detail";
+import {
+  describeApplyOutcome,
+  describeRejectOutcome,
+} from "@/modules/api/approvals-contract";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -218,13 +222,8 @@ export function ApprovalPanel() {
       { ids: selectedIds },
       {
         onSuccess: (result) => {
-          if (result.failed > 0) {
-            toast.error(
-              `Applied ${result.applied} changes, ${result.failed} failed`,
-            );
-          } else {
-            toast.success(`Applied ${result.applied} changes to Gmail`);
-          }
+          const { tone, message } = describeApplyOutcome(result);
+          toast[tone](message);
         },
         onError: (err) => toast.error(err.message),
       },
@@ -246,7 +245,8 @@ export function ApprovalPanel() {
       { ids },
       {
         onSuccess: (result) => {
-          toast.success(`Rejected ${result.rejected} pending changes`);
+          const { tone, message } = describeRejectOutcome(result);
+          toast[tone](message);
         },
         onError: (err) => toast.error(err.message),
       },
