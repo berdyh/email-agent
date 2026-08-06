@@ -9,47 +9,23 @@ does not version its packages independently).
 These are the gate's known limits. It stops the AI action pipeline from
 mutating Gmail without approval; it is not a sandbox against local code.
 
-### User actions can bypass the gate entirely
-**Priority:** P1
-`applyOperations` is still exported from the core barrel, and
-`trashMessage`/`markAsSpam` from `gmail/index.ts`. User actions are arbitrary
-`.action.ts` modules dynamically imported from `~/.email-agent/actions/` — and
-they are written by the AI via `POST /api/actions/generate`. A generated action
-that imports `applyOperations` directly mutates Gmail with no queue row, no
-approval, and no audit trail. The gate currently rests on `ActionRunner` being
-the only caller, which does not bind plugin code. Options: drop the export from
-the public barrel, rename it so a bypass is visible at the call site, or lint
-generated action source for direct Gmail imports.
-Found by: adversarial review during /ship.
-
-**Full chain, for whoever picks this up.** Every link already exists in the
-product; none of it requires the user to write code:
-1. The user asks the chat UI for an action. `POST /api/actions/generate` sends
-   `CREATE_ACTION_SKILLS.md` as the system prompt to whichever agent is routed.
-2. The reply is saved verbatim to `~/.email-agent/actions/<id>.action.ts` via
-   `POST /api/actions/user`.
-3. `loadUserAction()` imports that file with the `new Function("p", "return
-   import(p)")` escape hatch, so it runs in-process with the full core barrel
-   reachable — the same module graph `ActionRunner` uses.
-4. Nothing between those steps inspects the generated source, and neither skill
-   doc tells the model that direct Gmail mutation is off-limits.
-So the queue is bypassed by one `import { applyOperations } from
-"@email-agent/core"` that a model could emit on its own, without any user
-intent to circumvent anything — not only by a user who sets out to.
-
-**Fix directions, roughly in order of strength.** (a) Stop exporting the
-mutating surface from the public barrel and give `ActionRunner` a private path
-to it — closes the plugin route by construction rather than by convention, and
-is the only option a hostile or careless generated action cannot undo; the cost
-is that a legitimate out-of-tree consumer loses the export, so check the barrel
-consumers first. (b) Move the enforcement into the Gmail ops themselves: require
-an approval token/queue-row id argument so an unapproved call cannot be spelled.
-(c) Static-lint generated action source for direct Gmail/core-mutation imports
-at save time in `POST /api/actions/user` — cheap and immediate, but it is a
-denylist and only covers the generate→save path, not a hand-dropped file. (d)
-State the prohibition in both skill docs — worth doing regardless, but it is a
-prompt, not an enforcement boundary, so it must not be the only measure. (a)+(d)
-together are the recommendation; (c) is a good interim if (a) proves disruptive.
+### A user action can still approve its own queue rows
+**Priority:** P2
+The direct-mutation bypass is closed (see Completed), but the approval-side
+surface is still public by necessity: the CLI can only import from the root
+barrel, and `approvals apply` / the web approvals routes legitimately need
+`enqueueOperations` and `applyPendingOperationsByIds`. So a generated action
+that goes out of its way can enqueue a batch and immediately apply it by id —
+the rows ARE recorded (audit trail intact, unlike the closed bypass), but the
+user never approved them. The skill docs now prohibit any import beyond
+`type { EmailAction }`, which covers the model-emits-it-innocently path but is
+prompt-level only. The real fix is option (b) from the closed item: approval
+provenance — make `applyPendingOperationsByIds` require proof that the approval
+came from a user surface (web route / CLI prompt), e.g. a token minted outside
+the module graph reachable by actions. Do not remove the exports; that breaks
+the CLI's own approvals flow.
+Found by: scoping the barrel-export fix (worktree-approval-gate-bypass,
+2026-08-06).
 
 ### The consent flag records consent, it does not prove the warnings were seen
 **Priority:** P3
@@ -383,6 +359,27 @@ The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
 classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
+
+### User actions can bypass the gate entirely
+**Completed:** worktree-approval-gate-bypass (2026-08-06)
+Was P1. A generated `.action.ts` (dynamically imported in-process) could
+`import { applyOperations } from "@email-agent/core"` — or any raw Gmail write
+op — and mutate Gmail with no queue row, no approval, no audit trail. Closed by
+construction with fix (a)+(d) of the original entry: `applyOperations` and the
+six write operations (`markAsRead`, `markAsUnread`, `trashMessage`,
+`markAsSpam`, `addLabels`, `removeLabels`) are no longer exported from any
+public barrel, and the package `exports` map (exact keys, no wildcards) is the
+only thing Node's loader consults for user-action imports, so no public
+specifier reaches mutation. Core keeps using relative imports; web's manual
+mail actions (the click-is-the-approval path) moved to a webpack-only
+`@email-agent/core/gmail/operations` tsconfig path that Node refuses at runtime
+(`ERR_PACKAGE_PATH_NOT_EXPORTED`). Both skill docs now prohibit any import
+beyond `type { EmailAction }` and explain that mutation flows through the
+approval queue. `barrel-surface.test.ts` pins the absent exports, the surviving
+approval surface, and the runtime resolution refusal. Remaining approval-side
+residual is tracked above as "A user action can still approve its own queue
+rows". Deliberately NOT a sandbox: absolute-path `import()` of dist files by
+local code is out of scope, as the section header states.
 
 ### Chained `.where()` silently dropped every filter but the last
 **Completed:** feature/approval-gate (2026-08-06)
