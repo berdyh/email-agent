@@ -9,6 +9,34 @@ does not version its packages independently).
 These are the gate's known limits. It stops the AI action pipeline from
 mutating Gmail without approval; it is not a sandbox against local code.
 
+**Read this before any other entry in this section.** The gate protects the
+app's own mutation path from an *innocently generated* action — the realistic
+failure, since these files are written by an LLM following our skill docs. It
+is not, and cannot be by any barrel/exports mechanism, a control against a
+*malicious* one. A user action's top-level code runs in-process with full Node
+privileges before anything inspects it, so a hostile action never needs a core
+symbol at all: `import("node:fs")`, read the stored OAuth tokens at
+`~/.email-agent/accounts/{email}/token.json` (scope `gmail.modify`), and call
+the Gmail REST API over https directly — mailbox mutated, zero queue rows,
+nothing in this repo touched. Every residual below is therefore about raising
+the bar for innocent code and keeping the audit trail honest. Real containment
+would need out-of-process isolation or validating action source before import.
+
+Two facts that scope the residuals below, both measured 2026-08-06:
+- From the real `ACTIONS_DIR` (`~/.email-agent/actions`) NO bare specifier
+  resolves — `@email-agent/core`, `@email-agent/core/gmail` and even
+  `googleapis` give `ERR_MODULE_NOT_FOUND`. So in the shipped install location
+  the import-a-core-symbol routes are inert; the protection there is "the
+  package is not on the action's resolution path", not the barrel privacy.
+  (Verify with `--experimental-import-meta-resolve` and an explicit parent —
+  the two-arg `import.meta.resolve` silently ignores the parent without it and
+  reports a false positive.)
+- The declared Node floor (20.12) cannot strip TS types, so `.action.ts` files
+  do not import at all there. The attack surface is inert on the runtime we
+  claim to support and live only on newer Node — see the P2 entry below. The
+  security posture depends on which Node actually runs, which nobody had
+  stated.
+
 ### A user action can still approve its own queue rows
 **Priority:** P2
 The direct-mutation bypass is closed (see Completed), but the approval-side

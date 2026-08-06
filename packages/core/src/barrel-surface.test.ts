@@ -62,9 +62,14 @@ describe("public barrel surface (approval-gate enforcement)", () => {
     assertAbsent(distActions, "dist actions barrel");
   });
 
-  it("still exports the approval-enforcing surface", () => {
-    // These stay public on purpose: they only act on queued rows, so the CLI
-    // (barrel-only imports) and web approvals routes can drive the flow.
+  it("still exports the queue-driving surface the approval UIs need", () => {
+    // These stay public on purpose: the CLI (barrel-only imports) and the web
+    // approvals routes drive the flow through them. They are NOT an
+    // enforcement boundary — `applyPendingOperationsByIds` takes row ids and
+    // checks only that the rows are `pending`, carrying no approval
+    // provenance, so this same pair is the residual enqueue-then-self-apply
+    // hole tracked in TODOS.md. Recorded rows keep the audit trail intact,
+    // which is what separates it from the silent bypass this file pins shut.
     assert.equal(typeof actionsBarrel.enqueueOperations, "function");
     assert.equal(typeof actionsBarrel.applyPendingOperationsByIds, "function");
     assert.equal(typeof actionsBarrel.rejectPendingOperationsByIds, "function");
