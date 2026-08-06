@@ -43,7 +43,7 @@ describe("pending operation DB filters", () => {
   });
 
   it("builds a single-id filter for a row-by-row resolution", () => {
-    // resolvePendingOperations updates each failed row on its own so it can
+    // resolveClaimedOperations updates each failed row on its own so it can
     // carry that row's error message.
     assert.equal(buildIdListFilter(["op-1"]), "id IN ('op-1')");
   });

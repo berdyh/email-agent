@@ -28,7 +28,6 @@ export {
   countPendingOperations,
   claimPendingOperations,
   resolveClaimedOperations,
-  resolvePendingOperations,
   getStaleApplyingOperations,
   selectStaleApplyingOperations,
   STALE_APPLYING_THRESHOLD_MS,
