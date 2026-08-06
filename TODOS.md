@@ -39,7 +39,17 @@ string-stripped skeleton, and review defeated it completely in one line —
 constructor without spelling it, and the payload rides inside a string the
 scanner had already blanked. A second bypass, `export { default as type } from
 "data:text/javascript,..."`, executed a live data URL because the type-only
-check matched the word `type` anywhere. Both are regression tests now.
+check matched the word `type` anywhere.
+
+The allowlist version then had a hole of its own, worth remembering because it
+was semantic rather than syntactic and no parse check could have caught it:
+`declare const process = "safe"` is an AMBIENT declaration, so it binds nothing
+and is erased whole, and every later mention of `process` resolves to the real
+global — while the guard had recorded the name as data and every expression
+still looked like a literal. Ambient statements and decorators are refused now.
+All of these are regression tests. The lesson to carry: when adding a case to
+this allowlist, ask not "is this syntax inert?" but "does this syntax BIND what
+it appears to bind at runtime?"
 
 Its remaining limits, stated plainly: it runs only on save, so a file
 hand-dropped into `ACTIONS_DIR` is never inspected, and files written before
