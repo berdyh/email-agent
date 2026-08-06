@@ -49,6 +49,32 @@ export function deriveResultAccountId(
   return accountIds.size === 1 && only !== undefined ? only : "";
 }
 
+/**
+ * Wording for an auto-apply that threw.
+ *
+ * This message is the one the user reads instead of looking at their mailbox,
+ * so it must not claim more than we know. `applyPendingOperationsByIds` claims
+ * rows before any Gmail call, which means it can only throw before the first
+ * mutation OR after mutations have already completed but their outcome could
+ * not be written back. From here the two are indistinguishable, so the honest
+ * statement is "may have been applied" — the previous code reused
+ * `queueError`, and the surfaces printed "nothing was applied" while mail had
+ * really been trashed.
+ */
+export function describeAutoApplyFailure(message: string): string {
+  return `Auto-apply failed after the changes were queued: ${message}. Some Gmail changes may already have been applied; their outcome could not be recorded. Review the approval queue for operations stuck in "applying" before re-running this action.`;
+}
+
+/**
+ * Wording for a run whose `action_results` row could not be written.
+ *
+ * Nothing is queued in that case, so unlike the auto-apply message this one
+ * CAN state plainly that the mailbox is untouched.
+ */
+export function describeUnrecordedBatchFailure(message: string): string {
+  return `The action result could not be recorded (${message}), so its Gmail changes were not queued. Nothing was applied — re-run the action to propose them again.`;
+}
+
 function buildPrompt(action: EmailAction, emails: GmailMessage[]): string {
   const emailSummaries = emails.map((e) => ({
     id: e.id,
@@ -109,12 +135,62 @@ export class ActionRunner {
         accountEmailByMessageId,
       );
 
+      // PARENT ROW FIRST. Queue rows are stamped `batchId = resultId`, so
+      // writing them before the `action_results` row can leave the queue
+      // referencing a batch that was never recorded, with nothing to
+      // reconcile it against. Persisting the parent first makes the batch id
+      // meaningful by the time anything points at it.
+      //
+      // Its own try/catch: the run itself succeeded, so a persistence failure
+      // must not be reported to the caller as a failed run.
+      let batchRecorded = true;
+      try {
+        // An explicit accountEmail is authoritative. Otherwise (an "all
+        // accounts" run) derive the account from the per-message lookup so a
+        // single-account batch is still attributed correctly, rather than
+        // collapsing to the unscoped "" sentinel.
+        const resultAccountId =
+          accountEmail ??
+          deriveResultAccountId(emailIds, accountEmailByMessageId);
+
+        await saveActionResult({
+          id: resultId,
+          actionId: action.id,
+          accountId: resultAccountId,
+          status: "success",
+          emailIds: JSON.stringify(emailIds),
+          resultData: JSON.stringify(output),
+          agentUsed: agentResult.agentUsed,
+          tokensUsed: agentResult.tokensUsed,
+          durationMs: agentResult.durationMs,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (persistErr) {
+        batchRecorded = false;
+        const message =
+          persistErr instanceof Error ? persistErr.message : String(persistErr);
+        console.error(
+          `Failed to persist action result for "${action.id}": ${message}`,
+        );
+        result.persistError = message;
+      }
+
       // Gmail mutations always go through the approval queue first, so every
       // proposed change is recorded before anything touches Gmail. They are
       // applied here only when the user opted into auto-apply AND accepted its
       // warnings in Settings; otherwise they wait for an explicit approval in
       // the web panel or CLI. The batch id ties queue rows to the action result.
       if (pendingOps.length > 0) {
+        if (!batchRecorded) {
+          // Fail closed rather than orphan the rows. The proposals are only
+          // proposals — re-running reproduces them — whereas queue rows whose
+          // batch does not exist are unattributable forever.
+          result.queueError = describeUnrecordedBatchFailure(
+            result.persistError ?? "unknown error",
+          );
+          return result;
+        }
+
         let queuedIds: string[] = [];
         try {
           queuedIds = await enqueueOperations({
@@ -154,42 +230,14 @@ export class ActionRunner {
             console.error(
               `Failed to auto-apply operations for "${action.id}": ${message}`,
             );
-            // The rows stay queued, so the user can still approve them by hand.
-            result.queueError = message;
+            // NOT queueError. The rows were queued; what failed is the apply,
+            // and by this point Gmail may already have been mutated (see
+            // `describeAutoApplyFailure`). Reusing queueError made every
+            // surface print "nothing was applied" for mail that had really
+            // been trashed.
+            result.applyError = describeAutoApplyFailure(message);
           }
         }
-      }
-
-      // Persist to DB in its own try/catch: the run itself succeeded and its
-      // operations are already queued, so a persistence failure must not be
-      // reported to the caller as a failed run.
-      try {
-        // An explicit accountEmail is authoritative. Otherwise (an "all
-        // accounts" run) derive the account from the per-message lookup so a
-        // single-account batch is still attributed correctly, rather than
-        // collapsing to the unscoped "" sentinel.
-        const resultAccountId =
-          accountEmail ??
-          deriveResultAccountId(emailIds, accountEmailByMessageId);
-
-        await saveActionResult({
-          id: resultId,
-          actionId: action.id,
-          accountId: resultAccountId,
-          status: "success",
-          emailIds: JSON.stringify(emailIds),
-          resultData: JSON.stringify(output),
-          agentUsed: agentResult.agentUsed,
-          tokensUsed: agentResult.tokensUsed,
-          durationMs: agentResult.durationMs,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (persistErr) {
-        const message =
-          persistErr instanceof Error ? persistErr.message : String(persistErr);
-        console.error(
-          `Failed to persist action result for "${action.id}": ${message}`,
-        );
       }
 
       return result;

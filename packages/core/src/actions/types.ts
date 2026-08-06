@@ -64,11 +64,30 @@ export interface ActionRunResult {
   /** True when the user's opt-in auto-apply setting applied the batch immediately. */
   autoApplied?: boolean;
   /**
-   * Set when the proposed operations could not be queued (or auto-applied).
-   * The run itself succeeded, but the Gmail changes did not reach the approval
-   * queue, so callers must not report them as awaiting approval.
+   * Set when the proposed operations never reached the approval queue — either
+   * the enqueue itself failed, or the parent `action_results` row could not be
+   * written so queueing was skipped. This is a strictly PRE-Gmail failure:
+   * nothing was applied, and callers must not report the changes as awaiting
+   * approval. Auto-apply failures use `applyError`, never this field.
    */
   queueError?: string;
+  /**
+   * Set when the opt-in auto-apply threw after the batch was queued.
+   *
+   * NOT interchangeable with `queueError`. `applyPendingOperationsByIds` claims
+   * rows before it calls Gmail, so a throw here may mean nothing happened OR
+   * that mail was really trashed/marked spam and only the bookkeeping failed.
+   * Surfaces must report it as "may have been applied"; the message built by
+   * `describeAutoApplyFailure` already says so. The rows are recoverable via
+   * `getStaleApplyingOperations()`.
+   */
+  applyError?: string;
+  /**
+   * Set when the `action_results` row could not be persisted. The run itself
+   * succeeded and its output is still returned, but this batch has no history
+   * row — and no operations were queued against it, so nothing was applied.
+   */
+  persistError?: string;
   /** Present only for an auto-applied batch; approvals report their own result. */
   applyResult?: ActionApplyResult;
 }
