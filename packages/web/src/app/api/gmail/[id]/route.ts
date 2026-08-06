@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getEmailById, initDb, updateEmailReadStatus } from "@email-agent/core/db";
-import { markAsRead, markAsUnread } from "@email-agent/core/gmail";
+// Deep path on purpose: the gmail barrel no longer exports write operations
+// (approval-gate bypass hardening). This specifier only resolves here because
+// webpack bundles core source via tsconfig paths; Node's package exports map
+// refuses it, so dynamically imported user actions cannot reach it.
+import { markAsRead, markAsUnread } from "@email-agent/core/gmail/operations";
 import {
   internalErrorResponse,
   mutationGuardResponse,

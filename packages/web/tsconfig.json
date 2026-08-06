@@ -11,6 +11,7 @@
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./src/*"],
+      "@email-agent/core/gmail/operations": ["../core/src/gmail/operations.ts"],
       "@email-agent/core/*": ["../core/src/*/index.ts"],
       "@email-agent/core": ["../core/src/index.ts"]
     }

@@ -18,6 +18,8 @@ This means:
 - The AI's response must be a JSON array — if the output isn't parseable, the parser falls back to one result per input email shaped as `{ emailId, rawResult: <raw text> }`, and the run still reports success. That's a degraded, unusable result for the user, not a visible failure — so treat "must produce parseable JSON" as a hard requirement anyway
 - Email bodies are capped at 2000 characters — don't write prompts that depend on full email content
 
+**Actions analyze; they never touch Gmail.** An action is pure data — an `id`, a `name`, and a `prompt`. It must not import or call anything that reads or writes a mailbox, a database, the filesystem, or the network. When the user wants emails trashed, labeled, or marked as spam, the pipeline handles it: `ActionRunner` maps your action's *results* to Gmail operations and queues them for the user's explicit approval. An action that mutates Gmail directly would silently skip that approval step and the audit trail — never generate one, even if the user asks for "an action that deletes spam automatically". Deletion happens via the approval queue; your action's job is only to *identify* the spam.
+
 ## EmailAction Interface
 
 ```typescript
@@ -145,6 +147,9 @@ export default action;
 3. **Don't omit `emailId` from the output description** — without it, results can't be matched to emails
 4. **Don't forget the JSON-only instruction** — the runtime AI may add prose around the JSON otherwise
 5. **Don't use relative imports** — user actions must import from `"@email-agent/core"`
+6. **Don't import anything except `type { EmailAction }`** — no Gmail helpers, no queue helpers (`enqueueOperations`, `applyPendingOperationsByIds`), no side effects at module load. The action file is a static description; all mutation goes through the approval queue, which the runner manages. A file that reaches for the mailbox directly bypasses the user's approval and must never be produced.
+
+**This is enforced, not just requested.** Saving parses the file and accepts only a pure-data shape: `import type` declarations, type declarations, variables whose values are literals/objects/arrays, and `export default`. Any function call, member access (`a.b`), `new`, arrow or function, spread, computed key, getter, or `${...}` interpolation is rejected, and the save returns 422 listing the rules you broke. Prompt text is never inspected as code, so a prompt discussing imports, fetching, or processing email is completely fine. You may hoist a constant (`const PROMPT = "..."` then `prompt: PROMPT`); you may not reference anything the file did not itself define.
 
 ## Response Format
 

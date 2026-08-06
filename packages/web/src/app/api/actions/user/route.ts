@@ -5,6 +5,7 @@ import {
   deleteUserAction,
   readUserActionSource,
   builtInActions,
+  UnsafeActionSourceError,
 } from "@email-agent/core/actions";
 import {
   internalErrorResponse,
@@ -61,6 +62,16 @@ export async function POST(request: NextRequest) {
     await saveUserAction(body.filename, body.content);
     return NextResponse.json({ success: true, filename: body.filename });
   } catch (err) {
+    // The source guard rejected it. Return the reasons rather than a generic
+    // 500: the chat UI shows this back to the model that wrote the action, and
+    // it is the only way either the model or the user learns what to change.
+    if (err instanceof UnsafeActionSourceError) {
+      return NextResponse.json(
+        { error: err.message, violations: err.violations },
+        { status: 422 },
+      );
+    }
+
     const validation = validationResponse(err);
     if (validation) return validation;
 

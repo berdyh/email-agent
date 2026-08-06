@@ -25,6 +25,7 @@ Key constraints:
    export default action;
    ```
 4. **Keep `prompt` and `outputSchema` in sync** — if you change return fields in the prompt, update `outputSchema` to match
+5. **Never add imports or side effects.** The only allowed import is `type { EmailAction }`. Actions analyze; they never touch Gmail, the database, the filesystem, or the network. Mutation (trash, spam, labels) happens only through the approval queue that `ActionRunner` manages — an action that calls Gmail helpers directly bypasses the user's approval and the audit trail. If the user asks for an edit that "actually deletes" or "auto-applies" changes, keep the action analysis-only and explain that applying happens via the approval flow (or the auto-apply setting), not inside the action file. If the current code already contains such imports or calls, remove them as part of your edit and say why.
 
 ## Common Edit Patterns
 
@@ -77,6 +78,7 @@ When the user wants to fundamentally change what the action does, rewrite `name`
 Before returning, verify:
 - [ ] `id` unchanged (unless user requested rename)
 - [ ] Import is `from "@email-agent/core"` (not relative path)
+- [ ] No import other than `type { EmailAction }`; no calls, member access, `new`, functions or `${...}` anywhere in the file. A save-time guard parses the file and accepts only pure data, returning 422 with the rules you broke. Prompt text is never read as code, so trigger words in the prompt are fine
 - [ ] Uses `export default action`
 - [ ] `prompt` does not include email data
 - [ ] `prompt` ends with JSON array instruction

@@ -2,6 +2,7 @@ import { readdir, readFile, writeFile, unlink, mkdir, copyFile } from "node:fs/p
 import { join, basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ACTIONS_DIR } from "../config/defaults.js";
+import { assertSafeActionSource } from "./action-source-guard.js";
 import type { EmailAction } from "./types.js";
 import {
   extractActionIdFromSource,
@@ -60,9 +61,17 @@ export async function listUserActions(): Promise<UserActionMeta[]> {
 
 /** Save (or overwrite) a user action file. Snapshots previous version if it exists. */
 export async function saveUserAction(filename: string, content: string): Promise<void> {
+  // Reject before anything touches disk. A saved action is later imported
+  // in-process with full Node privileges, and its top-level code runs before
+  // the exported object is ever inspected — so this is the last point at which
+  // refusing is still cheap.
+  const safeFilename = normalizeUserActionFilename(filename);
+  // Pass the name so a .action.js file is parsed as JavaScript; parsing it as
+  // TypeScript would wave through syntax Node cannot actually run.
+  assertSafeActionSource(content, safeFilename);
+
   await mkdir(ACTIONS_DIR, { recursive: true });
 
-  const safeFilename = normalizeUserActionFilename(filename);
   const filePath = resolveUserActionFilePath(ACTIONS_DIR, safeFilename);
 
   // Snapshot existing file before overwrite
@@ -111,10 +120,16 @@ export async function loadUserAction(id: string): Promise<EmailAction | undefine
       if (fileId !== id) continue;
 
       const fileUrl = pathToFileURL(resolveUserActionFilePath(ACTIONS_DIR, filename));
-      const mod = (await nativeImport(fileUrl.href)) as {
-        default?: EmailAction;
-        action?: EmailAction;
-      };
+      let mod: { default?: EmailAction; action?: EmailAction };
+      try {
+        mod = (await nativeImport(fileUrl.href)) as {
+          default?: EmailAction;
+          action?: EmailAction;
+        };
+      } catch (err) {
+        console.warn(`[loadUserAction] Failed to import ${filename}:`, err);
+        continue;
+      }
       const action = mod.default ?? mod.action;
       if (action?.id && action?.name && action?.prompt) {
         action.builtIn = false;
