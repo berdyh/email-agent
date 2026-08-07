@@ -54,12 +54,18 @@ export function deriveResultAccountId(
  *
  * NOT YET SHOWN TO ANYONE. This string, `result.applyError`, and
  * `result.persistError` all exist and are populated, but **no surface reads
- * them**: the web result type omits both fields, and the web page and the CLI
- * still print the `queueError` copy ("could not be queued for approval —
- * nothing was applied"). So the user-visible message in this failure is still
- * the wrong one — it says nothing happened while mail may really have been
- * trashed. What this branch changed is the core data, not what anybody sees.
- * The adoption is tracked in TODOS.md ("Surfaces still read only
+ * them**: the web result type omits both fields.
+ *
+ * Be precise about what each surface does instead, because "both print the
+ * `queueError` copy" is not accurate for this branch. On an auto-apply failure
+ * `queueError` is UNSET — the rows queued fine. So `packages/web/src/app/
+ * actions/page.tsx` falls through to its "N changes await your approval"
+ * branch and reports rows that are now `applying`, not `pending`; and
+ * `packages/cli/src/commands/run-action.ts` queries `status: "pending"`, finds
+ * none, and prints its "nothing was applied" copy. Different routes, same
+ * outcome: both tell the user nothing happened to mail that may really have
+ * been trashed. What this branch changed is the core data, not what anybody
+ * sees. The adoption is tracked in TODOS.md ("Surfaces still read only
  * `queueError`") and names the exact files.
  *
  * The wording itself must not claim more than we know.
@@ -232,9 +238,31 @@ export class ActionRunner {
         }
 
         if (queuedIds.length > 0) {
+          // Read the toggle OUTSIDE the apply try. `loadSettings()` fails
+          // closed on an unreadable settings file, and that failure is
+          // strictly pre-Gmail: nothing was claimed, nothing was mutated.
+          // Reporting it through `applyError` would tell the user their mail
+          // "may already have been applied" when it provably was not — an
+          // overclaim, even though it errs toward caution.
+          let autoApply = false;
           try {
-            const settings = await loadSettings();
-            if (settings.gmail.autoApplyActions) {
+            autoApply = (await loadSettings()).gmail.autoApplyActions;
+          } catch (settingsErr) {
+            const message =
+              settingsErr instanceof Error
+                ? settingsErr.message
+                : String(settingsErr);
+            // We do not know whether auto-apply is armed, so we do not arm it.
+            // The batch stays queued and every surface's "N changes await your
+            // approval" is then literally true — the rows really are `pending`
+            // and really do need an explicit approval.
+            console.error(
+              `Could not read settings while running "${action.id}", so auto-apply was not attempted and the batch is left awaiting approval: ${message}`,
+            );
+          }
+
+          try {
+            if (autoApply) {
               result.applyResult =
                 await applyPendingOperationsByIds(queuedIds);
               // Set only after the apply resolves, so `autoApplied` never
