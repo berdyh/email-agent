@@ -353,6 +353,25 @@ export function parseApprovalIdsRequest(input: unknown): { ids: string[] } {
   return { ids: [...new Set(ids)] };
 }
 
+/**
+ * A user's judgement about rows a crash left mid-apply.
+ *
+ * The decision is a closed set of exactly two answers, and it is required —
+ * there is no default, because both of them assert something about the user's
+ * mailbox that only they can know. Anything else is a 400 rather than a guess.
+ */
+export function parseStrandedResolutionRequest(
+  input: unknown,
+): { ids: string[]; decision: "applied" | "notApplied" } {
+  const body = asRecord(input);
+  const { ids } = parseApprovalIdsRequest(input);
+  const decision = body["decision"];
+  if (decision !== "applied" && decision !== "notApplied") {
+    throw new RequestValidationError("decision must be applied or notApplied");
+  }
+  return { ids, decision };
+}
+
 export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
   const body = asRecord(input);
   for (const key of Object.keys(body)) {

@@ -4,6 +4,8 @@ import {
   claimedNothing,
   describeApplyOutcome,
   describeRejectOutcome,
+  describeStrandedAge,
+  describeStrandedResolution,
   summarizeApplyResult,
   unclaimedApplyMessage,
 } from "./approvals-contract.js";
@@ -88,5 +90,64 @@ describe("approvals toast wording", () => {
       tone: "success",
       message: "Rejected 1 pending change",
     });
+  });
+});
+
+describe("stranded row wording", () => {
+  const NOW = new Date("2026-08-07T12:00:00.000Z");
+
+  it("rounds an age down and never below a minute", () => {
+    assert.equal(describeStrandedAge("2026-08-07T11:59:59.000Z", NOW), "stuck for about a minute");
+    assert.equal(describeStrandedAge("2026-08-07T11:00:00.000Z", NOW), "stuck for 1 hour");
+    assert.equal(describeStrandedAge("2026-08-07T11:29:00.000Z", NOW), "stuck for 31 minutes");
+    assert.equal(describeStrandedAge("2026-08-05T11:00:00.000Z", NOW), "stuck for 2 days");
+  });
+
+  it("says so rather than printing NaN for a stamp it cannot parse", () => {
+    // Core lists exactly such a row on purpose — a row it cannot age is the row
+    // a crash left behind — so this must render, not break.
+    assert.equal(describeStrandedAge("not a date", NOW), "stuck for an unknown length of time");
+  });
+
+  it("never claims the app verified anything about the mailbox", () => {
+    const applied = describeStrandedResolution({
+      decision: "applied",
+      requested: 2,
+      resolved: 2,
+      skipped: 0,
+    });
+    assert.equal(applied.tone, "success");
+    assert.ok(applied.message.includes("on your word"));
+    assert.ok(applied.message.includes("did not check Gmail"));
+
+    const notApplied = describeStrandedResolution({
+      decision: "notApplied",
+      requested: 1,
+      resolved: 1,
+      skipped: 0,
+    });
+    assert.ok(notApplied.message.includes("back in the approval queue"));
+    assert.ok(notApplied.message.includes("on your word"));
+  });
+
+  it("keeps a real outcome over the user's answer when the row moved on", () => {
+    const none = describeStrandedResolution({
+      decision: "applied",
+      requested: 1,
+      resolved: 0,
+      skipped: 1,
+    });
+    assert.equal(none.tone, "warning");
+    assert.ok(none.message.includes("Nothing was recorded"));
+    assert.ok(none.message.includes("the outcome it recorded was kept"));
+
+    const partial = describeStrandedResolution({
+      decision: "notApplied",
+      requested: 3,
+      resolved: 2,
+      skipped: 1,
+    });
+    assert.equal(partial.tone, "warning");
+    assert.ok(partial.message.includes("1 row was no longer stuck"));
   });
 });

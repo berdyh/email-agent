@@ -16,6 +16,7 @@ import {
   parseEmailReadStatusRequest,
   parseSettingsUpdateRequest,
   parseSnapshotRestoreRequest,
+  parseStrandedResolutionRequest,
   parseFetchEmailsRequest,
   parseUserActionSaveRequest,
   readGuardResponse,
@@ -650,5 +651,36 @@ describe("web API validation", () => {
 
     assert.equal(response.status, 500);
     assert.equal(body.error.includes("/tmp"), false);
+  });
+});
+
+describe("stranded-row adjudication requests", () => {
+  it("requires one of the two answers a person can actually give", () => {
+    assert.deepEqual(parseStrandedResolutionRequest({ ids: ["a"], decision: "applied" }), {
+      ids: ["a"],
+      decision: "applied",
+    });
+    assert.deepEqual(parseStrandedResolutionRequest({ ids: ["a"], decision: "notApplied" }), {
+      ids: ["a"],
+      decision: "notApplied",
+    });
+  });
+
+  it("refuses a missing or invented decision rather than guessing one", () => {
+    // Both answers assert something about the user's mailbox that only they can
+    // know, so there is no safe default to fall back to.
+    assert.throws(() => parseStrandedResolutionRequest({ ids: ["a"] }), /decision/);
+    assert.throws(
+      () => parseStrandedResolutionRequest({ ids: ["a"], decision: "retry" }),
+      /decision/,
+    );
+  });
+
+  it("applies the same id hygiene as the approve/reject routes", () => {
+    assert.throws(() => parseStrandedResolutionRequest({ ids: [], decision: "applied" }), /ids/);
+    assert.deepEqual(
+      parseStrandedResolutionRequest({ ids: ["a", "a"], decision: "applied" }).ids,
+      ["a"],
+    );
   });
 });

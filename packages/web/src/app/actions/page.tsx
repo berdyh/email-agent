@@ -17,7 +17,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { ActionChatCard } from "@/components/actions/action-chat-card";
 import { AppendActionCard } from "@/components/actions/append-action-card";
-import { ApprovalPanel } from "@/components/actions/approval-panel";
+import { ApprovalPanel, StrandedOperationsPanel } from "@/components/actions/approval-panel";
 import { describeActionRunOutcome } from "@/modules/api/action-run-contract";
 import { useActionChatStore } from "@/store/action-chat-store";
 import { useEmailStore } from "@/store/email-store";
@@ -117,6 +117,10 @@ export default function ActionsPage() {
               </p>
             </div>
           )}
+
+          {/* Rows a crash left mid-apply. Above the pending queue on purpose:
+              they are the only ones whose effect on the mailbox is unknown. */}
+          <StrandedOperationsPanel />
 
           {/* Queued Gmail changes awaiting the user's approval */}
           <ApprovalPanel />

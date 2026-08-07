@@ -3,6 +3,9 @@ import type {
   ApplyApprovalsResult,
   ApprovalsResponse,
   RejectApprovalsResult,
+  ResolveStrandedResult,
+  StrandedApprovalsResponse,
+  StrandedDecision,
 } from "@/modules/api/approvals-contract";
 
 // The wire types live with the routes that produce them, so adding a field on
@@ -14,6 +17,10 @@ export type {
   ApprovalOperation,
   ApprovalsResponse,
   RejectApprovalsResult,
+  ResolveStrandedResult,
+  StrandedApprovalsResponse,
+  StrandedDecision,
+  StrandedOperation,
 } from "@/modules/api/approvals-contract";
 
 /**
@@ -41,6 +48,55 @@ export function useApprovals() {
       const res = await fetch("/api/approvals");
       if (!res.ok) throw await errorFromResponse(res, "Failed to fetch pending approvals");
       return res.json() as Promise<ApprovalsResponse>;
+    },
+  });
+}
+
+/**
+ * Rows a crash left claimed mid-apply.
+ *
+ * The key is a CHILD of ["approvals"] on purpose: every existing mutation
+ * already invalidates ["approvals"], and TanStack matches by prefix, so an
+ * apply, a reject or an action run refreshes this list too without a second
+ * invalidation having to be remembered in each of them.
+ */
+export function useStrandedApprovals() {
+  return useQuery<StrandedApprovalsResponse>({
+    queryKey: ["approvals", "stranded"],
+    queryFn: async (): Promise<StrandedApprovalsResponse> => {
+      const res = await fetch("/api/approvals/stranded");
+      if (!res.ok) throw await errorFromResponse(res, "Failed to fetch stranded Gmail changes");
+      return res.json() as Promise<StrandedApprovalsResponse>;
+    },
+  });
+}
+
+export function useResolveStranded() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    ResolveStrandedResult,
+    Error,
+    { ids: string[]; decision: StrandedDecision }
+  >({
+    mutationFn: async ({ ids, decision }) => {
+      const res = await fetch("/api/approvals/stranded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, decision }),
+      });
+      if (!res.ok) throw await errorFromResponse(res, "Failed to record your decision");
+      return res.json() as Promise<ResolveStrandedResult>;
+    },
+    onSuccess: () => {
+      // Prefix-matches both the pending list and the stranded list. A
+      // "notApplied" answer moves a row back into the pending queue and the
+      // sidebar badge, so refreshing only the stranded list would leave the
+      // approval panel a row short.
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
   });
 }

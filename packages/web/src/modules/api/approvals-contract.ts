@@ -37,6 +37,102 @@ export interface ApprovalsResponse {
   pendingCount: number;
 }
 
+/**
+ * A queue row a crash left claimed: `applying`, older than the staleness
+ * threshold, never resolved. It is NOT pending — it does not appear in the
+ * approval list and cannot be approved or rejected — and its Gmail mutation may
+ * or may not have landed.
+ */
+export interface StrandedOperation extends ApprovalOperation {
+  /** When the row left `pending` and the Gmail call was about to be made. */
+  claimedAt: string;
+}
+
+export interface StrandedApprovalsResponse {
+  operations: StrandedOperation[];
+  /** How long a row must sit in `applying` before it is listed here. */
+  thresholdMinutes: number;
+}
+
+/**
+ * How long a row has been stuck, in words.
+ *
+ * Rounded DOWN and never below "about a minute": the number is the user's cue
+ * for how long ago the Gmail call might have happened, so overstating it would
+ * push them to look in the wrong part of their mailbox. An unparsable stamp
+ * says so rather than rendering "NaN minutes" — core surfaces such a row
+ * precisely because it cannot be aged.
+ */
+export function describeStrandedAge(claimedAt: string, now: Date = new Date()): string {
+  const claimed = new Date(claimedAt).getTime();
+  if (Number.isNaN(claimed)) return "stuck for an unknown length of time";
+
+  const minutes = Math.floor((now.getTime() - claimed) / 60_000);
+  if (minutes < 1) return "stuck for about a minute";
+  if (minutes < 60) return `stuck for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `stuck for ${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `stuck for ${days} day${days === 1 ? "" : "s"}`;
+}
+
+/**
+ * The user's answer about a stranded row. Duplicated from core's
+ * `StrandedDecision` rather than imported, because this module stays free of
+ * core (see the header) — the two must be kept in step by hand, and the route
+ * that bridges them is the one place that sees both.
+ */
+export type StrandedDecision = "applied" | "notApplied";
+
+export interface ResolveStrandedResult {
+  decision: StrandedDecision;
+  /** How many ids the client submitted. */
+  requested: number;
+  /** How many rows were still `applying` and were actually written. */
+  resolved: number;
+  /** `requested - resolved`: rows that had left `applying` before we got there. */
+  skipped: number;
+}
+
+/**
+ * Wording for the toast after adjudicating stranded rows.
+ *
+ * Every sentence here has to keep one line straight: the app recorded what the
+ * USER said, and checked nothing itself. "Marked as applied" is a claim about
+ * our records, never about the mailbox.
+ */
+export function describeStrandedResolution(result: ResolveStrandedResult): {
+  tone: ToastTone;
+  message: string;
+} {
+  const one = result.resolved === 1;
+  const skippedNote =
+    result.skipped > 0
+      ? ` ${result.skipped} ${result.skipped === 1 ? "row was" : "rows were"} no longer stuck — ` +
+        `an apply that was still running finished ${result.skipped === 1 ? "it" : "them"}, and ` +
+        `${result.skipped === 1 ? "its" : "their"} real outcome was kept.`
+      : "";
+
+  if (result.resolved === 0) {
+    return {
+      tone: "warning",
+      message:
+        `Nothing was recorded — ${result.requested === 1 ? "that row is" : "those rows are"} no ` +
+        `longer stuck mid-apply. An apply that was still running has since finished ` +
+        `${result.requested === 1 ? "it" : "them"}, and the outcome it recorded was kept.`,
+    };
+  }
+
+  const message =
+    result.decision === "applied"
+      ? `Recorded ${result.resolved} ${one ? "change" : "changes"} as applied, on your word — ` +
+        `Email Agent did not check Gmail.${skippedNote}`
+      : `Put ${result.resolved} ${one ? "change" : "changes"} back in the approval queue, on your ` +
+        `word that ${one ? "it" : "they"} never reached Gmail.${skippedNote}`;
+
+  return { tone: result.skipped > 0 ? "warning" : "success", message };
+}
+
 export interface ApprovalOperationOutcome {
   emailId: string;
   type: string;
