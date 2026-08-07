@@ -132,6 +132,22 @@ claim "however it is spelled"; a behavioural assertion does not have to.
 Found by: testing specialist during /review (2026-08-06). Closed by the
 second adversarial review pass (2026-08-07).
 
+### `POST /api/actions` answers 404 for a file that WAS found
+**Priority:** P3
+`packages/web/src/app/api/actions/route.ts:64` returns a flat
+`{ error: "Action not found" }` whenever `loadUserAction()` yields nothing. Two
+different situations reach that line: no file answers to the id at all, and a
+file answers to it and cannot be loaded — a numeric `id`, a value import, a
+construct the evaluator refuses. The second is now diagnosed loudly in the
+server log by `loadUserAction()`, but the user sees the same 404 either way and
+the reason never reaches the browser.
+
+`UserActionMeta.problem` (from `listUserActions()`) carries the exact reason, so
+the fix is to look the id up and answer 422 with `problem` when one exists,
+reserving 404 for an id nothing presents. Not done in this pass because it is in
+`packages/web`, which was out of scope for the review round that found it.
+Found by: codex (gpt-5.6-sol xhigh) adversarial pass, round 2 (2026-08-07).
+
 ### Record which surface approved an operation
 **Priority:** P3
 **Blocked on:** "The claimToken migration drops the audit trail" (below).
