@@ -14,6 +14,10 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useEmailStore } from "@/store/email-store";
+import {
+  describeRetentionWindow,
+  parseRetentionDraft,
+} from "@/modules/api/retention-contract";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +36,10 @@ export default function SettingsPage() {
   // ["settings"] query, so unconditionally copying every refetch into local
   // state would wipe in-progress edits. Only sync remote → local while pristine.
   const [dirty, setDirty] = useState(false);
+  // The retention field keeps its RAW string, because "" is a state a number
+  // cannot represent and 0 already means something else here. See
+  // `retention-contract.ts`.
+  const [retentionDraft, setRetentionDraft] = useState("");
 
   const editLocal = (next: Partial<SanitizedSettings>) => {
     setDirty(true);
@@ -39,7 +47,13 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    if (settings && !dirty) setLocal(settings);
+    if (settings && !dirty) {
+      setLocal(settings);
+      // Seeded from the response, which `sanitizeSettingsForResponse` already
+      // fills from core's `defaultConfig` — so there is no second copy of the
+      // default window in the client free to drift from it.
+      setRetentionDraft(String(settings.retention.approvalQueueDays));
+    }
   }, [settings, dirty]);
 
   const save = () => {
@@ -140,9 +154,7 @@ export default function SettingsPage() {
     autoApplyActions: false,
     autoApplyAcknowledged: false,
   };
-  // `sanitizeSettingsForResponse` always fills this in, so the fallback only
-  // covers the first render before the query resolves.
-  const approvalQueueDays = local.retention?.approvalQueueDays ?? 365;
+  const retentionDays = parseRetentionDraft(retentionDraft);
 
   return (
     <div className="flex h-screen flex-col">
@@ -490,25 +502,36 @@ export default function SettingsPage() {
                       step={1}
                       className="w-32"
                       aria-describedby="approval-queue-days-help"
-                      value={approvalQueueDays}
-                      onChange={(e) =>
+                      aria-invalid={retentionDays === null}
+                      value={retentionDraft}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setRetentionDraft(raw);
+                        const days = parseRetentionDraft(raw);
+                        // A cleared or unreadable field is not a value. Leave
+                        // `local.retention` untouched so Save cannot write 0
+                        // for someone who is halfway through retyping.
+                        if (days === null) {
+                          setDirty(true);
+                          return;
+                        }
                         editLocal({
                           ...local,
-                          retention: {
-                            approvalQueueDays: Number(e.target.value),
-                          },
-                        })
-                      }
+                          retention: { approvalQueueDays: days },
+                        });
+                      }}
                     />
                     <span className="text-sm text-muted-foreground">days</span>
                   </div>
                   <p
                     id="approval-queue-days-help"
-                    className="text-xs text-muted-foreground"
+                    className={
+                      retentionDays === null
+                        ? "text-xs text-destructive-text"
+                        : "text-xs text-muted-foreground"
+                    }
                   >
-                    {approvalQueueDays > 0
-                      ? `Records older than ${approvalQueueDays} days are deleted the next time you apply or reject something.`
-                      : "0 disables deletion — every record is kept forever."}
+                    {describeRetentionWindow(retentionDays)}
                   </p>
                 </CardContent>
               </Card>
