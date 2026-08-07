@@ -9,92 +9,36 @@
 // according to whatever the author already believed.
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
+// The shared fixture. It redirects $HOME, then re-reads LANCEDB_DIR and throws
+// if the result is not inside the temp directory — so the ordering rule these
+// dynamic imports exist for is now CHECKED rather than merely followed. Every
+// core import below has to stay a dynamic one, because static imports are
+// hoisted above the redirect and would resolve the database path against the
+// developer's real home.
+import { useTempDb } from "../testing/lancedb-fixture.js";
 
-// `config/defaults.ts` computes LANCEDB_DIR from `homedir()` at module load, so
-// $HOME has to be redirected BEFORE the first core import. Static imports are
-// hoisted above every statement, so the dynamic imports below are the only
-// ordering that actually works. `node --test` gives each test file its own
-// process, so this does not leak into any other suite.
-const home = await mkdtemp(join(tmpdir(), "email-agent-stranded-home-"));
-process.env["HOME"] = home;
-process.env["USERPROFILE"] = home;
+await useTempDb("stranded");
 
-const { getDb, initDb } = await import("./connection.js");
-const { pendingOperationsTable } = await import("./schema.js");
 const {
   claimPendingOperations,
   describeLostClaimedOutcomes,
-  getPendingOperationsByIds,
   resolveClaimedOperations,
   resolveStrandedApplyingOperations,
-  savePendingOperations,
   STALE_APPLYING_THRESHOLD_MS,
 } = await import("./pending-operations.js");
 const { adjudicateStrandedOperations, STRANDED_APPLIED_NOTE } = await import(
   "../actions/approval.js"
 );
-
-after(async () => {
-  await rm(home, { recursive: true, force: true });
-});
-
-await initDb();
+const {
+  backdateClaim,
+  capturingWarnings,
+  readPendingOperation: readRow,
+  seedPendingOperations,
+} = await import("../testing/lancedb-fixture.js");
 
 async function seedPending(id: string): Promise<void> {
-  await savePendingOperations([
-    {
-      id,
-      batchId: "batch-1",
-      actionId: "junk",
-      actionName: "Junk Detector",
-      accountId: "me@example.com",
-      emailId: `m-${id}`,
-      type: "trash",
-      labelIds: "[]",
-      status: "pending",
-      error: "",
-      claimToken: "",
-      createdAt: "2026-08-01T00:00:00.000Z",
-      claimedAt: "",
-      resolvedAt: "",
-    },
-  ]);
-}
-
-/** Ages a claimed row so it looks hung rather than merely in flight. */
-async function backdateClaim(id: string, ms: number): Promise<void> {
-  const db = await getDb();
-  const table = await db.openTable(pendingOperationsTable);
-  await table.update({
-    where: `id = '${id}'`,
-    values: { claimedAt: new Date(Date.now() - ms).toISOString() },
-  });
-}
-
-async function readRow(id: string) {
-  const [row] = await getPendingOperationsByIds([id]);
-  assert.ok(row, `row ${id} vanished`);
-  return row;
-}
-
-/** Runs `fn` with console.warn captured. */
-async function capturingWarnings<T>(
-  fn: () => Promise<T>,
-): Promise<{ value: T; warnings: string[] }> {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (...args: unknown[]) => {
-    warnings.push(args.map(String).join(" "));
-  };
-  try {
-    return { value: await fn(), warnings };
-  } finally {
-    console.warn = original;
-  }
+  await seedPendingOperations([{ id, emailId: `m-${id}`, status: "pending" }]);
 }
 
 describe("adjudicating a row an apply is still working on", () => {

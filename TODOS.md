@@ -819,16 +819,15 @@ throws locally with no network call and the queue rows resolve `failed`, which
 is a real terminal path.
 
 **Ported onto it, so there is one way to do this:** the queue-helper,
-chained-`.where()`, query-limit, email-storage and cross-process-claim tests all
-use the core fixture; the web route tests and the CLI e2e tests use the two
-surface harnesses over the same fixture. Three files were left on their own setup
-DELIBERATELY, noted here so nobody reads them as missed:
+chained-`.where()`, query-limit, email-storage and cross-process-claim tests use
+the core fixture; `db/stranded-adjudication.race.test.ts` was moved onto it,
+deleting its hand-rolled `$HOME` swap and its four duplicated helpers and
+gaining the ordering guard; the web route tests and the CLI e2e tests use the
+two surface harnesses over the same fixture. Two files were left on their own
+setup DELIBERATELY, noted here so nobody reads them as missed:
   - `db/schema-migration.test.ts` needs a bare `connect(dir)` rather than
     `initDb()`, because it constructs LEGACY table shapes and then migrates
     them — a thing the fixture cannot express by design.
-  - `db/stranded-adjudication.race.test.ts` predates the fixture and its
-    hand-rolled `$HOME` swap is the pattern the fixture was derived from. Its
-    setup is now the fixture's, minus the ordering guard.
   - both `email-lookup.test.ts` copies inject their own table through the
     module's `EmailLookupTable` seam and build it with `db.createTable` from
     arbitrary rows. Porting them onto the fixture would LOSE their point: the
