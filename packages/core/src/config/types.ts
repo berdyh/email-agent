@@ -39,6 +39,23 @@ export interface GmailSyncConfig {
   autoApplyAcknowledged: boolean;
 }
 
+/**
+ * Retention policy for append-only audit tables.
+ *
+ * Optional on `AppConfig` so that adding it does not invalidate the explicit
+ * `AppConfig` literals the web and CLI packages already declare. It is always
+ * populated by `normalizeSettings`/`defaultConfig`, so a value read straight
+ * out of `loadSettings()` is never undefined in practice.
+ */
+export interface RetentionConfig {
+  /**
+   * Days a RESOLVED `pending_operations` row is kept before it may be pruned.
+   * 0 (or negative) disables pruning entirely. Only `applied`/`rejected` rows
+   * are ever eligible — see `buildPruneFilter` in `db/pending-operations.ts`.
+   */
+  approvalQueueDays: number;
+}
+
 export interface UiConfig {
   fetchInterval: number;
   fetchScope: "unread" | "all";
@@ -63,6 +80,7 @@ export interface AppConfig {
   embedding: EmbeddingConfig;
   gmail: GmailSyncConfig;
   ui: UiConfig;
+  retention?: RetentionConfig;
   dataDir: string;
   accounts: AccountConfig[];
   oauth?: OAuthConfig;

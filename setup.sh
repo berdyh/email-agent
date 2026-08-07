@@ -320,6 +320,9 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "fetchInterval": 0,
     "fetchScope": "unread"
   },
+  "retention": {
+    "approvalQueueDays": 365
+  },
   "dataDir": "$HOME/.email-agent/data",
   "accounts": []
 }
