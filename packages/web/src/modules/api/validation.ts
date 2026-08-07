@@ -1,7 +1,7 @@
 import { defaultConfig, type AppConfig } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const SETTING_KEYS = new Set([
   "agentMode",
   "preferredAgent",
@@ -513,19 +513,151 @@ export function validationResponse(error: unknown): Response | undefined {
   return undefined;
 }
 
-export function mutationGuardResponse(request: Request): Response | undefined {
-  const url = new URL(request.url);
+interface RequestAuthority {
+  /** Lower-cased, brackets stripped from IPv6 — comparable against LOCAL_HOSTS. */
+  hostname: string;
+  /** Always explicit; the scheme default is filled in. */
+  port: string;
+}
 
+function normalizeHostname(hostname: string): string {
+  const lowered = hostname.toLowerCase();
+  return lowered.startsWith("[") && lowered.endsWith("]")
+    ? lowered.slice(1, -1)
+    : lowered;
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return LOCAL_HOSTS.has(normalizeHostname(hostname));
+}
+
+function explicitPort(url: URL): string {
+  if (url.port) return url.port;
+  return url.protocol === "https:" ? "443" : "80";
+}
+
+/**
+ * The authority the caller actually addressed, taken from the `Host` header.
+ *
+ * NOT from `request.url`. Installed Next builds `NextRequest.url` from the
+ * hostname the server process was configured with, never from the request —
+ * `attachRequestMeta` in `next/dist/server/next-server.js` composes
+ * `${protocol}://${this.fetchHostname}:${this.port}${req.url}`, and the render
+ * server defaults that hostname to `localhost`. Measured against this app:
+ * under both `next dev --hostname 127.0.0.1` and `next start --hostname
+ * 127.0.0.1`, `new URL(request.url).origin` is `http://localhost:<port>` for
+ * every request, whatever `Host` arrived. Deriving "is this local?" from it
+ * therefore did two wrong things at once: it refused the browser that opened
+ * the `http://127.0.0.1:3847` URL Next itself prints (every mutation 403'd),
+ * and it never saw a DNS-rebound `Host: evil.example` at all, so the
+ * anti-rebinding property the guard claimed did not exist.
+ *
+ * `X-Forwarded-Host` is deliberately NOT consulted. It is not a forbidden
+ * header name, so a rebound page — which is same-origin with itself and can set
+ * whatever it likes — could send `X-Forwarded-Host: localhost:3847` and walk
+ * back through the allowlist. There is no reverse proxy in front of this app.
+ */
+function requestAuthority(request: Request): RequestAuthority | undefined {
+  const header = request.headers.get("host")?.trim();
+  let source = header;
+  if (!source) {
+    try {
+      source = new URL(request.url).host;
+    } catch {
+      return undefined;
+    }
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${source}`);
+  } catch {
+    return undefined;
+  }
+  // `new URL` happily swallows a path, credentials or a query in the authority
+  // position; none of those belong in a Host header, so treat them as junk.
   if (
-    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] !== "1" &&
-    !LOCAL_HOSTS.has(url.hostname)
+    !parsed.hostname ||
+    parsed.pathname !== "/" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
   ) {
-    return Response.json({ error: "Mutation requests must use the local Email Agent origin" }, { status: 403 });
+    return undefined;
+  }
+
+  return { hostname: parsed.hostname, port: explicitPort(parsed) };
+}
+
+/**
+ * Is this `Origin` one of the addresses that legitimately reach this server?
+ *
+ * `localhost:3847` and `127.0.0.1:3847` are the same server and both are
+ * printed to the user, so both must pass — but a *different* local app on
+ * `localhost:8080` must not, which is what makes this a CSRF check rather than
+ * a formality. Hence: local hostname, and the same port the caller addressed.
+ */
+function isAllowedOrigin(origin: string, authority: RequestAuthority): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    // Includes the literal `Origin: null` an opaque/sandboxed context sends.
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (!isLocalHostname(parsed.hostname)) return false;
+  return explicitPort(parsed) === authority.port;
+}
+
+/**
+ * Header-level checks shared by the mutation and read guards.
+ *
+ * IMPORTANT — what this is and is not. Every input here is a request header,
+ * and a non-browser client controls all of them: `Host`, `Origin`, and
+ * `Sec-Fetch-*`. This function is therefore NOT the security boundary. It buys
+ * exactly two things, and only against browsers:
+ *
+ *  1. **Anti DNS-rebinding.** A page on `evil.com` that rebinds its name to
+ *     127.0.0.1 still makes the browser send `Host: evil.com`, so the host
+ *     allowlist refuses it. This only works because the check reads the `Host`
+ *     header itself — see `requestAuthority`.
+ *  2. **Anti CSRF.** Browsers always attach `Origin`/`Sec-Fetch-Site` to
+ *     cross-origin fetches, so a hostile page — including one on another
+ *     localhost port — cannot ride the user's session.
+ *
+ * The boundary that a header genuinely cannot defeat is the listener binding:
+ * `email-agent serve` binds the dev server to loopback unless
+ * `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`, so an off-box process cannot open the
+ * socket at all, no matter what `Host` it would have sent. A process on this
+ * machine running as this user is out of scope for both — it can read the
+ * OAuth tokens off disk and skip the app entirely.
+ */
+function localRequestViolation(
+  request: Request,
+  kind: "Mutation" | "Read",
+): Response | undefined {
+  // The documented "I meant to expose this" switch. It turns every header check
+  // off rather than a subset: the checks all assume a loopback-only deployment,
+  // and leaving the origin comparison on while the bind is open is how the LAN
+  // browser used to get a 403 from a server it was allowed to reach.
+  if (process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] === "1") return undefined;
+
+  const authority = requestAuthority(request);
+  if (!authority || !isLocalHostname(authority.hostname)) {
+    return Response.json(
+      { error: `${kind} requests must use the local Email Agent origin` },
+      { status: 403 },
+    );
   }
 
   const origin = request.headers.get("origin");
-  if (origin && origin !== url.origin) {
-    return Response.json({ error: "Cross-origin mutation requests are not allowed" }, { status: 403 });
+  if (origin !== null && !isAllowedOrigin(origin, authority)) {
+    return Response.json(
+      { error: `Cross-origin ${kind.toLowerCase()} requests are not allowed` },
+      { status: 403 },
+    );
   }
 
   const fetchSite = request.headers.get("sec-fetch-site");
@@ -535,10 +667,58 @@ export function mutationGuardResponse(request: Request): Response | undefined {
     fetchSite !== "same-site" &&
     fetchSite !== "none"
   ) {
-    return Response.json({ error: "Cross-site mutation requests are not allowed" }, { status: 403 });
+    return Response.json(
+      { error: `Cross-site ${kind.toLowerCase()} requests are not allowed` },
+      { status: 403 },
+    );
   }
 
   return undefined;
+}
+
+export function mutationGuardResponse(request: Request): Response | undefined {
+  const violation = localRequestViolation(request, "Mutation");
+  if (violation) return violation;
+
+  // Require the fetch metadata rather than only validating it when present.
+  // This is safe because it accepts EITHER header: `Origin` is sent by every
+  // browser on every non-GET fetch and has been for far longer than Fetch
+  // Metadata, which Chrome/Edge shipped in 2020, Firefox in 90 (2021) and
+  // Safari only in 16.4 (2023). So a real UI mutation always carries at least
+  // one of the two, while the `curl -X POST -H 'Host: localhost' …` one-liner
+  // that used to satisfy the whole guard now fails. Honest framing: an attacker
+  // who adds the header still gets through. This is a speed bump, not the
+  // boundary; the boundary is the loopback bind (see `localRequestViolation`).
+  if (
+    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] !== "1" &&
+    !request.headers.get("origin") &&
+    !request.headers.get("sec-fetch-site")
+  ) {
+    return Response.json(
+      {
+        error:
+          "Mutation requests must come from the Email Agent UI (missing Origin/Sec-Fetch-Site)",
+      },
+      { status: 403 },
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * Guard for read routes that return mail content (subjects, senders, snippets)
+ * rather than just a count. `GET /api/approvals` had no guard at all, so any
+ * page the user visited could read the whole approval queue cross-origin.
+ *
+ * Unlike the mutation guard this does NOT require the fetch metadata: a user
+ * typing the URL into the address bar sends `Sec-Fetch-Site: none` (fine), but
+ * `curl` sends nothing, and refusing that would break local debugging for no
+ * security gain — reads are already reachable by anything that can open the
+ * socket.
+ */
+export function readGuardResponse(request: Request): Response | undefined {
+  return localRequestViolation(request, "Read");
 }
 
 export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSettings {

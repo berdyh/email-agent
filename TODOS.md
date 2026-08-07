@@ -214,15 +214,6 @@ was written down nowhere. **`packages/cli/src/commands/config.ts` still uses its
 own private `getNestedValue`/`setNestedValue`**, so the guard protects no caller
 yet — see the CLI entry below.
 
-### The mutation guard trusts the Host header
-**Priority:** P2
-`mutationGuardResponse` derives "is local" from `new URL(request.url).hostname`,
-and `Origin`/`Sec-Fetch-Site` are simply absent on non-browser clients. Any
-process that can reach port 3847 with `Host: localhost` can bulk-approve the
-whole queue. `GET /api/approvals` has no guard at all and returns subjects,
-senders, and snippets. Pre-existing, but this change points it at the endpoint
-that represents the user's personal consent.
-
 ## Core actions / approval queue
 
 ### ⚠ THE SURFACES WAVE — nothing wave 1 added is visible to a user yet
@@ -397,6 +388,32 @@ the Rust commit-conflict path — and write down the answer.
 Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
 read-only review); narrowed 2026-08-07 after the addColumns concurrency probe.
 
+### The batched email lookup is duplicated in two surfaces
+**Priority:** P3
+`buildEmailLookupFilter`/`getEmailsByRefs` exist twice —
+`packages/web/src/modules/api/email-lookup.ts` and
+`packages/cli/src/email-lookup.ts` — including a hand-copied `escapeSql`. They
+were written at the surface layer because `packages/core` was owned by another
+branch during wave 2 and the CLI may only import the core barrel. This belongs
+in `core/src/db/emails.ts` as `getEmailsByIds(refs: {accountId, id}[])` next to
+`buildEmailFilters`, exported from `db/index.ts`, with both surfaces deleting
+their copy. Two copies of a LanceDB predicate builder is exactly the shape that
+drifts — the backticked `accountId`, the never-chain-`.where()` rule and the
+absence of a `.limit()` (see below) have to stay right in both, and the review of
+PR #10 already caught the same `.limit()` defect in both copies at once.
+
+Core-side follow-ups this carries with it, deferred because `packages/core` was
+owned by another branch:
+  - `escapeSql` is hand-copied into both surfaces. The core version should be the
+    only one.
+  - The duplicate-row case the `.limit()` fix now tolerates would be better
+    prevented: nothing enforces one row per `(accountId, id)` in the `emails`
+    table. `upsertEmails` merges on that pair, so a duplicate can only arrive by
+    another path, but the invariant is unwritten and unenforced. Either state it
+    where the schema is defined or make the lookup pick deterministically
+    (newest `date` wins) rather than "last row scanned wins".
+Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
+
 ### action_results `accountId: ""` carries two meanings
 **Priority:** P4 (decision recorded 2026-08-07 — do not re-open without the
 trigger below)
@@ -533,12 +550,48 @@ goes away.
 
 ## Web
 
-### Batch the email lookup in GET /api/approvals
+### The local API still has no shared secret
 **Priority:** P2
-The route does one `getEmailById` LanceDB scan per distinct queued email. The
-60s sidebar poll no longer hits it (that moved to `/api/approvals/count`), but
-the list still walks the emails table per row. One `id IN (...)` query plus a Map
-would remove the N+1. Same shape in the CLI's `loadOperationDisplays`.
+The Host-header hole is closed at the layer that can actually close it — the
+listener binds `127.0.0.1`, so an off-box process cannot open the socket at all
+— and mutations now require `Origin` or `Sec-Fetch-Site` to be present, which
+refuses the bare `curl -X POST -H 'Host: localhost:3847'` one-liner. Both of
+those are honest about what they are: the bind is the boundary, the header
+requirement is a speed bump an attacker defeats by setting the header.
+
+What is still open is **another process on this machine, running as another
+user**. It reaches loopback and passes every check. The fix is a
+locally-generated shared secret at `~/.email-agent/session.token` (mode 0600,
+`randomBytes(32)`), required by `mutationGuardResponse` and `readGuardResponse`
+via an `x-email-agent-token` header or an httpOnly `SameSite=Strict` cookie,
+compared with `timingSafeEqual` (the `oauth-state.ts` compare is the model).
+
+The reason it did not ship in wave 2 is the bootstrap, and it is worth writing
+down so it is not rediscovered: **there is no safe in-band handshake.** Any
+process that can reach the port can also `GET /`, so a cookie the server issues
+on document load is issued to the attacker too. The secret has to arrive
+out-of-band, which means the Jupyter model — `email-agent serve` prints/opens
+`http://127.0.0.1:3847/?token=…`, a route handler exchanges the query token for
+the cookie, and a browser without the cookie gets an "unlock" page telling the
+user to `cat ~/.email-agent/session.token`. That is a real UX change and it
+cannot be verified from here (no browser harness), so it needs its own wave with
+a live run. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` must keep bypassing it.
+
+**Still out of scope even then, by construction:** a process running as *this*
+user. It can read the token file, and it can read the OAuth tokens under
+`~/.email-agent/accounts/` and call Gmail without the app at all.
+Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
+
+### Snapshot restore is reachable from the CLI but not the UI
+**Priority:** P3
+`email-agent actions snapshots list|restore` now exists, so the recovery path is
+no longer unreachable. The web actions page still has no restore control, which
+is where a user who overwrote an action via the edit chat actually is when they
+notice. Wants a "Previous versions" affordance on the action card, calling the
+existing `GET/POST /api/actions/user/snapshots`, and it must surface an
+`UnsafeActionSourceError` refusal as the specific rule violations (the CLI
+already does) rather than as a generic failure toast.
+Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### The OAuth state/CSRF guard has no test and no live run
 **Priority:** P2
@@ -551,34 +604,28 @@ verified by reading only. Add handler tests with a fabricated request/cookie
 pair, then walk one real add-account flow.
 Found by: audit wave 1 (own concern) + Codex review, 2026-08-06.
 
-### Snapshot restore has no surface
+### OAuth redirect URI is now origin-derived
 **Priority:** P3
-`GET/POST /api/actions/user/snapshots` is the only recovery path for a user
-action that the edit flow overwrote, and it has no UI and no CLI command — the
-audit kept the routes deliberately for this reason, but a recovery path nobody
-can reach is not a recovery path. Add an `approvals`-style CLI command or a
-restore control on the actions page.
-
-### Distinguish "already resolved" from a no-op apply
-**Priority:** P3
-POST /api/approvals/apply returns 200 with all-zero counts when every submitted
-id is stale (another tab or the CLI resolved the batch first), and the UI toasts
-"Applied 0 changes" as success. Return a skipped/notPending count or 409.
-
-### Share the email-detail query with mail-display
-**Priority:** P3
-`EmailReviewDialog` re-implements the email-detail fetch and uses the query key
-`["email", emailId, accountId]` — the reverse of `mail-display`'s
-`["email", accountId, emailId]` — so the same email caches under two keys and
-targeted invalidation misses one.
-
-### Client DTOs are hand-mirrored from route responses
-**Priority:** P4
-`ApprovalEmailSummary`/`ApprovalOperation` are declared in both the route and
-the hook; nothing ties them together, so a field added on one side still
-compiles on the other.
+`getOAuthRedirectUri(request)` builds the callback from
+`request.nextUrl.origin` so `serve --port N` works, which means **every origin
+the app is served on must be registered as an authorized redirect URI in the
+Google Cloud console** — previously only `localhost:3847` had to be. Also: two
+add-account flows started concurrently in one browser share the single state
+cookie, so the second overwrites the first and the first callback 403s. Both are
+acceptable today; document them in the setup guide rather than let a user
+discover them at the consent screen.
 
 ## CLI
+
+### `actions snapshots` list/restore are only covered by their filename parser
+**Priority:** P4
+`originalFilenameFromSnapshot` is unit-tested; `collectSnapshots` and the
+restore path are not, because they read and write the real
+`~/.email-agent/actions/.snapshots` directory and the suite has no filesystem
+fixture convention. The interesting case — restoring a pre-guard snapshot and
+getting the `UnsafeActionSourceError` branch instead of the generic one — is
+verified by reading only.
+Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### Adopt the shared dotted-path config helpers
 **Priority:** P3
@@ -598,16 +645,6 @@ this is P3 rather than higher, not a reason to skip it.
 
 `UnsafeConfigPathError` carries `path` and `segment`, so the command can print a
 specific message instead of a stack trace.
-
-### `approvals review` drops rejections when the apply throws
-**Priority:** P3
-`packages/cli/src/commands/approvals.ts:169-170` runs `applyOperationIds`
-before `rejectOperationIds`, so if the apply throws (network down mid-batch) the
-user's explicit per-email "no" answers are never recorded. The rows stay pending
-rather than being wrongly applied, so it fails safe — but the decisions the user
-just made are lost without being told. Reject first, or wrap the apply so the
-reject still runs.
-Found by: Fable pre-merge review, 2026-08-06.
 
 ## Core Gmail
 
@@ -751,6 +788,193 @@ The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
 classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
+
+### The mutation guard trusts the Host header
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P2. `mutationGuardResponse` derived "is local" from
+`new URL(request.url).hostname` — i.e. from the caller's own `Host` header — and
+validated `Origin`/`Sec-Fetch-Site` only when they happened to be present, which
+they are not on a non-browser client. `curl -X POST -H 'Host: localhost:3847'`
+therefore satisfied the entire guard and could bulk-approve the queue.
+`GET /api/approvals` had no guard at all.
+
+Closed at the only layer that can close it: **the listener now binds
+`127.0.0.1`**. `next dev`/`next start` and `email-agent serve` all pass
+`--hostname`, and `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` (already the documented
+escape hatch) also opens the bind to `0.0.0.0`, so "I meant to expose this" is
+one switch; `serve --host` overrides and prints what the exposure costs. Off-box
+processes no longer reach the socket at all, whatever `Host` they would have
+sent.
+
+**Correction (review of PR #10).** "One switch" only held in one direction.
+`serve --host 0.0.0.0` opened the listener and left the header guards demanding
+a local `Host`, so every request from the LAN — the entire point of the flag —
+answered 403; and with `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` the guard still
+compared the browser's LAN-IP `Origin` against Next's own URL and refused that
+too. Both now work end to end: the env flag short-circuits the whole header
+check rather than a subset, and `serve --host <non-loopback>` sets the flag for
+its child so the bind and the guards agree (`resolveServeEnv`, under test). The
+third documented path did not exist at all and is now documented as not
+existing: `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1 npm start` stays on `127.0.0.1`,
+because `packages/web/package.json` hardcodes `--hostname`, so the variable only
+relaxes headers on a server nothing off-box can reach. README says to use
+`email-agent serve` for remote access. Alongside that, mutations must now carry at least one of
+`Origin`/`Sec-Fetch-Site` — a browser always sends at least one (`Origin` on
+every non-GET fetch since long before Fetch Metadata, which Safari only shipped
+in 16.4/2023), so the UI is unaffected while the header-less one-liner is
+refused — and a new `readGuardResponse` applies the same host/origin/site checks
+to every route that returns mail. Reads deliberately do NOT require the fetch
+metadata, so the address bar and local debugging still work.
+
+The first pass at that guarded the routes someone thought of and then claimed
+the set was complete. `GET /api/actions/[id]/results` was not in it, and it
+returns `resultData` — the model's raw text, the email ids it decided about, its
+reasons, and whatever a user action chose to return. `GET /api/accounts`,
+`GET /api/actions`, `GET /api/actions/user` and `GET /api/settings` were open
+too. All are guarded now, and the completeness claim is no longer a claim:
+`packages/web/src/modules/api/route-guards.test.ts` walks `app/api`, fails on
+any unguarded handler, and holds a named exemption list containing exactly one
+entry — `GET /api/auth/callback`, which Google reaches as a top-level
+cross-site navigation the guard would refuse and which is protected by its
+one-time OAuth state cookie instead.
+
+**Correction (review of PR #10).** The first version of the header half read the
+host from `new URL(request.url)`, which is not the caller's `Host`: installed
+Next composes that URL from the server's own configured hostname
+(`attachRequestMeta` in `next/dist/server/next-server.js`, whose render server
+defaults the hostname to `localhost`). Measured against a running server, under
+both `next dev --hostname 127.0.0.1` and `next start --hostname 127.0.0.1` every
+request arrived at the handler as `http://localhost:<port>` whatever `Host` was
+sent. That broke the guard in both directions: a browser on
+`http://127.0.0.1:3847` — the URL Next and `email-agent serve` both print — was
+403'd out of every mutation, and a DNS-rebound `Host: evil.example` never
+reached the allowlist at all, so `GET /api/approvals` answered 200 with the
+queue. The unit tests missed it because they built
+`new Request("http://evil.example…")`, a shape the runtime never produces. The
+guard now reads the `Host` header directly, accepts an `Origin` naming any local
+hostname on the port the caller addressed (so `localhost` and `127.0.0.1` both
+work and `localhost:8080` does not), and ignores `X-Forwarded-Host`, which a
+rebound page can set for itself. The tests were rebuilt around the real shape —
+Next's fixed URL plus a separate `Host` header — and the behaviour was re-checked
+against a live server.
+
+Stated honestly in the code, `CLAUDE.md`/`AGENTS.md`, the module cards and the
+README: the header checks buy anti-DNS-rebinding and anti-CSRF for browsers plus
+a speed bump against a naive client, and nothing more, because every input is
+caller-controlled. The bind is the boundary. A shared secret would additionally
+cover another *user* on this machine; it did not ship because there is no safe
+in-band bootstrap for it — see "The local API still has no shared secret" above
+for the design and the reason. A process running as this user is out of reach of
+all of it and always will be.
+
+### Batch the email lookup in GET /api/approvals
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P2. Both approval surfaces ran one `getEmailById` per distinct queued email.
+They now build one predicate — ``(`accountId` = '…' AND id IN ('…')) OR …``, one
+group per account, quotes escaped, `accountId` backticked because DataFusion
+folds unquoted identifiers to lowercase, and joined into a single string because
+`.where()` maps to `onlyIf` and replaces rather than ANDs — and key results back
+through a Map on `(accountId, emailId)`, since a Gmail id repeats across
+accounts. Implemented at the surface layer in `packages/web/src/modules/api/`
+and `packages/cli/src/` because `packages/core` was owned by another branch this
+wave; the duplication (including a copied `escapeSql`) is recorded as its own
+follow-up.
+
+**Correction (review of PR #10).** The scan carried `.limit(refs.length)` with a
+comment asserting "at most one row per pair, so this can never truncate".
+Nothing enforces one row per `(accountId, id)`: with two `a@x.com/id1` rows and
+one `b@x.com/id2` row, a limit of 2 stopped on the duplicates and the Map came
+back without `b@x.com/id2` — which both approval surfaces render as "not in
+local DB" for an email that is sitting in the table. The limit is gone; LanceDB
+applies no default limit to a plain filtered query (the default of 10 is for
+vector searches), so the predicate alone bounds the scan. Both files gained a
+test that opens a REAL temp-directory LanceDB table, inserts an actual duplicate
+row, and asserts the other account's row still comes back — replacing the "only
+the filter string is under test" gap that had its own P2 entry. The same tests
+run the apostrophe-escaping and injection cases against the real parser, which
+also settles whether DataFusion accepts `id IN (...)` with parenthesised `OR`
+grouping: it does.
+
+### Distinguish an unclaimed apply from a no-op apply
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P3. `POST /api/approvals/apply` answered 200 with all-zero counts when it
+could claim none of the submitted ids, and the panel toasted "Applied 0 changes"
+as a success — telling the user their approval went through when nothing reached
+Gmail. Core claims each row before touching Gmail and reports one
+applied-or-failed entry per claimed row, so `requested - (applied + failed)` is
+exactly the set of ids **this call did not claim**; deriving it from the result
+instead of re-reading the table keeps it race-free. The apply route returns
+`requested`/`skipped` on the 200 and on the 409 — the two responses the apply
+itself produces — and answers 409 when nothing at all was claimed; a guard
+failure (403), a validation failure (400) and an unexpected error (500) return
+`{ error }` only, as they always did. The reject route reports the same
+accounting, the hooks read the server's message off a failed response and
+invalidate the approvals query on error so the panel re-syncs, and the toast
+wording is a pure tested function. `approvals apply` in the CLI says the same
+thing. Core's return shape was not touched.
+
+**Correction (review of PR #10).** The arithmetic was right and its
+interpretation was not. "Not claimed by this call" was being reported as
+"already applied or rejected somewhere else", which is only one of the reasons a
+claim fails: the row may be `applying` in a request that is still running, may
+have failed in an earlier run, or may not exist. Tab B could therefore submit a
+stale selection, get `0/0`, and be told its changes were already applied or
+rejected while tab A was in the middle of applying them. The helpers are renamed
+for what is known (`claimedNothing`, `unclaimedApplyMessage`; the CLI calls the
+count `unclaimed`), every message now asserts only that this run did not touch
+the rows and offers the reasons as possibilities, and the tests assert the
+absence of the old sentences as well as the presence of the new ones. The 409
+stays: "your view of the queue conflicts with the server's" is exactly what is
+known.
+
+### Snapshot restore has no surface
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P3. `email-agent actions snapshots [list]` and
+`email-agent actions snapshots restore <snapshot> [--action <file>] [-y]` now
+exist, deriving the target action from the snapshot's own filename and
+confirming before overwriting. `restoreSnapshot` writes through
+`saveUserAction`, so the save-time source guard re-validates the snapshot and a
+pre-guard snapshot containing a value import is refused — the command catches
+`UnsafeActionSourceError` specifically and prints the violated rules plus a
+pointer at `~/.email-agent/actions/.snapshots/` for a manual copy, rather than
+letting it read as a generic failure. The web actions page still has no restore
+control; that half is recorded as a follow-up.
+
+### Share the email-detail query with mail-display
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P3. `EmailReviewDialog` keyed its fetch `["email", emailId, accountId]`, the
+reverse of `mail-display`'s `["email", accountId, emailId]`, so the same email
+cached twice and an invalidation after an apply refreshed only one copy.
+`hooks/use-email-detail.ts` now owns the fetch, the response type and the key,
+and `emailDetailQueryKey` is the single place the order is written down. There is
+no React test harness in this repo, so the sharing is enforced by types and by
+both call sites being one code path; the caching behaviour itself is not under
+test.
+
+### Client DTOs are hand-mirrored from route responses
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P4. `ApprovalEmailSummary`/`ApprovalOperation` were declared in both the
+route and the hook. They now live once in
+`packages/web/src/modules/api/approvals-contract.ts`, imported by the routes and
+re-exported by `hooks/use-approvals`, so a field added on one side is a compile
+error on the other. The file is deliberately free of any `@email-agent/core`
+import — client hooks import it, and web code outside `modules/api` may not pull
+core runtime into the browser bundle.
+
+### `approvals review` drops rejections when the apply throws
+**Completed:** feature/todos-w2-surfaces (2026-08-07)
+Was P3. `applyOperationIds(approved)` ran before `rejectOperationIds(rejected)`,
+so a network failure part-way through the apply threw before a single rejection
+was written and every explicit per-email "no" the user had just typed was
+discarded. Rejecting only rewrites queue rows and never calls Gmail, so it is
+the half that cannot fail mid-mutation: it goes first now.
+`commitReviewDecisions` runs both halves regardless of the other failing — the
+id sets are disjoint, so neither failure makes the other unsafe — and returns
+the errors instead of throwing, so `describeReviewCommit` can say exactly what
+was and was not recorded: it does not claim rejections survived when the reject
+itself failed, and it does not claim nothing reached Gmail when the apply died
+part-way. `review` exits non-zero if either half failed. Both functions are pure
+enough to be under test, including the ordering itself.
 
 ### Config hygiene: shared consent rule, a legacy-key notice, a prototype guard, and a name that lied
 **Completed:** feature/todos-w4b-config (2026-08-07)

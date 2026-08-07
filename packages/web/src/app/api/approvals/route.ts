@@ -1,38 +1,37 @@
-import { NextResponse } from "next/server";
-import { getEmailById, getPendingOperations, initDb } from "@email-agent/core/db";
-import type { EmailRecord } from "@email-agent/core/db";
+import { NextResponse, type NextRequest } from "next/server";
+import { getPendingOperations, initDb } from "@email-agent/core/db";
 import {
   describeGmailOperation,
   isDestructiveOperation,
   parseLabelIds,
 } from "@email-agent/core/actions";
-import { internalErrorResponse } from "@/modules/api/validation";
+import { internalErrorResponse, readGuardResponse } from "@/modules/api/validation";
+import { emailRefKey, getEmailsByRefs } from "@/modules/api/email-lookup";
+import type {
+  ApprovalEmailSummary,
+  ApprovalOperation,
+  ApprovalsResponse,
+} from "@/modules/api/approvals-contract";
 
-export interface ApprovalEmailSummary {
-  subject: string;
-  from: string;
-  date: string;
-  snippet: string;
-}
+export async function GET(request: NextRequest) {
+  // Subjects, senders and snippets of the user's mail. Guarded like every other
+  // mail read, not left open because it happens to be a GET.
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
 
-export async function GET() {
   try {
     await initDb();
     const rows = await getPendingOperations({ status: "pending" });
 
-    // One lookup per distinct email; several operations can target one mail.
-    const emailCache = new Map<string, EmailRecord | null>();
-    const operations = [];
-    for (const row of rows) {
-      const cacheKey = `${row.accountId}\u0000${row.emailId}`;
-      let email = emailCache.get(cacheKey);
-      if (email === undefined) {
-        email = await getEmailById(row.emailId, row.accountId);
-        emailCache.set(cacheKey, email);
-      }
+    // One batched scan for every queued email, instead of one scan per row.
+    const emails = await getEmailsByRefs(
+      rows.map((row) => ({ accountId: row.accountId, emailId: row.emailId })),
+    );
 
+    const operations: ApprovalOperation[] = rows.map((row) => {
+      const email = emails.get(emailRefKey(row.accountId, row.emailId));
       const labelIds = parseLabelIds(row.labelIds);
-      operations.push({
+      return {
         id: row.id,
         batchId: row.batchId,
         actionId: row.actionId,
@@ -55,10 +54,13 @@ export async function GET() {
               snippet: email.snippet,
             } satisfies ApprovalEmailSummary)
           : null,
-      });
-    }
+      };
+    });
 
-    return NextResponse.json({ operations, pendingCount: operations.length });
+    return NextResponse.json({
+      operations,
+      pendingCount: operations.length,
+    } satisfies ApprovalsResponse);
   } catch (err) {
     return internalErrorResponse(err, "Failed to load pending approvals");
   }

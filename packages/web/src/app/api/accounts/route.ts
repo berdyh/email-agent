@@ -11,6 +11,7 @@ import {
   mutationGuardResponse,
   parseAccountDeleteRequest,
   parseAccountPostRequest,
+  readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
 import {
@@ -19,7 +20,12 @@ import {
   setOAuthStateCookie,
 } from "@/modules/api/oauth-state";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // The list is the user's own email addresses. Not mail bodies, but not
+  // something a page they happen to visit should be able to read either.
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   try {
     const accounts = await listAccounts();
     return NextResponse.json(accounts);

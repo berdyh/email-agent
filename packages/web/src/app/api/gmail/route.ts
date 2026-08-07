@@ -3,10 +3,16 @@ import { getEmails, initDb } from "@email-agent/core/db";
 import {
   internalErrorResponse,
   parseEmailListQuery,
+  readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
 
 export async function GET(request: NextRequest) {
+  // Returns subjects, senders and snippets — same data class as the approval
+  // queue, so it gets the same read-side origin check.
+  const guard = readGuardResponse(request);
+  if (guard) return guard;
+
   try {
     const { unreadOnly, limit, offset, accountId } = parseEmailListQuery(
       request.nextUrl.searchParams,

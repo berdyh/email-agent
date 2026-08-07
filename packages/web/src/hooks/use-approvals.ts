@@ -1,45 +1,37 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type {
+  ApplyApprovalsResult,
+  ApprovalsResponse,
+  RejectApprovalsResult,
+} from "@/modules/api/approvals-contract";
 
-export interface ApprovalEmailSummary {
-  subject: string;
-  from: string;
-  date: string;
-  snippet: string;
-}
+// The wire types live with the routes that produce them, so adding a field on
+// one side is a compile error on the other. Re-exported here because every
+// consumer already imports the approvals surface from this hook module.
+export type {
+  ApplyApprovalsResult,
+  ApprovalEmailSummary,
+  ApprovalOperation,
+  ApprovalsResponse,
+  RejectApprovalsResult,
+} from "@/modules/api/approvals-contract";
 
-export interface ApprovalOperation {
-  id: string;
-  batchId: string;
-  actionId: string;
-  actionName: string;
-  accountId: string;
-  emailId: string;
-  type: string;
-  labelIds: string[];
-  /** Human-readable description of the change, derived server-side from core. */
-  label: string;
-  /** True for changes that hide or destroy mail (trash/spam). */
-  destructive: boolean;
-  createdAt: string;
-  email: ApprovalEmailSummary | null;
-}
-
-export interface ApprovalsResponse {
-  operations: ApprovalOperation[];
-  pendingCount: number;
-}
-
-export interface ApplyApprovalsResult {
-  applied: number;
-  failed: number;
-  errors: Array<{ emailId: string; error: string }>;
-  /** Per-operation results, in the order the operations were applied. */
-  outcomes: Array<{
-    emailId: string;
-    type: string;
-    ok: boolean;
-    error?: string;
-  }>;
+/**
+ * Pull the server's message off a failed response instead of throwing a
+ * one-size-fits-all string. `/api/approvals/apply` answers 409 with a specific
+ * explanation when every submitted id was already resolved elsewhere, and that
+ * sentence is the whole point of the status code.
+ */
+async function errorFromResponse(res: Response, fallback: string): Promise<Error> {
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.trim()) {
+      return new Error(body.error);
+    }
+  } catch {
+    // Non-JSON body — fall through to the generic message.
+  }
+  return new Error(fallback);
 }
 
 export function useApprovals() {
@@ -47,7 +39,7 @@ export function useApprovals() {
     queryKey: ["approvals"],
     queryFn: async (): Promise<ApprovalsResponse> => {
       const res = await fetch("/api/approvals");
-      if (!res.ok) throw new Error("Failed to fetch pending approvals");
+      if (!res.ok) throw await errorFromResponse(res, "Failed to fetch pending approvals");
       return res.json() as Promise<ApprovalsResponse>;
     },
   });
@@ -63,7 +55,7 @@ export function useApproveOperations() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       });
-      if (!res.ok) throw new Error("Failed to apply approved operations");
+      if (!res.ok) throw await errorFromResponse(res, "Failed to apply approved operations");
       return res.json() as Promise<ApplyApprovalsResult>;
     },
     onSuccess: () => {
@@ -74,23 +66,32 @@ export function useApproveOperations() {
       void queryClient.invalidateQueries({ queryKey: ["unreadCount"] });
       void queryClient.invalidateQueries({ queryKey: ["email"] });
     },
+    onError: () => {
+      // A 409 means the queue moved under us (another tab or the CLI resolved
+      // the batch). Refetching is what makes the panel agree with reality
+      // again, so the error path has to invalidate too.
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
   });
 }
 
 export function useRejectOperations() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ rejected: number }, Error, { ids: string[] }>({
+  return useMutation<RejectApprovalsResult, Error, { ids: string[] }>({
     mutationFn: async ({ ids }) => {
       const res = await fetch("/api/approvals/reject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       });
-      if (!res.ok) throw new Error("Failed to reject operations");
-      return res.json() as Promise<{ rejected: number }>;
+      if (!res.ok) throw await errorFromResponse(res, "Failed to reject operations");
+      return res.json() as Promise<RejectApprovalsResult>;
     },
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
+    onError: () => {
       void queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
   });
