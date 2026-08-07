@@ -5,7 +5,7 @@ import {
   type PendingOperationRecord,
   type PendingOperationStatus,
 } from "./schema.js";
-import { escapeSql } from "./utils.js";
+import { escapeSql, UNLIMITED_QUERY_ROWS } from "./utils.js";
 
 /**
  * A LanceDB `Table` HANDLE IS PINNED TO THE VERSION IT WAS OPENED AT. Verified
@@ -71,6 +71,7 @@ async function queryAtLatestVersion(
   return (await table
     .query()
     .where(where)
+    .limit(UNLIMITED_QUERY_ROWS)
     .toArray()) as unknown as PendingOperationRecord[];
 }
 
@@ -134,6 +135,7 @@ export async function getPendingOperationsForEmails(
   const results = await table
     .query()
     .where(buildPendingEmailFilter(emailIds))
+    .limit(UNLIMITED_QUERY_ROWS)
     .toArray();
   return results as unknown as PendingOperationRecord[];
 }
@@ -203,7 +205,10 @@ export async function getPendingOperations(options?: {
 }): Promise<PendingOperationRecord[]> {
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
-  let query = table.query();
+  // Unlimited by default is 10 rows in LanceDB — see UNLIMITED_QUERY_ROWS.
+  // The newest-first sort and `limit` below both run in JS over the full match
+  // set, so a truncated scan would silently hide queued Gmail changes.
+  let query = table.query().limit(UNLIMITED_QUERY_ROWS);
   // One combined predicate — chained .where() calls REPLACE rather than AND
   // (see the same note in emails.ts), which would drop the status filter.
   const filters = buildPendingOperationFilters(options);
@@ -479,7 +484,11 @@ export async function getPendingOperationsByIds(
   if (ids.length === 0) return [];
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
-  const results = await table.query().where(buildIdListFilter(ids)).toArray();
+  const results = await table
+    .query()
+    .where(buildIdListFilter(ids))
+    .limit(UNLIMITED_QUERY_ROWS)
+    .toArray();
   return results as unknown as PendingOperationRecord[];
 }
 

@@ -231,8 +231,11 @@ export async function readAllPendingOperations(): Promise<
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
   await table.checkoutLatest();
-  const rows = (await table.query().toArray()) as unknown as
-    PendingOperationRecord[];
+  const { UNLIMITED_QUERY_ROWS } = await import("../db/utils.js");
+  const rows = (await table
+    .query()
+    .limit(UNLIMITED_QUERY_ROWS)
+    .toArray()) as unknown as PendingOperationRecord[];
   return rows.sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -253,14 +256,26 @@ export async function readPendingOperation(
  * exercise it is to move the timestamp. Writes straight to the table because
  * there is deliberately no product function that back-dates a claim.
  */
-export async function backdateClaim(id: string, ms: number): Promise<void> {
+export async function backdateClaim(
+  id: string | readonly string[],
+  ms: number,
+): Promise<void> {
+  const ids = typeof id === "string" ? [id] : id;
+  if (ids.length === 0) return;
+
   const { getDb } = await import("../db/connection.js");
   const { pendingOperationsTable } = await import("../db/schema.js");
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
   await table.checkoutLatest();
+  // ONE update for the whole list, deliberately. A `Promise.all` of per-id
+  // updates races LanceDB's MVCC commits against each other and fails with
+  // `Commit conflict for version N` — the same conflict the product's
+  // `updateAtLatestVersion` exists to absorb, which a raw fixture write does
+  // not have.
+  const list = ids.map((value) => `'${value.replaceAll("'", "''")}'`).join(", ");
   await table.update({
-    where: `id = '${id.replaceAll("'", "''")}'`,
+    where: `id IN (${list})`,
     values: { claimedAt: new Date(Date.now() - ms).toISOString() },
   });
 }

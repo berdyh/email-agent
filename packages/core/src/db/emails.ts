@@ -1,6 +1,6 @@
 import { getDb } from "./connection.js";
 import { emailsTable, type EmailRecord } from "./schema.js";
-import { escapeSql } from "./utils.js";
+import { escapeSql, UNLIMITED_QUERY_ROWS } from "./utils.js";
 
 export function buildEmailFilters(options?: {
   accountId?: string;
@@ -99,7 +99,10 @@ export async function getEmails(options?: {
   const db = await getDb();
   const table = await db.openTable(emailsTable);
 
-  let query = table.query();
+  // LanceDB caps an unlimited query at 10 rows (see UNLIMITED_QUERY_ROWS).
+  // The paging below is done in JS over the full match set, so the scan must
+  // not be truncated before it starts.
+  let query = table.query().limit(UNLIMITED_QUERY_ROWS);
   // One combined predicate, never chained .where() calls: LanceDB's where()
   // maps to `onlyIf`, which REPLACES the previous filter instead of ANDing it,
   // so chaining silently drops every filter but the last.

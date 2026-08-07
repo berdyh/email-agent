@@ -50,3 +50,4 @@ export {
 export { saveClusters } from "./clusters.js";
 export { generateEmbedding, generateEmbeddings } from "./embeddings.js";
 export { recordToGmailMessage } from "./record-mapper.js";
+export { escapeSql, UNLIMITED_QUERY_ROWS } from "./utils.js";
