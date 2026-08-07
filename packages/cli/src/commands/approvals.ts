@@ -11,7 +11,10 @@ import {
   describeGmailOperation,
   emailRefKey,
   getEmailsByIds,
+  loadSettings,
   parseLabelIds,
+  prunePendingOperations,
+  resolveRetentionCutoff,
   STALE_APPLYING_THRESHOLD_MS,
 } from "@email-agent/core";
 import type {
@@ -663,6 +666,48 @@ async function loadPending(batchId?: string): Promise<PendingOperationRecord[]> 
   return getPendingOperations({ status: "pending", batchId });
 }
 
+export interface PruneReport {
+  /** The window used, in whole days. */
+  days: number;
+  /** Cutoff timestamp, or null when retention is disabled. */
+  cutoff: string | null;
+  /** Rows that were eligible, per `PRUNABLE_STATUSES`. */
+  deleted: number;
+}
+
+/**
+ * What a retention sweep did, in words.
+ *
+ * Pure, because every sentence here is a promise about deleted audit rows and
+ * the promises have to be exact: which statuses are eligible, that the count is
+ * advisory, and that 0 days means keep forever rather than delete everything.
+ */
+export function describePrune(report: PruneReport): string[] {
+  if (report.cutoff === null) {
+    return [
+      `Retention is disabled (retention.approvalQueueDays = ${report.days}), so nothing was deleted.`,
+      "Every resolved approval-queue row is kept forever. Set a positive number of days in the " +
+        "web UI under Settings → Gmail to enable the sweep.",
+    ];
+  }
+
+  if (report.deleted === 0) {
+    return [
+      `Nothing to prune: no applied or rejected change was resolved before ${report.cutoff} ` +
+        `(${report.days} days ago).`,
+    ];
+  }
+
+  const one = report.deleted === 1;
+  return [
+    `Deleted ${report.deleted} resolved approval-queue ${one ? "row" : "rows"} ` +
+      `resolved before ${report.cutoff} (${report.days} days ago).`,
+    "Only applied and rejected rows are ever eligible — pending, applying and failed rows are " +
+      "never pruned. The count is what was eligible when the sweep started; a row resolved " +
+      "between the count and the delete can make it drift by one or two.",
+  ];
+}
+
 export function registerApprovals(program: Command) {
   const approvals = program
     .command("approvals")
@@ -832,6 +877,69 @@ export function registerApprovals(program: Command) {
         console.log(chalk.yellow(`${left} left stuck — nothing was changed for them.`));
         process.exitCode = 1;
       }
+    });
+
+  approvals
+    .command("prune")
+    .description(
+      "Delete resolved (applied/rejected) queue rows past the retention window",
+    )
+    .option(
+      "-d, --older-than-days <n>",
+      "Override retention.approvalQueueDays for this run",
+    )
+    .option("--dry-run", "Report what would be deleted without deleting it")
+    .action(async (options: { olderThanDays?: string; dryRun?: boolean }) => {
+      // WHY THIS COMMAND EXISTS. The sweep was opportunistic — it ran after
+      // every apply/reject and reported to nobody — so a user could not answer
+      // "what has been deleted from my audit trail, and when will the rest
+      // go?". A retention policy nothing can inspect is indistinguishable from
+      // data loss.
+      let days: number;
+      if (options.olderThanDays === undefined) {
+        days = (await loadSettings()).retention.approvalQueueDays;
+      } else {
+        if (!/^[0-9]+$/.test(options.olderThanDays)) {
+          console.error(
+            chalk.red(
+              `Invalid --older-than-days "${options.olderThanDays}": must be a whole number of days (0 disables pruning).`,
+            ),
+          );
+          process.exitCode = 1;
+          return;
+        }
+        days = Number(options.olderThanDays);
+      }
+
+      const cutoff = resolveRetentionCutoff(days);
+      await initDb();
+
+      // A dry run counts through the SAME predicate the delete uses, rather
+      // than a second one written to match it.
+      const eligible =
+        cutoff === null
+          ? 0
+          : (await getPendingOperations({ status: "applied" }))
+              .concat(await getPendingOperations({ status: "rejected" }))
+              .filter((op) => op.resolvedAt !== "" && op.resolvedAt < cutoff)
+              .length;
+
+      const deleted =
+        cutoff === null || options.dryRun
+          ? eligible
+          : await prunePendingOperations(cutoff);
+
+      const lines = describePrune({ days, cutoff, deleted });
+      if (options.dryRun && cutoff !== null) {
+        console.log(
+          chalk.yellow(
+            `Dry run — nothing was deleted. ${eligible} ${eligible === 1 ? "row is" : "rows are"} eligible.`,
+          ),
+        );
+      }
+      const [headline, ...rest] = lines;
+      console.log(headline);
+      for (const line of rest) console.log(chalk.dim(line));
     });
 
   approvals
