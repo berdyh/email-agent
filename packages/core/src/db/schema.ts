@@ -24,8 +24,35 @@ export interface ActionResultRecord {
   [key: string]: unknown;
   id: string;
   actionId: string;
-  // "" is the unscoped sentinel: a legacy/ADC row OR a mixed multi-account run
-  // whose processed emails did not resolve to a single account.
+  /**
+   * "" is an OVERLOADED sentinel and means either of two things: a legacy or
+   * gcloud-ADC row, or an all-accounts run whose processed emails spanned more
+   * than one account (`deriveResultAccountId` returns "" for a mixed batch).
+   * Account-filtered history therefore cannot represent a genuine
+   * multi-account run.
+   *
+   * DELIBERATELY NOT DISAMBIGUATED YET — the argument, so it is not re-derived:
+   * the ambiguity is currently unobservable. `getActionResults` is read by
+   * exactly one caller (`packages/web/src/app/api/actions/[id]/results/route.ts`),
+   * and it filters by `actionId` only; the `accountId` option has no caller at
+   * all. Both candidate fixes would ship a representation nothing reads, which
+   * this repo already has three open entries about:
+   * - A `mixed` marker separates legacy from mixed, but still cannot make a
+   *   multi-account run visible under either account's filter — the
+   *   user-facing half of the problem — while adding a third sentinel every
+   *   future reader must learn.
+   * - Per-account result rows break `batchId = action_results row id`, the key
+   *   every `pending_operations` row is stamped with. One run would produce N
+   *   history rows and the queue can only point at one, so the audit-trail
+   *   join would have to be redesigned and both surfaces changed.
+   *
+   * The trigger for revisiting is a surface that actually filters action
+   * history by account, i.e. the first caller to pass `accountId`. The shape to
+   * reach for then is an `accountIds` JSON-array column — `"[]"` for legacy
+   * rows, added in place with `ensureTableColumns`, filtered in JS, which
+   * `getActionResults` already does for sorting — rather than another scalar
+   * sentinel. Tracked in TODOS.md.
+   */
   accountId: string;
   status: string;
   emailIds: string; // JSON array
