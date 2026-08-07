@@ -161,13 +161,16 @@ below are worded as if the user-facing bug were fixed; it is not, and the
 misleading message a user reads after a failed auto-apply is still shipped.
 
 **1. `applyError` / `persistError` / `duplicateOperations` are written and
-never read.** `ActionRunResult` distinguishes three failures; both surfaces
-collapse them into the `queueError` copy. Concretely, when Gmail trash
-succeeds and the queue write-back then fails, the runner leaves
-`pendingOperations` populated and sets `applyError` — the web still reports
-those now-`applying` rows as "N changes await your approval", and the CLI
-queries only `status: "pending"`, finds none, and prints "nothing was
-applied". Both statements are false about mail that has really been trashed.
+never read.** `ActionRunResult` distinguishes three failures; no surface reads
+more than `queueError`, and on an auto-apply failure `queueError` is UNSET, so
+neither surface prints its copy — they take different wrong branches instead.
+Concretely, when Gmail trash succeeds and the queue write-back then fails, the
+runner leaves `pendingOperations` populated and sets `applyError` — the web
+still reports those now-`applying` rows as "N changes await your approval", and
+the CLI queries `status: "pending"` for the batch and prints "nothing was
+applied" when that comes back empty (a multi-chunk abort instead leaves later
+ids pending, so it prompts to apply those). Every one of those messages is
+false about mail that has really been trashed.
 
 Files that must change:
 - `packages/web/src/hooks/use-actions.ts` — the run-result type omits
@@ -666,7 +669,7 @@ process — but webpack does not always place a module in a shared chunk.
 `chunks/982.js`, `chunks/170.js` AND that route entry). `/api/settings` (the
 writer) loads chunk 982; `/api/approvals/apply` loads 982 and 170. So
 separate module instances DO occur, and a process-global invalidation hook
-would only ever clear the caller's own copy. The mtime revalidation is
+would only ever clear the caller's own copy. The per-call re-read is
 therefore necessary, not merely sufficient: it is per-instance and
 file-driven, so every copy converges on the file regardless of how many exist.
 Caveat: measured on the production build; dev-mode on-demand compilation was
@@ -741,9 +744,12 @@ Nine entries closed together because they are one path. In queue order:
   pointing at the stranded rows; `persistError` is new for a lost history
   row; `queueError` now means only a pre-Gmail queue failure. **What this did
   NOT change is what the user sees.** No surface reads `applyError` or
-  `persistError` — the web result type omits both, and web and CLI still
-  print the `queueError` copy — so a user whose mail was really trashed is
-  still told "nothing was applied". The field separation is a prerequisite
+  `persistError` — the web result type omits both — and because `queueError`
+  is unset on an auto-apply failure, neither surface prints its copy either:
+  the web reports the now-`applying` rows as "N changes await your approval",
+  and the CLI either says "nothing was applied" (nothing left pending) or
+  prompts to apply the ids the crashed call never reached. A user whose mail
+  was really trashed is told nothing happened. The field separation is a prerequisite
   for the fix, not the fix. Listed here only because the core data changed.
 - **Recover rows stranded in `applying`** — **NOT CLOSED, only half-built**
   (still P2, tracked above). `claimedAt` is now stamped whenever a row leaves

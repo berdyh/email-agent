@@ -82,14 +82,19 @@ describe("failure-message builders (strings only — NOT the message users see)"
   // fails.
   //
   // `describeAutoApplyFailure` is assigned to `ActionRunResult.applyError`,
-  // which nothing reads: the web result type omits the field, and
-  // `packages/web/src/app/actions/page.tsx` and
-  // `packages/cli/src/commands/run-action.ts` both still print the
-  // `queueError` copy. So in the failure this string was written for, the user
-  // is still told "nothing was applied" while mail may really have been
-  // trashed. Only the adoption pass tracked in TODOS.md ("Surfaces still read
-  // only `queueError`") can make that claim true, and only a test that goes
-  // through a surface can pin it.
+  // which nothing reads: the web result type omits the field. What the
+  // surfaces do instead is NOT "print the `queueError` copy" — on an auto-apply
+  // failure `queueError` is unset, because the rows queued fine.
+  // `packages/web/src/app/actions/page.tsx` falls through to its success branch
+  // and reports "N changes await your approval" for rows that are now
+  // `applying`; `packages/cli/src/commands/run-action.ts` prompts on whatever
+  // is still `status: "pending"` for the batch, printing "nothing was applied"
+  // only when nothing is left pending, and otherwise offering to apply the
+  // later ids without mentioning the chunk that may already have hit Gmail.
+  // Either way the user is not told that mail may really have been trashed.
+  // Only the adoption pass tracked in TODOS.md ("⚠ THE SURFACES WAVE", item 1)
+  // can make this string reach anyone, and only a test that goes through a
+  // surface can pin it.
   //
   // `describeUnrecordedBatchFailure` is the exception: it is assigned to
   // `queueError`, which the surfaces do read, so its text does reach the user.

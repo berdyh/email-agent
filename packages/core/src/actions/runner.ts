@@ -61,11 +61,14 @@ export function deriveResultAccountId(
  * `queueError` is UNSET — the rows queued fine. So `packages/web/src/app/
  * actions/page.tsx` falls through to its "N changes await your approval"
  * branch and reports rows that are now `applying`, not `pending`; and
- * `packages/cli/src/commands/run-action.ts` queries `status: "pending"`, finds
- * none, and prints its "nothing was applied" copy. Different routes, same
- * outcome: both tell the user nothing happened to mail that may really have
- * been trashed. What this branch changed is the core data, not what anybody
- * sees. The adoption is tracked in TODOS.md ("Surfaces still read only
+ * `packages/cli/src/commands/run-action.ts` queries `status: "pending"` for the
+ * batch and prints its "nothing was applied" copy only when that query comes
+ * back empty — true for a single-chunk abort, but a multi-chunk abort leaves
+ * the ids the crashed call never reached still `pending`, so it prompts to
+ * apply those instead and never mentions the chunk that may already have hit
+ * Gmail. Different routes, same outcome: neither tells the user that mail may
+ * really have been trashed. What this branch changed is the core data, not what
+ * anybody sees. The adoption is tracked in TODOS.md ("Surfaces still read only
  * `queueError`") and names the exact files.
  *
  * The wording itself must not claim more than we know.
