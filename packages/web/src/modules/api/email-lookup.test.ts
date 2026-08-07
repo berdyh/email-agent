@@ -140,4 +140,34 @@ describe("batched email lookup filter", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("resolves more than ten emails, which the default query limit silently capped", async () => {
+    // LanceDB applies a DEFAULT LIMIT OF 10 to a plain filtered query — not to
+    // vector searches only, which is what the comment on `getEmailsByRefs` used
+    // to assert without ever checking. A queue referencing 15 emails resolved
+    // ten of them and the surface rendered the other five as "not in local DB",
+    // for mail sitting right there. THE COUNT IS THE TEST: at ten or fewer this
+    // is invisible.
+    const dir = await mkdtemp(join(tmpdir(), "email-lookup-test-"));
+    try {
+      const db = await connect(dir);
+      const rows = Array.from({ length: 15 }, (_, i) =>
+        emailRow("me@x.com", `many-${String(i).padStart(2, "0")}`, `Subject ${String(i)}`),
+      );
+      const table = await db.createTable("emails", rows);
+
+      const found = await getEmailsByRefs(
+        rows.map((row) => ({ accountId: row.accountId, emailId: row.id })),
+        async () => table as unknown as EmailLookupTable,
+      );
+
+      assert.equal(found.size, 15);
+      assert.equal(
+        found.get(emailRefKey("me@x.com", "many-14"))?.subject,
+        "Subject 14",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

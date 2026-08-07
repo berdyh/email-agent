@@ -353,6 +353,97 @@ export function commitFailed(result: ReviewCommitResult): boolean {
 }
 
 /**
+ * What a keystroke at the approve/reject prompt means.
+ *
+ * `null` is EOF, not a keystroke — see `createAnswerReader`. It is classified
+ * here so the loop has one place that decides, and so the DEFAULT is stated
+ * once: ANYTHING UNRECOGNISED KEEPS THE CHANGE QUEUED. A typo must never
+ * approve a Gmail mutation, and it must never reject one either — leaving the
+ * proposal for the user to answer again is the only outcome that discards
+ * nothing.
+ */
+export type ReviewAnswer = "approve" | "reject" | "skip" | "stop";
+
+export function classifyReviewAnswer(raw: string | null): ReviewAnswer {
+  // EOF ends the walk and keeps every decision already made, which is exactly
+  // what `q` has always meant.
+  if (raw === null) return "stop";
+  const answer = raw.trim().toLowerCase();
+  if (answer === "y") return "approve";
+  if (answer === "n") return "reject";
+  if (answer === "q") return "stop";
+  return "skip";
+}
+
+/**
+ * What a keystroke at the stranded-row prompt means.
+ *
+ * Two answers and a skip, because there are only two things a person can
+ * actually check: whether the change is visible in Gmail or not. There is
+ * deliberately no retry — core claimed the row before it mutated, so
+ * re-applying could be a second trash of an already-trashed message.
+ *
+ * The default is `skip`, and skipping leaves the row EXACTLY as it is. That is
+ * the right answer for a user who has not looked yet, so it is also what an
+ * unrecognised key and EOF do.
+ */
+export type StrandedAnswer = "applied" | "notApplied" | "skip";
+
+export function classifyStrandedAnswer(raw: string | null): StrandedAnswer {
+  if (raw === null) return "skip";
+  const answer = raw.trim().toLowerCase();
+  if (answer === "y") return "applied";
+  if (answer === "n") return "notApplied";
+  return "skip";
+}
+
+/**
+ * Whether a `[y/N]` confirmation was actually given.
+ *
+ * EOF is not consent, and neither is anything but `y`: the prompt already
+ * promises No as the default.
+ */
+export function confirmedYes(raw: string | null): boolean {
+  return raw !== null && raw.trim().toLowerCase() === "y";
+}
+
+/**
+ * An answer reader that survives the input ending. Returns `null` at EOF.
+ *
+ * DO NOT REPLACE THIS WITH `rl.question()`. That is what it used to be, and the
+ * failure was silent and expensive. `readline/promises` settles a pending
+ * `question()` only on a `line` event, and it PAUSES the input between
+ * questions: when stdin reaches EOF with a question outstanding — the user
+ * presses Ctrl-D, or the command is run with piped/redirected input — the
+ * interface emits `close`, the promise NEVER SETTLES, commander's action
+ * promise hangs, nothing keeps the event loop alive, and node exits 0.
+ *
+ * What that did to `approvals review`, reproduced against the BUILT binary:
+ * three queued changes with answers piped in, the first answer read, the second
+ * prompt printed, then exit 0 with all three rows still `pending`. Every
+ * decision the user had already made was discarded and the shell was told the
+ * command succeeded. Racing a `close` listener against the question is not
+ * enough either — it stops the hang but still loses every line still sitting in
+ * the buffer, because `close` wins before they are delivered.
+ *
+ * Draining the interface's async iterator keeps it in flowing mode, so every
+ * buffered line is delivered and `done` arrives only at real EOF. The prompt is
+ * written by hand because that is the one thing `question()` was doing for us.
+ * Verified on both paths: three piped answers all arrive, and an empty stdin
+ * yields `null` on the first ask instead of hanging.
+ */
+function createAnswerReader(
+  rl: ReturnType<typeof createInterface>,
+): (prompt: string) => Promise<string | null> {
+  const lines = rl[Symbol.asyncIterator]();
+  return async (prompt: string) => {
+    process.stdout.write(prompt);
+    const next = await lines.next();
+    return next.done === true ? null : next.value;
+  };
+}
+
+/**
  * Steps through operations one by one; each answer is the user's personal
  * decision for that email. Unanswered operations (skip/quit) stay queued.
  */
@@ -362,6 +453,7 @@ export async function reviewOperations(
   const approved: string[] = [];
   const rejected: string[] = [];
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = createAnswerReader(rl);
 
   try {
     for (const [index, display] of displays.entries()) {
@@ -375,18 +467,13 @@ export async function reviewOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       if (display.snippet) console.log(chalk.dim(`  ${display.snippet}`));
 
-      const answer = (
-        await rl.question(
-          "  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: ",
-        )
-      )
-        .trim()
-        .toLowerCase();
-
-      if (answer === "y") approved.push(op.id);
-      else if (answer === "n") rejected.push(op.id);
-      else if (answer === "q") break;
-      // anything else (including "s") keeps the operation queued
+      const answer = classifyReviewAnswer(
+        await ask("  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: "),
+      );
+      if (answer === "approve") approved.push(op.id);
+      else if (answer === "reject") rejected.push(op.id);
+      else if (answer === "stop") break;
+      // "skip" keeps the operation queued
     }
   } finally {
     rl.close();
@@ -523,6 +610,7 @@ export async function reviewStrandedOperations(
   const applied: string[] = [];
   const notApplied: string[] = [];
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = createAnswerReader(rl);
 
   try {
     for (const [index, display] of displays.entries()) {
@@ -536,17 +624,14 @@ export async function reviewStrandedOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       console.log(chalk.dim(`  ${describeStrandedAge(op.claimedAt || op.createdAt)}`));
 
-      const answer = (
-        await rl.question(
+      const answer = classifyStrandedAnswer(
+        await ask(
           "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
-        )
-      )
-        .trim()
-        .toLowerCase();
-
-      if (answer === "y") applied.push(op.id);
-      else if (answer === "n") notApplied.push(op.id);
-      // anything else leaves the row stuck, which is the honest default.
+        ),
+      );
+      if (answer === "applied") applied.push(op.id);
+      else if (answer === "notApplied") notApplied.push(op.id);
+      // "skip" leaves the row stuck, which is the honest default.
     }
   } finally {
     rl.close();
@@ -637,10 +722,10 @@ export function registerApprovals(program: Command) {
       printOperationList(await loadOperationDisplays(ops));
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
-        const answer = await rl.question(
+        const answer = await createAnswerReader(rl)(
           `\nApply all ${ops.length} changes to Gmail? [y/N] `,
         );
-        if (answer.trim().toLowerCase() !== "y") {
+        if (!confirmedYes(answer)) {
           console.log(chalk.dim("Skipped — changes stay pending."));
           return;
         }

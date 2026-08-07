@@ -1,6 +1,6 @@
 import { getDb } from "./connection.js";
 import { actionResultsTable, type ActionResultRecord } from "./schema.js";
-import { escapeSql } from "./utils.js";
+import { escapeSql, UNLIMITED_QUERY_ROWS } from "./utils.js";
 
 export async function saveActionResult(
   result: ActionResultRecord,
@@ -17,7 +17,8 @@ export async function getActionResults(options?: {
 }): Promise<ActionResultRecord[]> {
   const db = await getDb();
   const table = await db.openTable(actionResultsTable);
-  let query = table.query();
+  // Unlimited by default is 10 rows in LanceDB — see UNLIMITED_QUERY_ROWS.
+  let query = table.query().limit(UNLIMITED_QUERY_ROWS);
   // One combined predicate — chained .where() calls REPLACE rather than AND
   // (see the note in emails.ts), which would drop the actionId filter.
   const filters: string[] = [];

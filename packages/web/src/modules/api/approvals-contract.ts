@@ -32,6 +32,56 @@ export interface ApprovalOperation {
   email: ApprovalEmailSummary | null;
 }
 
+/**
+ * One action run's worth of queued changes, as the panel groups them.
+ *
+ * `batchId` is the `action_results` row id, so a batch is exactly "one run of
+ * one action" — the unit a user reviews and the unit the header names.
+ */
+export interface ApprovalBatch {
+  batchId: string;
+  actionName: string;
+  createdAt: string;
+  operations: ApprovalOperation[];
+}
+
+/**
+ * Groups queued changes by their run, preserving the order the operations
+ * arrived in — both between batches and inside one.
+ *
+ * ORDER IS THE WHOLE CONTENT OF THIS FUNCTION, which is why it is out here
+ * rather than inlined in a `useMemo` where no test could reach it. The route
+ * returns rows already sorted newest-batch-first with a total order inside a
+ * millisecond (`getPendingOperations`), and re-sorting or re-keying here would
+ * throw that away: a Map keyed by batchId preserves insertion order, so the
+ * first row of each batch fixes that batch's position and every later row of it
+ * appends. Grouping with an object literal, or sorting the keys, reorders
+ * numeric-looking ids and makes the same queue render differently run to run.
+ *
+ * `actionName` and `createdAt` are taken from the batch's FIRST row and are
+ * denormalised onto every row anyway; taking them from the last would be
+ * equivalent today and would silently start lying if they ever diverged.
+ */
+export function groupOperationsByBatch(
+  operations: readonly ApprovalOperation[],
+): ApprovalBatch[] {
+  const byBatch = new Map<string, ApprovalBatch>();
+  for (const operation of operations) {
+    const batch = byBatch.get(operation.batchId);
+    if (batch) {
+      batch.operations.push(operation);
+    } else {
+      byBatch.set(operation.batchId, {
+        batchId: operation.batchId,
+        actionName: operation.actionName,
+        createdAt: operation.createdAt,
+        operations: [operation],
+      });
+    }
+  }
+  return [...byBatch.values()];
+}
+
 export interface ApprovalsResponse {
   operations: ApprovalOperation[];
   pendingCount: number;
