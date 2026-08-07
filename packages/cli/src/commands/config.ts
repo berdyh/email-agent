@@ -1,41 +1,34 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { loadSettings, saveSettings } from "@email-agent/core";
+import {
+  getNestedConfigValue,
+  loadSettings,
+  saveSettings,
+  setNestedConfigValue,
+  UnsafeConfigPathError,
+} from "@email-agent/core";
 import type { AppConfig } from "@email-agent/core";
 
 /**
- * Get a nested value from an object using a dotted key path.
+ * The dotted-path helpers are CORE's (`config/dotted-path.ts`), not local
+ * copies. The copies that used to sit here refused nothing, so
+ * `config set __proto__.x true` wrote to `Object.prototype` in this process —
+ * not currently exploitable (see the guard's own header for why that depends on
+ * a property of `normalizeSettings`, not of this command), but the guard had no
+ * caller at all until now. The local `setNestedValue` also had a latent bug the
+ * shared one does not: `typeof null === "object"`, so a null intermediate was
+ * walked into rather than replaced.
  */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  const keys = path.split(".");
-  let current: unknown = obj;
-  for (const key of keys) {
-    if (current === null || current === undefined || typeof current !== "object") {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
 
-/**
- * Set a nested value on an object using a dotted key path.
- */
-function setNestedValue(
-  obj: Record<string, unknown>,
-  path: string,
-  value: unknown,
-): void {
-  const keys = path.split(".");
-  let current: Record<string, unknown> = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const key = keys[i]!;
-    if (current[key] === undefined || typeof current[key] !== "object") {
-      current[key] = {};
-    }
-    current = current[key] as Record<string, unknown>;
-  }
-  current[keys[keys.length - 1]!] = value;
+/** Turns a refused path into one line, rather than a stack trace. */
+function reportUnsafePath(err: UnsafeConfigPathError): void {
+  console.error(chalk.red(err.message));
+  console.error(
+    chalk.yellow(
+      `The offending segment is "${err.segment}". Config keys address settings, ` +
+        `not the JavaScript prototype chain.`,
+    ),
+  );
 }
 
 /**
@@ -69,7 +62,14 @@ export function registerConfig(program: Command) {
     .description("Read a config value (e.g. ui.fetchScope)")
     .action(async (key: string) => {
       const settings = await loadSettings();
-      const value = getNestedValue(settings as unknown as Record<string, unknown>, key);
+      let value: unknown;
+      try {
+        value = getNestedConfigValue(settings as unknown as Record<string, unknown>, key);
+      } catch (err) {
+        if (!(err instanceof UnsafeConfigPathError)) throw err;
+        reportUnsafePath(err);
+        process.exit(1);
+      }
       if (value === undefined) {
         console.error(chalk.red(`Key "${key}" not found`));
         process.exit(1);
@@ -97,13 +97,20 @@ export function registerConfig(program: Command) {
 
       const settings = await loadSettings();
       const obj = settings as unknown as Record<string, unknown>;
-      setNestedValue(obj, key, parseValue(rawValue));
+      try {
+        // Throws BEFORE touching `obj`, so a refused write changes nothing.
+        setNestedConfigValue(obj, key, parseValue(rawValue));
+      } catch (err) {
+        if (!(err instanceof UnsafeConfigPathError)) throw err;
+        reportUnsafePath(err);
+        process.exit(1);
+      }
       await saveSettings(obj as unknown as AppConfig);
 
       // saveSettings normalizes, so report what was actually stored rather
       // than echoing a value that silently did not take effect.
       const stored = await loadSettings();
-      const effective = getNestedValue(
+      const effective = getNestedConfigValue(
         stored as unknown as Record<string, unknown>,
         key,
       );
