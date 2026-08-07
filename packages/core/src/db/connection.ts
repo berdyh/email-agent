@@ -1,6 +1,5 @@
 import { connect, type Connection } from "@lancedb/lancedb";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import {
   Schema,
   Field,
@@ -10,18 +9,15 @@ import {
   Int32,
   FixedSizeList,
 } from "apache-arrow";
-import { DATA_DIR, LANCEDB_DIR } from "../config/defaults.js";
+import { LANCEDB_DIR } from "../config/defaults.js";
 import { VECTOR_DIMENSION } from "../shared/vector.js";
-import { ensurePendingOperationsTable } from "./pending-operations-migration.js";
-
-/**
- * Where interrupted-migration snapshots and the migration lock live.
- *
- * Deliberately a sibling of `LANCEDB_DIR`, not a child: LanceDB owns the
- * contents of its own directory, and a stray `.json` there is at best noise in
- * `tableNames()` and at worst something a future version cleans up.
- */
-export const MIGRATION_STATE_DIR = join(DATA_DIR, "migrations");
+import { ensureTableColumns } from "./migrations.js";
+import {
+  actionResultsTable,
+  clustersTable,
+  emailsTable,
+  pendingOperationsTable,
+} from "./schema.js";
 
 let dbPromise: Promise<Connection> | null = null;
 
@@ -87,88 +83,109 @@ const clusterSchema = new Schema([
   vectorField("centroid"),
 ]);
 
+export const pendingOperationSchema = new Schema([
+  new Field("id", new Utf8()),
+  new Field("batchId", new Utf8()),
+  new Field("actionId", new Utf8()),
+  new Field("actionName", new Utf8()),
+  new Field("accountId", new Utf8()),
+  new Field("emailId", new Utf8()),
+  new Field("type", new Utf8()),
+  new Field("labelIds", new Utf8()),
+  new Field("status", new Utf8()),
+  new Field("error", new Utf8()),
+  new Field("claimToken", new Utf8()),
+  new Field("createdAt", new Utf8()),
+  new Field("claimedAt", new Utf8()),
+  new Field("resolvedAt", new Utf8()),
+]);
+
+// ---------------------------------------------------------------------------
+// Migration defaults.
+//
+// One rule for all three maps: the SQL here must produce EXACTLY the value a
+// fresh insert writes for that column, so a migrated row is indistinguishable
+// from one written today. For `pending_operations` that means a queued row
+// comes back queued and unclaimed — `claimToken`/`claimedAt`/`resolvedAt` are
+// "" — and is never silently promoted to approved.
+//
+// Only columns added after their table shipped appear here. A table missing a
+// column with no entry is not a legacy shape we recognise, and
+// `buildColumnAdditions` refuses it rather than filling NULL.
+// ---------------------------------------------------------------------------
+
+/** `""` is the documented legacy/gcloud-ADC account sentinel (see `db/MODULE.md`). */
+const emailColumnDefaults: Record<string, string> = {
+  accountId: "CAST('' AS STRING)",
+};
+
+/** `""` is the unscoped sentinel, matching `ActionResultRecord.accountId`. */
+const actionResultColumnDefaults: Record<string, string> = {
+  accountId: "CAST('' AS STRING)",
+};
+
+const pendingOperationColumnDefaults: Record<string, string> = {
+  actionId: "CAST('' AS STRING)",
+  actionName: "CAST('' AS STRING)",
+  accountId: "CAST('' AS STRING)",
+  labelIds: "CAST('[]' AS STRING)",
+  error: "CAST('' AS STRING)",
+  claimToken: "CAST('' AS STRING)",
+  claimedAt: "CAST('' AS STRING)",
+  resolvedAt: "CAST('' AS STRING)",
+};
+
 let initPromise: Promise<void> | null = null;
 
 export function initDb(): Promise<void> {
-  // Cache the in-flight migration promise (mirroring getDb) so concurrent
-  // callers share a single init pass instead of racing the drop/create
-  // sequence. Clear on rejection so a later caller can retry.
+  // Cache the in-flight promise (mirroring getDb) so concurrent callers share a
+  // single pass. Clear on rejection so a later caller can retry.
   //
-  // This is a module-local promise, so it serializes callers within ONE
-  // process and nothing more. Cross-process serialization of the
-  // `pending_operations` migration is the on-disk lock in
-  // `ensurePendingOperationsTable`; the `emails` and `action_results`
-  // migrations below have neither that nor a durable backup (see TODOS.md).
+  // This is module-local, so it serializes callers within ONE process. Nothing
+  // serializes a `serve` against a CLI run — and nothing needs to. Each table's
+  // migration is a single `addColumns` MVCC commit: the loser of a race fails
+  // with "column already exists" and `ensureTableColumns` re-probes and accepts
+  // the winner's commit. No table is ever dropped, so there is no window in
+  // which a concurrent write can be lost to one.
   if (!initPromise) {
-    initPromise = runInit().catch((err) => {
-      initPromise = null;
-      throw err;
-    });
+    initPromise = getDb()
+      .then(migrateSchema)
+      .catch((err) => {
+        initPromise = null;
+        throw err;
+      });
   }
   return initPromise;
 }
 
-async function runInit(): Promise<void> {
-  const conn = await getDb();
-  const tableNames = await conn.tableNames();
-
-  if (!tableNames.includes("emails")) {
-    await conn.createEmptyTable("emails", emailSchema);
-  } else {
-    // Migration: ensure accountId column exists
-    const emailsTable = await conn.openTable("emails");
-    const existingSchema = await emailsTable.schema();
-    const hasAccountId = existingSchema.fields.some(
-      (f: { name: string }) => f.name === "accountId",
-    );
-    if (!hasAccountId) {
-      console.warn(
-        "Migrating emails table: adding accountId column. Existing emails will need to be re-fetched.",
-      );
-      await conn.dropTable("emails");
-      await conn.createEmptyTable("emails", emailSchema);
-    }
-  }
-
-  if (!tableNames.includes("action_results")) {
-    await conn.createEmptyTable("action_results", actionResultSchema);
-  } else {
-    // Migration: ensure accountId column exists (LanceDB has no ALTER TABLE)
-    const actionResults = await conn.openTable("action_results");
-    const existingSchema = await actionResults.schema();
-    const hasAccountId = existingSchema.fields.some(
-      (f: { name: string }) => f.name === "accountId",
-    );
-    if (!hasAccountId) {
-      console.warn(
-        "Migrating action_results table: adding accountId column. Existing action results will be preserved with an empty (legacy/unscoped) accountId.",
-      );
-      // Unlike emails, action results cannot be re-fetched — preserve every
-      // legacy row. Read them before the drop, then re-insert with the
-      // unscoped accountId sentinel ("") under the new schema.
-      const legacyRows = (await actionResults
-        .query()
-        .toArray()) as unknown as Array<Record<string, unknown>>;
-      await conn.dropTable("action_results");
-      const migrated = await conn.createEmptyTable(
-        "action_results",
-        actionResultSchema,
-      );
-      if (legacyRows.length > 0) {
-        await migrated.add(
-          legacyRows.map((row) => ({ ...row, accountId: "" })),
-        );
-      }
-    }
-  }
-
-  if (!tableNames.includes("clusters")) {
-    await conn.createEmptyTable("clusters", clusterSchema);
-  }
-
-  // `pending_operations` carries the audit trail of Gmail mutations that
-  // really happened, so its drop/recreate migration is the one that must
-  // survive a crash. It owns its own module: durable pre-drop snapshot,
-  // startup recovery from a leftover snapshot, and a cross-process lock.
-  await ensurePendingOperationsTable(conn, MIGRATION_STATE_DIR);
+/**
+ * Brings every table to its current schema, adding missing columns in place.
+ *
+ * Exported so tests can drive the real sequence against a temp-directory
+ * connection — `initDb()` is `getDb()` + this, and the only thing it adds is
+ * where the database lives.
+ *
+ * `emails` migrates in place like the others, deliberately. It is the one table
+ * whose rows are re-fetchable from Gmail, so drop-and-recreate would not be
+ * *unrecoverable* — but every row also carries an embedding vector that costs a
+ * paid API call to regenerate, and "" is already the documented legacy account
+ * sentinel, so the in-place path is both cheaper and simpler. It also leaves
+ * the codebase with zero drop-and-recreate migrations, which is what keeps the
+ * rule from eroding back into one.
+ */
+export async function migrateSchema(conn: Connection): Promise<void> {
+  await ensureTableColumns(conn, emailsTable, emailSchema, emailColumnDefaults);
+  await ensureTableColumns(
+    conn,
+    actionResultsTable,
+    actionResultSchema,
+    actionResultColumnDefaults,
+  );
+  await ensureTableColumns(conn, clustersTable, clusterSchema, {});
+  await ensureTableColumns(
+    conn,
+    pendingOperationsTable,
+    pendingOperationSchema,
+    pendingOperationColumnDefaults,
+  );
 }
