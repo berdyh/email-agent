@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { AgentExecutor, AgentRequest, AgentResult } from "./types.js";
+import { codexTotalTokens, type CodexUsageLike } from "./tokens.js";
 
 /** CODEX_* vars that carry auth/config and must survive env cleaning. */
 const CODEX_KEEP = new Set(["CODEX_HOME", "CODEX_API_KEY"]);
@@ -43,6 +44,17 @@ export interface CodexParseResult {
  * The current shape is primary; the legacy `msg` envelope is the fallback.
  * Non-JSON lines are treated as plain-text output and only surfaced if no
  * agent_message events were parsed (so raw event-log JSON is never returned).
+ *
+ * `tokensUsed` follows the canonical definition in `tokens.js` (all input + all
+ * output). Note the ~21k baseline: codex sends its own system prompt, tool
+ * definitions and skill descriptions on every request, so even a one-word reply
+ * legitimately costs tens of thousands of tokens. That is a real cost signal,
+ * not an accounting artefact.
+ *
+ * The legacy `token_count` / `total_token_usage.total_tokens` branch has never
+ * been observed on a live run (codex-cli 0.145.0 emits no `msg` envelope at
+ * all); it is retained as a best-effort fallback for older CLIs and its
+ * semantics are unverified.
  */
 export function parseCodexOutput(stdout: string): CodexParseResult {
   const lines = stdout.trim().split("\n").filter(Boolean);
@@ -75,17 +87,23 @@ export function parseCodexOutput(stdout: string): CodexParseResult {
       continue;
     }
 
-    // Current shape: {"type":"turn.completed","usage":{"input_tokens":N,"output_tokens":M}}
+    // Current shape (verified live against codex-cli 0.145.0):
+    //   {"type":"turn.completed","usage":{
+    //      "input_tokens":21403,"cached_input_tokens":5888,
+    //      "cache_write_input_tokens":0,"output_tokens":5,
+    //      "reasoning_output_tokens":0}}
+    //
+    // `cached_input_tokens` is a SUBSET of `input_tokens`, not an addition —
+    // verified by a delta test: adding ~4,000 tokens of filler to the prompt
+    // moved input_tokens 21,403 -> 25,412 (+4,009), tracking the prompt 1:1
+    // while output stayed at 5. Summing the cached field in would double-count
+    // and is what produced the old "27,124 tokens for a one-word reply" figure.
+    // `reasoning_output_tokens` is likewise treated as a subset of
+    // `output_tokens` (both were 0 in the observed runs — see TODOS.md).
     if (record["type"] === "turn.completed") {
-      const usage = record["usage"] as
-        | { input_tokens?: number; output_tokens?: number }
-        | undefined;
-      const input =
-        typeof usage?.input_tokens === "number" ? usage.input_tokens : 0;
-      const output =
-        typeof usage?.output_tokens === "number" ? usage.output_tokens : 0;
-      if (input || output) {
-        tokensUsed = input + output;
+      const total = codexTotalTokens(record["usage"] as CodexUsageLike);
+      if (total > 0) {
+        tokensUsed = total;
       }
       continue;
     }

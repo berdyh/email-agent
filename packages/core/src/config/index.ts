@@ -1,3 +1,15 @@
-export { type AppConfig, type AgentMode, type AgentId, type GmailSyncConfig, type AccountConfig } from "./types.js";
+export {
+  type AppConfig,
+  type AgentMode,
+  type AgentId,
+  type GmailSyncConfig,
+  type RetentionConfig,
+  type AccountConfig,
+} from "./types.js";
 export { defaultConfig } from "./defaults.js";
-export { loadSettings, saveSettings, normalizeSettings } from "./settings.js";
+export {
+  loadSettings,
+  saveSettings,
+  normalizeSettings,
+  clearSettingsCache,
+} from "./settings.js";

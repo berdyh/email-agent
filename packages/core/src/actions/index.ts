@@ -9,6 +9,10 @@ export type {
 } from "./types.js";
 export {
   enqueueOperations,
+  enqueueOperationsDetailed,
+  operationDedupeKey,
+  selectNewOperationIndexes,
+  type EnqueueOperationsResult,
   toPendingOperationRecords,
   recordToGmailOperation,
   parseLabelIds,
@@ -16,10 +20,19 @@ export {
   isDestructiveOperation,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
+  chunkList,
+  mergeApplyResults,
+  toOperationOutcomes,
+  resolveRetentionCutoff,
+  APPLY_RESOLUTION_CHUNK_SIZE,
   type EnqueueOperationsInput,
 } from "./approval.js";
 export { ActionRegistry } from "./registry.js";
-export { ActionRunner } from "./runner.js";
+export {
+  ActionRunner,
+  describeAutoApplyFailure,
+  describeUnrecordedBatchFailure,
+} from "./runner.js";
 export { builtInActions } from "./built-in/index.js";
 // `applyOperations` (./apply.js) is deliberately NOT exported: it mutates
 // Gmail without an approval-queue row, so a public export is a one-import

@@ -25,6 +25,36 @@ describe("parseCodexOutput", () => {
     assert.equal(result.tokensUsed, 20);
   });
 
+  it("counts input+output on the real live usage shape, excluding cached", () => {
+    // Recorded verbatim from `codex exec --json` (codex-cli 0.145.0); the whole
+    // answer was the word "pong".
+    const stdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "t1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_1", type: "agent_message", text: "pong" },
+      }),
+      JSON.stringify({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 21403,
+          cached_input_tokens: 5888,
+          cache_write_input_tokens: 0,
+          output_tokens: 5,
+          reasoning_output_tokens: 0,
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCodexOutput(stdout);
+    assert.equal(result.text, "pong");
+    // input + output. cached_input_tokens is a subset of input_tokens —
+    // verified by a live delta test — so adding it would double-count.
+    assert.equal(result.tokensUsed, 21408);
+    assert.notEqual(result.tokensUsed, 27296);
+  });
+
   it("ignores non-agent item.completed events (e.g. reasoning)", () => {
     const stdout = [
       JSON.stringify({
