@@ -208,6 +208,23 @@ the codex (gpt-5.6-sol xhigh) review of PR #8, 2026-08-07, which found the
 branch describing these as fixed. Deferred here because a concurrent branch
 owns `packages/web/**` and `packages/cli/**`.
 
+### Concurrent applies over one batch are not serialized
+**Priority:** P3
+`applyPendingOperationsByIds` claims per chunk, so the set a crash can strand
+in `applying` is bounded by one chunk **per in-flight caller** — not one chunk
+per batch. Two concurrent applies leapfrog: A claims ids 1-10 and starts
+calling Gmail; B loses those to A's claim, does not stop, and claims 11-20
+while A is still in flight. A process death now leaves twenty rows claimed.
+The bound is now qualified as per-call in the code comment, both root memory
+files, the actions module card and here, and pinned by a regression test in
+`actions/approval.test.ts`. Making it "one chunk, full stop" needs
+batch-level serialization of applies (a lock keyed on `batchId`), which was
+not done: the realistic trigger is a user approving the same batch from the
+web and the CLI at the same moment, and the consequence is stranded rows that
+`getStaleApplyingOperations()` can already list, not a mutation without
+approval.
+Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
+
 ### Enqueue dedupe is best-effort, not race-free
 **Priority:** P3
 `enqueueOperationsDetailed` is a check-then-insert: it reads the still-pending
@@ -218,6 +235,14 @@ queue shows duplicate pending proposals for the same change and permits both
 to be applied. Documented as best-effort everywhere it is described; do not
 restate it as a uniqueness guarantee.
 
+**Severity depends on auto-apply, and the earlier wording understated it.**
+With the approval gate on (the default) the duplicate is a redundant proposal
+the user can see and reject — benign. With `gmail.autoApplyActions` on, each
+racing runner immediately applies its own queued ids, so neither duplicate is
+ever pending for review and **Gmail receives both calls** for the same change.
+There is nothing to reject. Do not describe this as "a duplicate the user can
+reject" without naming that case.
+
 Not fixed, deliberately. LanceDB's only insert-if-absent primitive is
 `mergeInsert(on).whenNotMatchedInsertAll()`, which matches on column equality
 alone and cannot express "insert unless a matching row is PENDING". Keying on
@@ -225,10 +250,11 @@ the dedupe identity would suppress re-proposals after a rejection or an apply
 — and a suppressed re-proposal is invisible, leaving the user nothing to act
 on, which is strictly worse than a duplicate they can see and reject. Fixing
 it properly needs either a `pending`-scoped uniqueness mechanism LanceDB does
-not offer, or an application-level lock around enqueue (the migration lock in
-`db/migration-lock.ts` is the same primitive and could be reused per
-`batchId`'s email set, at the cost of a filesystem lock per run). Do not
-weaken the PENDING scoping to get it.
+not offer, or an application-level lock around enqueue, at the cost of a
+filesystem lock per run. (`db/migration-lock.ts` used to be exactly that
+primitive and is deleted — the migrations no longer need a lock. Do not
+resurrect it speculatively; write it here if and when this is actually
+fixed.) Do not weaken the PENDING scoping to get it.
 Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 
 ### The retention window has no surface
@@ -254,49 +280,15 @@ exactly the rows `buildPruneFilter` selects, and that
 Belongs to the integration harness below.
 
 Two of the original items here are now genuinely covered and should not be
-re-listed: the `pending_operations` drop/recreate migration runs against a
-real temp-directory LanceDB in `db/pending-operations-migration.test.ts`
-(including a crash injected after the drop, and recovery from a leftover
-snapshot in all four post-crash table states), and the chunked apply's
-claim/apply/resolve ordering is pinned in `actions/approval.test.ts` through
-injected dependencies.
+re-listed: every table's migration runs against a real temp-directory LanceDB
+in `db/schema-migration.test.ts` (legacy `pending_operations`, `action_results`
+and `emails` shapes, rows in `applied`/`rejected`/`failed`/`applying`, both
+halves of a concurrent-init race, and a refusal that leaves rows intact), and
+the chunked apply's claim/apply/resolve ordering — including the per-call
+scope of the stranded-chunk bound — is pinned in `actions/approval.test.ts`
+through injected dependencies.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); narrowed after the
 PR #8 review pass, 2026-08-07.
-
-### `action_results` migrates with no snapshot and no lock
-**Priority:** P2
-`runInit()` in `db/connection.ts` still migrates `action_results` the naive
-way: read every row, `dropTable`, `createEmptyTable`, `add`. That is exactly
-the sequence that was found unrecoverable for `pending_operations` — a crash
-or a failing `add()` after the drop loses every row, and the retry sees a
-current-schema table and skips recovery. Action results are not
-reconstructable (the agent run that produced them is gone), so this is real
-data loss, just less severe than losing the Gmail-mutation audit trail.
-`emails` has the same shape but is re-fetchable, so it is fine as is.
-The machinery already exists and is table-agnostic:
-`db/table-backup.ts` (`writeTableBackup` / `readTableBackup` /
-`mergeRowsById`) and `db/migration-lock.ts` (`withMigrationLock`).
-`db/pending-operations-migration.ts` is the template — generalize it to take
-a table name, an Arrow schema and a defaults map, then point both callers at
-it.
-Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
-
-### Ordinary queue writes ignore the migration lock
-**Priority:** P3
-`withMigrationLock` serializes *migrations* against each other, which is the
-catastrophic case (two processes running drop/recreate over one table). It
-does not make the table safe to write during a migration: `savePendingOperations`,
-`claimPendingOperations` and `resolveClaimedOperations` do not take the lock,
-because a filesystem lock on every queue write is too costly. So a process
-already past `initDb()` can write into the drop window and lose that write.
-The durable snapshot bounds the damage — recovery merges the snapshot with
-whatever the table holds — but a write landing strictly between the snapshot
-and the drop is gone. Closing it needs either migration-aware write paths (a
-shared/exclusive lock, read side held only for the duration of one write) or
-a startup barrier that refuses queue writes until init completes across
-processes. Note the realistic exposure is small: the window exists only on
-the first start after a schema-changing upgrade.
-Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 
 ### Tighten the two fields declared optional for the surfaces' benefit
 **Priority:** P4
@@ -314,30 +306,20 @@ Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 The claim/lease design is correct **if** two concurrent `table.update()` calls
 on the same rows (a CLI run and a `serve` process) cannot both commit — i.e. if
 LanceDB either errors on commit conflict or re-evaluates the predicate for the
-loser. That behaviour was not confirmed against the local-filesystem backend, so
-the guarantee the whole gate rests on is currently assumed. Confirm it against
-the installed version (a two-process test, or reading the Rust commit-conflict
-path), and write down the answer.
-Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
-read-only review).
+loser. That behaviour is still not confirmed against the local-filesystem
+backend, so the guarantee the whole gate rests on is currently assumed.
 
-### The action_results migration has never met a real legacy table
-**Priority:** P2
-`initDb` drops and recreates `action_results` when the `accountId` column is
-missing, and now reads every legacy row first and re-inserts it with
-`accountId: ""` so history survives (LanceDB has no ALTER TABLE). That
-read→drop→recreate→reinsert path was reasoned through and unit-tested around,
-but never run against an actual pre-column table — and the failure mode it
-guards against is exactly the one it could cause: losing every past action run.
-Build a fixture with the old schema and exercise it before an upgrade does.
-The `pending_operations` migration now runs the same shape through the pure
-helpers in `db/migrations.ts` (`missingColumns` + `projectRowsToSchema`), which
-also strip columns the current schema no longer declares; `action_results`
-still does its own `{ ...row, accountId: "" }` spread. Adopting the shared
-helpers would make one fixture cover both — deliberately not done in wave 1,
-because changing an untested migration that can lose every past action run is
-not a free refactor.
-Found by: Codex pre-merge review, 2026-08-06.
+Adjacent evidence exists now and must NOT be mistaken for an answer. Two
+processes calling `Table.addColumns()` on the same table were tested against
+the installed 0.15.0 (five forked runs): one commits, the loser fails with
+"Column already exists in the dataset", and no row is lost in any
+interleaving. That shows Lance commits are conflict-checked for a *schema*
+operation. It says nothing about whether two `update()` commits with
+overlapping predicates can both land, which is a different conflict class.
+Confirm the `update()` case specifically — a two-process test over one row, or
+the Rust commit-conflict path — and write down the answer.
+Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
+read-only review); narrowed 2026-08-07 after the addColumns concurrency probe.
 
 ### action_results `accountId: ""` carries two meanings
 **Priority:** P3
@@ -534,6 +516,113 @@ classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
 
+### The `pending_operations`/`action_results`/`emails` migrations, and the machinery built for a drop that was never necessary
+**Completed:** feature/todos-w1-queue (2026-08-07)
+Closes four entries at once — not by hardening them, but because the premise
+under all of them was false.
+
+Every migration in `db/connection.ts` was built on one sentence, stated in
+the root memory files and repeated in the header of every migration file:
+**"LanceDB has no ALTER TABLE — drop and recreate."** It is not true of the
+installed version. `@lancedb/lancedb` **0.15.0** exposes
+`Table.addColumns(AddColumnsSql[])`, `alterColumns` and `dropColumns`
+(`node_modules/@lancedb/lancedb/dist/table.d.ts:251,257,269`), and running
+them against the real native binary (`lance` 0.22.0) on a legacy-shaped table
+shows `addColumns` adds a column in place with every row preserved, the new
+column immediately updatable and filterable, and an Arrow type exactly
+matching what the CAST names for Utf8, Int32 and Bool — including nullability.
+
+So the mechanism was swapped rather than hardened. All four tables now go
+through one path: probe with `missingColumns()`, then `ensureTableColumns()`
+(`db/migrations.ts`) calls `addColumns` with per-table sentinels that produce
+exactly what a fresh insert writes. Nothing is dropped, so there is nothing
+for a crash to destroy, and the failure mode that made the drop unrecoverable
+— a retry seeing a fresh current-schema table and concluding there was nothing
+to migrate — cannot arise.
+
+Closed by this:
+- **`pending_operations` migrates without a drop** (was the crash-recoverable
+  migration). The durable snapshot, the cross-process `mkdir` lock and the
+  merge-by-id replay are gone: 975 lines across `db/table-backup.ts`,
+  `db/migration-lock.ts`, `db/pending-operations-migration.ts` and its test.
+  Two review rounds had found real defects inside that subsystem (swallowed
+  fsync failures, a `mkdir` lock that can admit two owners, a replay window in
+  which a lost claim lets a Gmail mutation apply twice); a third hardening
+  pass would have been hardening the wrong mechanism.
+- **`action_results` migrates with no snapshot and no lock** (was P2). It no
+  longer drops. The follow-up written here — "generalize the snapshot
+  machinery to `action_results`" — is **deleted, not done**: the machinery it
+  would have generalized does not exist any more and should not be rebuilt.
+- **The `action_results` migration has never met a real legacy table** (was
+  P2). It has now. `db/schema-migration.test.ts` builds real
+  temp-directory LanceDB tables in the OLD shape and runs the real
+  `migrateSchema()` — the whole of `initDb()` bar which directory the database
+  lives in — over legacy `pending_operations` (rows in `applied`, `rejected`,
+  `failed`, `applying` and `pending`), legacy `action_results` (Int32 columns
+  intact) and legacy `emails` (embedding vector intact).
+- **Ordinary queue writes ignore the migration lock** (was P3). There is no
+  lock and no drop window, so there is no write to lose to one.
+
+`emails` migrates in place too, deliberately. Its rows are re-fetchable from
+Gmail, so a drop would not have been unrecoverable — but each row carries an
+embedding that costs a paid API call to rebuild, `""` is already the
+documented legacy account sentinel, and leaving zero drop-and-recreate
+migrations in the tree is what stops the rule eroding back into one.
+
+Concurrency, observed rather than reasoned: five forked two-process runs of
+`addColumns` over one table give one commit and one loud "Column already
+exists" failure, with every row surviving in every interleaving.
+`createEmptyTable` behaves the same way on a brand-new database ("Table
+already exists"). `ensureTableColumns` re-probes the table's current schema
+after either failure and only treats it as somebody else's success when the
+columns are genuinely there — it never reads "the call failed" as "somebody
+else did it". This is strictly better than the lock design achieved, and it
+needs no lock at all.
+
+Two limits, stated because they are real: `addColumns` APPENDS, so a migrated
+table's column order differs from a fresh one (nothing resolves columns
+positionally); and a `FixedSizeList` vector column cannot be produced this way
+(`CAST(NULL AS FLOAT)` yields a scalar). No table needs one added after the
+fact today.
+
+**The lesson, which is the point of this entry.** A capability claim about a
+dependency is a fact with a version attached. It must be re-checked against
+the installed package — the `.d.ts` in `node_modules`, and a throwaway script
+against the real binary — not inherited from a comment. One wrong sentence in
+a memory file generated days of unnecessary and defect-prone machinery, and
+every review round that followed audited the machinery instead of the claim
+underneath it. The verified facts are now recorded WITH the version they were
+verified against (0.15.0 / lance 0.22.0, 2026-08-07) in both root memory files
+and in the header of `db/migrations.ts`, so the next person knows exactly what
+to re-check on an upgrade.
+
+### Settings that could not be read were treated as settings that did not exist
+**Completed:** feature/todos-w1-queue (2026-08-07)
+Was HIGH. `readSettingsBytes` caught every error from `readFile` and returned
+null, so EACCES, EIO and ENOTDIR all resolved to "the user has no settings
+file" and therefore to the built-in defaults. One of those defaults destroys
+data: `retention.approvalQueueDays` defaults to 365 while the explicit opt-out
+is 0, and the post-approval sweep in `actions/approval.ts` reads it. A user
+who set 0 to keep their approval audit trail forever would have had rows
+deleted the first time the file was momentarily unreadable — an irreversible
+action taken because we could not read the instruction saying not to.
+
+ENOENT alone now means "absent, first run, defaults are right". Every other
+errno throws with the errno and the path. A file that exists but does not
+parse throws for the same reason: unparsable is not evidence that the user
+configured nothing. Tested against real filesystem failures rather than
+malformed strings — a directory where a file is expected (EISDIR), a file used
+as a path component (ENOTDIR), and chmod 000 (EACCES, skipped only under
+root).
+
+Follow-on, in the same wave: the runner read the auto-apply toggle from inside
+the try that populates `applyError`, so a settings-read failure would have been
+reported as "some Gmail changes may already have been applied" for a batch
+where nothing was claimed and no Gmail call was made. The read moved outside
+that try; when it fails, auto-apply is not attempted and the batch stays
+queued, which makes every surface's "N changes await your approval" literally
+true.
+
 ### loadSettings cache made the auto-apply kill switch stale
 **Completed:** feature/todos-w1-queue (2026-08-07)
 Was P1. `loadSettings()` cached the parsed config for the life of the process,
@@ -701,20 +790,32 @@ Nine entries closed together because they are one path. In queue order:
   cross-process `mkdir` lock (stale after 5 min, 60 s wait, then throw rather
   than migrate unlocked) serializes migrations; the fast path — no snapshot,
   table already current — takes no lock at all.
+
+  **SUPERSEDED, same day.** All of the above is deleted. The drop it was
+  built to survive was never necessary: LanceDB 0.15.0 has `addColumns`, and
+  the column is now added in place with every row preserved. See "The
+  `pending_operations`/`action_results`/`emails` migrations, and the
+  machinery built for a drop that was never necessary" at the top of this
+  section. Kept here only so the sequence of decisions is readable — do not
+  treat this paragraph as describing current code.
   Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 - **Column-probe self-heal for pending_operations** (was P3). Generalized
   from "is `claimToken` there" to "which of the current schema's columns are
   missing", so the next added column is handled by construction. The
   projection also strips columns the current schema no longer declares, which
-  the `action_results` path does not do.
+  the `action_results` path does not do. (The probe survived the mechanism
+  swap and is still `missingColumns()`; the projection did not — `addColumns`
+  rewrites no rows, so nothing needs projecting, and a column the schema no
+  longer declares is now left in place rather than dropped.)
 - **`resolvePendingOperations` dead code** (was P3). Deleted rather than
   un-exported: it resolved on a bare `status = 'pending'` predicate, so the
   next caller would have reintroduced the claim race, and an "internal"
   marker is only a comment.
 
-Test coverage, stated exactly. The `pending_operations` migration and its
-crash recovery run against a real temp-directory LanceDB
-(`db/pending-operations-migration.test.ts`), and the chunked apply's
+Test coverage, stated exactly. Every table's migration runs against a real
+temp-directory LanceDB (`db/schema-migration.test.ts`, which replaced
+`db/pending-operations-migration.test.ts` when the mechanism was swapped), and
+the chunked apply's
 claim/apply/resolve ordering is pinned through injected dependencies
 (`actions/approval.test.ts`). Everything else is pure-helper only — filters,
 projections, the dedupe key, the age rule, the retention cutoff. The
