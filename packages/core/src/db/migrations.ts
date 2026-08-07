@@ -124,6 +124,7 @@ function isTableNotFound(err: unknown): boolean {
   return err instanceof Error && /was not found/i.test(err.message);
 }
 
+
 /**
  * `conn.openTable`, but tolerant of a table another process is still committing.
  *
@@ -140,9 +141,16 @@ function isTableNotFound(err: unknown): boolean {
  *     rather than as a timeout.
  *
  * Exhausting the ladder while the name is still listed is NOT treated as
- * success and not silently swallowed: it means a directory exists that no
- * process is committing — a create that died half-way — and it throws saying
- * exactly that.
+ * success and not silently swallowed: a directory exists that no process is
+ * committing, and it throws saying so.
+ *
+ * What that error must NOT do is guess WHY. An interrupted `createEmptyTable`
+ * leaves an empty directory — but a table whose `_versions` manifests were lost
+ * AFTER rows were written presents identically from here (listed, "was not
+ * found") while its directory still holds those rows. `Connection` exposes no
+ * path to tell them apart, so the message states both possibilities and tells
+ * the user to look, rather than calling the directory empty and sending someone
+ * to delete their own audit trail. It carries the original error as `cause`.
  */
 async function openCommitted(
   conn: Connection,
@@ -159,7 +167,8 @@ async function openCommitted(
       if (delay === undefined) {
         const waited = COMMIT_VISIBILITY_BACKOFF_MS.reduce((a, b) => a + b, 0);
         throw new Error(
-          `Table ${tableName} is listed by the database but still could not be opened after ${waited}ms. Its directory exists without a committed manifest, which means a create was interrupted part-way rather than another process being slow. Nothing was dropped; remove the empty ${tableName}.lance directory to let the next run recreate it.`,
+          `Table ${tableName} is listed by the database but still could not be opened after ${waited}ms, so no process is committing it. Nothing was dropped by this run. Inspect the ${tableName}.lance directory before removing it: an interrupted create leaves it empty and it is then safe to delete, but a table whose manifests were lost after rows were written looks identical from here and its data files are still inside.`,
+          { cause: err },
         );
       }
       await sleep(delay);
