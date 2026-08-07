@@ -18,7 +18,7 @@ import {
   Float32,
   FixedSizeList,
 } from "apache-arrow";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -375,7 +375,226 @@ describe("a table shape with no declared default", () => {
   });
 });
 
+// --------------------------------------------------------------------------
+// The create race, driven deterministically.
+//
+// HOW THE INTERLEAVING IS FORCED — no sleeps, no Promise.all, no luck:
+//
+// LanceDB's `tableNames()` enumerates the on-disk `*.lance` directories, and a
+// table's directory exists before its `_versions/1.manifest` is committed. So
+// `mkdir <db>/<table>.lance` puts the database in EXACTLY the state a process
+// caught mid-`createEmptyTable` leaves it in: the name is listed, and
+// `openTable` rejects it with `Table 'X' was not found` — the same message a
+// name that was never created produces. `halfCreated()` asserts both halves of
+// that precondition, so these tests fail loudly if a LanceDB upgrade changes
+// the state rather than quietly stopping to exercise the race.
+//
+// That alone gives the never-converges case. For the converges case, the
+// winner's commit is placed at a controlled point by `committingAtFirstOpen()`:
+// it lets the loser's FIRST `openTable` run against the genuinely uncommitted
+// table, keeps the genuine error LanceDB raised, commits the winner's table,
+// and only then rethrows. Attempt 1 therefore always fails against real
+// uncommitted state and attempt 2 always succeeds against real committed
+// state. The test controls only WHEN the winner commits — every error and
+// every table in play is LanceDB's own.
+// --------------------------------------------------------------------------
+
+/** Temp dirs holding the reference databases; torn down with the main one. */
+let scratchDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    scratchDirs.map((path) => rm(path, { recursive: true, force: true })),
+  );
+  scratchDirs = [];
+});
+
+/**
+ * The Arrow schema a fully-migrated database has for `table`, read back from a
+ * pristine one. Lets a test commit a "winner's" table at the current shape
+ * without the schemas having to be exported for the test's benefit.
+ */
+async function currentSchemaOf(table: string): Promise<Schema> {
+  const refDir = await mkdtemp(join(tmpdir(), "email-agent-reference-"));
+  scratchDirs.push(refDir);
+  const ref = await connect(refDir);
+  await migrateSchema(ref);
+  return (await ref.openTable(table)).schema();
+}
+
+/**
+ * Leaves `table` in the mid-`createEmptyTable` state: directory present, no
+ * committed manifest. Asserts the state is really what it claims to be.
+ */
+async function halfCreated(table: string): Promise<void> {
+  await mkdir(join(dir, `${table}.lance`), { recursive: true });
+  assert.ok(
+    (await conn.tableNames()).includes(table),
+    `precondition: a half-created ${table} must still be LISTED`,
+  );
+  await assert.rejects(
+    conn.openTable(table),
+    /was not found/,
+    `precondition: a half-created ${table} must NOT be openable`,
+  );
+}
+
+/**
+ * A `Connection` that commits `table` the first time an `openTable` for it
+ * fails — i.e. the winner's manifest lands between the loser's first and second
+ * attempt. `observed()` returns the real error the first attempt hit.
+ */
+function committingAtFirstOpen(
+  base: Connection,
+  table: string,
+  schema: Schema,
+): { conn: Connection; observed: () => Error | null } {
+  let fired = false;
+  let seen: Error | null = null;
+
+  const proxy = new Proxy(base, {
+    get(target, prop) {
+      if (prop === "openTable") {
+        return async (name: string): Promise<unknown> => {
+          if (name !== table || fired) return target.openTable(name);
+          fired = true;
+          try {
+            return await target.openTable(name);
+          } catch (err) {
+            seen = err as Error;
+          }
+          // The winner's createEmptyTable commits right here.
+          await target.createEmptyTable(name, schema);
+          throw seen;
+        };
+      }
+      const value = Reflect.get(target, prop) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Connection;
+
+  return { conn: proxy, observed: () => seen };
+}
+
+describe("a table another process is mid-way through creating", () => {
+  // One code path (`ensureTableColumns`) serves all four tables, which is why
+  // the failing name used to vary run to run. Covered as one path, four cases.
+  for (const table of [
+    emailsTable,
+    actionResultsTable,
+    clustersTable,
+    pendingOperationsTable,
+  ]) {
+    it(`converges on the winner's ${table} instead of throwing "not found"`, async () => {
+      const schema = await currentSchemaOf(table);
+      await halfCreated(table);
+
+      const winner = committingAtFirstOpen(conn, table, schema);
+      await migrateSchema(winner.conn);
+
+      const failure = winner.observed();
+      assert.ok(
+        failure !== null,
+        "the interleaving did not fire: no openTable failed, so the race was never exercised",
+      );
+      assert.match(
+        failure.message,
+        /was not found/,
+        "the forced failure must be LanceDB's own, not a fabricated one",
+      );
+
+      // Converged on the winner's table, at the current schema, and usable.
+      const names = await conn.tableNames();
+      assert.ok(names.includes(table));
+      assert.deepEqual(
+        [...(await columnsOf(table))].sort(),
+        schema.fields.map((f: { name: string }) => f.name).sort(),
+      );
+    });
+  }
+
+  it("keeps the rows when the loser retries a table that already had them", async () => {
+    // The other race direction, on a table with an audit trail to lose: the
+    // legacy pending_operations rows are already on disk, and the migration
+    // that adds the claim columns must still see all five after riding out a
+    // transient not-found.
+    await seedLegacyPendingOperations();
+    const schema = await conn
+      .openTable(pendingOperationsTable)
+      .then((t) => t.schema());
+
+    let fired = false;
+    const flaky = new Proxy(conn, {
+      get(target, prop) {
+        if (prop === "openTable") {
+          return async (name: string): Promise<unknown> => {
+            if (name === pendingOperationsTable && !fired) {
+              fired = true;
+              // Exactly the transient LanceDB raises mid-create, injected on a
+              // table that genuinely exists and is genuinely still listed.
+              throw new Error(`Table '${name}' was not found`);
+            }
+            return target.openTable(name);
+          };
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Connection;
+
+    await migrateSchema(flaky);
+    assert.ok(fired, "the transient was never injected");
+
+    const migrated = await rows(pendingOperationsTable);
+    assert.equal(migrated.length, 5, "no row may be lost to a retried open");
+    assert.deepEqual(
+      migrated.map((row) => `${row["id"]}:${row["status"]}`),
+      ["op-1:applied", "op-2:rejected", "op-3:pending", "op-4:failed", "op-5:applying"],
+    );
+    assert.ok(schema.fields.length < (await columnsOf(pendingOperationsTable)).length);
+  });
+
+  it("still fails loudly when nothing ever commits the table", async () => {
+    // A create that died half-way leaves a directory no process will finish.
+    // The bounded retry must run out and say so — not hang, and not pretend the
+    // table is fine.
+    await halfCreated(clustersTable);
+    await assert.rejects(
+      migrateSchema(conn),
+      /Table clusters is listed by the database but still could not be opened after \d+ms/,
+    );
+  });
+
+  it("rethrows a non-\"not found\" open failure immediately, unretried", async () => {
+    // A permissions or corruption failure is not a visibility race. Retrying it
+    // would turn a precise error into a timeout.
+    await seedLegacyPendingOperations();
+    let opens = 0;
+    const denied = new Proxy(conn, {
+      get(target, prop) {
+        if (prop === "openTable") {
+          return async (name: string): Promise<unknown> => {
+            if (name === pendingOperationsTable) {
+              opens++;
+              throw new Error("Permission denied reading pending_operations");
+            }
+            return target.openTable(name);
+          };
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Connection;
+
+    await assert.rejects(migrateSchema(denied), /Permission denied/);
+    assert.equal(opens, 1, "a non-transient failure must not be retried");
+  });
+});
+
 describe("two migrations racing over one table", () => {
+  // End-to-end smoke over two real connections. These hit the race by luck, so
+  // the deterministic suite above is what actually guards the regression; these
+  // exist to confirm the fix holds when the interleaving is not forced at all.
   it("loses no rows, and the loser accepts the winner's commit", async () => {
     await seedLegacyPendingOperations();
 
