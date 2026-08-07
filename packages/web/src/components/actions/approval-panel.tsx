@@ -19,6 +19,7 @@ import {
   describeRejectOutcome,
   describeStrandedAge,
   describeStrandedResolution,
+  groupOperationsByBatch,
 } from "@/modules/api/approvals-contract";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -302,25 +303,9 @@ export function ApprovalPanel() {
     });
   }, [operations, seen]);
 
-  const batches = useMemo(() => {
-    const byBatch = new Map<
-      string,
-      { actionName: string; createdAt: string; ops: ApprovalOperation[] }
-    >();
-    for (const op of operations) {
-      const batch = byBatch.get(op.batchId);
-      if (batch) {
-        batch.ops.push(op);
-      } else {
-        byBatch.set(op.batchId, {
-          actionName: op.actionName,
-          createdAt: op.createdAt,
-          ops: [op],
-        });
-      }
-    }
-    return [...byBatch.values()];
-  }, [operations]);
+  // The grouping itself lives in `approvals-contract.ts` and is unit-tested;
+  // this only memoises it.
+  const batches = useMemo(() => groupOperationsByBatch(operations), [operations]);
 
   // Never fail silent: the sidebar badge is served by a separate endpoint, so
   // rendering nothing here would tell the user "N changes await approval" while
@@ -426,7 +411,7 @@ export function ApprovalPanel() {
       </CardHeader>
       <CardContent className="space-y-4">
         {batches.map((batch) => (
-          <div key={batch.ops[0]!.batchId} className="rounded-md border">
+          <div key={batch.batchId} className="rounded-md border">
             <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
               <span className="text-sm font-medium">{batch.actionName}</span>
               <span className="text-xs text-muted-foreground">
@@ -434,7 +419,7 @@ export function ApprovalPanel() {
               </span>
             </div>
             <ul className="divide-y">
-              {batch.ops.map((op) => (
+              {batch.operations.map((op) => (
                 <li
                   key={op.id}
                   className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30"
