@@ -11,5 +11,9 @@ export {
   loadSettings,
   saveSettings,
   normalizeSettings,
+  // The single implementation of "autoApplyActions requires
+  // autoApplyAcknowledged". Exported so the web API boundary can enforce the
+  // same rule rather than its own copy of it.
+  normalizeAutoApplyConsent,
   clearSettingsCache,
 } from "./settings.js";

@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
-import type { AccountConfig, AppConfig, OAuthConfig } from "./types.js";
+import type {
+  AccountConfig,
+  AppConfig,
+  GmailAutoApplyConfig,
+  OAuthConfig,
+} from "./types.js";
 
 /**
  * A cached parse of one settings file, tagged with a hash of the exact bytes
@@ -21,6 +26,49 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/**
+ * THE consent invariant: **`autoApplyActions` requires `autoApplyAcknowledged`.**
+ *
+ * Auto-apply performs irreversible-feeling Gmail writes (trash, spam) with no
+ * further prompt, so the toggle is forced off unless the acknowledgement of its
+ * warnings is recorded alongside it. Revoking the acknowledgement disables the
+ * toggle again by the same expression. Both flags are coerced with `=== true`,
+ * so a truthy non-boolean out of a hand-edited settings.json or a JSON request
+ * body (`"true"`, `1`) does not arm anything.
+ *
+ * ONE IMPLEMENTATION, TWO CALL SITES — deliberately. The rule is enforced both
+ * here (every load and save goes through `normalizeSettings`) and again at the
+ * web API boundary, which is defense in depth worth keeping: a settings PUT that
+ * bypassed core normalization must still not be able to flip the toggle alone.
+ * What must NOT happen is the two drifting, which is why this is a shared export
+ * rather than a copy.
+ *
+ * INTENDED ADOPTION, not yet done (`packages/web` belongs to a concurrent
+ * branch; tracked in TODOS.md): `normalizeGmailConfig` in
+ * `packages/web/src/modules/api/validation.ts` is currently a hand-written
+ * duplicate of this function's body with the same signature, called from
+ * `mergeSettingsUpdate` and `sanitizeSettingsForResponse`. It should become a
+ * call to this function, imported from `@email-agent/core/config` (the same
+ * specifier that file already uses for `defaultConfig`/`AppConfig`).
+ *
+ * The scope of what this invariant can promise is "consent RECORDED", not
+ * "warnings SEEN": it checks only that the flag is set, never where it came
+ * from. `config set` refuses both keys and the Settings → Gmail card shows the
+ * cautions before writing the acknowledgement, but a hand-edited settings.json
+ * with both booleans is honoured. See TODOS.md.
+ *
+ * Pure — safe to call from a request handler or a test without touching the fs.
+ */
+export function normalizeAutoApplyConsent(
+  gmail: Partial<GmailAutoApplyConfig> | undefined,
+): GmailAutoApplyConfig {
+  const autoApplyAcknowledged = gmail?.autoApplyAcknowledged === true;
+  return {
+    autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
+    autoApplyAcknowledged,
+  };
 }
 
 /**
@@ -82,14 +130,15 @@ export function normalizeSettings(
           ? (embedding["dimensions"] as number)
           : defaults.embedding.dimensions,
     },
-    gmail: {
-      // Auto-apply performs irreversible-feeling Gmail writes (trash, spam)
-      // with no further prompt, so the acknowledgement gates the toggle here —
-      // the one chokepoint every writer (web PUT, CLI config set, hand-edited
-      // settings.json) passes through via saveSettings/loadSettings.
-      autoApplyActions: autoApplyAcknowledged === true && autoApplyRequested === true,
-      autoApplyAcknowledged: autoApplyAcknowledged === true,
-    },
+    // The acknowledgement gates the toggle here — the one chokepoint every
+    // writer (web PUT, CLI config set, hand-edited settings.json) passes
+    // through via saveSettings/loadSettings. The rule itself lives in
+    // `normalizeAutoApplyConsent` so the web API boundary can enforce the same
+    // one instead of a copy.
+    gmail: normalizeAutoApplyConsent({
+      autoApplyActions: autoApplyRequested,
+      autoApplyAcknowledged,
+    }),
     ui: {
       fetchInterval:
         "fetchInterval" in ui ? (ui["fetchInterval"] as number) : defaults.ui.fetchInterval,

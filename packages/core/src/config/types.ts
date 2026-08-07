@@ -40,9 +40,10 @@ export interface GmailAutoApplyConfig {
   autoApplyActions: boolean;
   /**
    * Records that the user read and accepted the auto-apply risk warnings in
-   * Settings. `normalizeSettings` forces `autoApplyActions` back to false
-   * whenever this is false, so no config path can enable unattended Gmail
-   * mutations without an explicit acknowledgement.
+   * Settings. `normalizeAutoApplyConsent` (which `normalizeSettings` calls)
+   * forces `autoApplyActions` back to false whenever this is false, so no
+   * config path can enable unattended Gmail mutations without an explicit
+   * acknowledgement.
    */
   autoApplyAcknowledged: boolean;
 }

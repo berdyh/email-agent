@@ -8,9 +8,11 @@ import {
   hashSettingsContent,
   isSettingsCacheFresh,
   loadSettingsFromPath,
+  normalizeAutoApplyConsent,
   normalizeSettings,
 } from "./settings.js";
 import { defaultConfig } from "./defaults.js";
+import type { AppConfig } from "./types.js";
 
 describe("config settings normalization", () => {
   it("strips legacy top-level and nested keys not in AppConfig", () => {
@@ -110,6 +112,92 @@ describe("config settings normalization", () => {
   it("drops oauth when its fields are malformed", () => {
     const normalized = normalizeSettings({ oauth: { clientId: 123 } });
     assert.equal("oauth" in normalized, false);
+  });
+});
+
+describe("the auto-apply consent invariant", () => {
+  // This is the rule that keeps unattended Gmail mutation opt-in. It is
+  // enforced twice on purpose — here, and again at the web API boundary — so
+  // the point of these tests is the SHARED implementation both are meant to
+  // call. `normalizeGmailConfig` in packages/web still has its own copy; when
+  // it adopts this function, these become the tests for both.
+  it("forces autoApplyActions off unless the acknowledgement is recorded", () => {
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: true, autoApplyAcknowledged: true }),
+      { autoApplyActions: true, autoApplyAcknowledged: true },
+    );
+    // The dangerous half alone: what a hand-edited settings.json produces.
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: true, autoApplyAcknowledged: false }),
+      { autoApplyActions: false, autoApplyAcknowledged: false },
+    );
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: false, autoApplyAcknowledged: true }),
+      { autoApplyActions: false, autoApplyAcknowledged: true },
+    );
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: false, autoApplyAcknowledged: false }),
+      { autoApplyActions: false, autoApplyAcknowledged: false },
+    );
+  });
+
+  it("treats a missing section, and missing keys, as no consent", () => {
+    assert.deepEqual(normalizeAutoApplyConsent(undefined), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+    assert.deepEqual(normalizeAutoApplyConsent({}), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+    assert.deepEqual(normalizeAutoApplyConsent({ autoApplyActions: true }), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+  });
+
+  it("does not accept a truthy non-boolean as consent", () => {
+    // A JSON request body or a hand-edited settings.json can carry anything;
+    // both flags are compared with === true for exactly this reason.
+    const truthy: unknown[] = [1, "true", "yes", {}, []];
+    for (const value of truthy) {
+      const gmail = {
+        autoApplyActions: value,
+        autoApplyAcknowledged: value,
+      } as unknown as Partial<AppConfig["gmail"]>;
+      assert.deepEqual(
+        normalizeAutoApplyConsent(gmail),
+        { autoApplyActions: false, autoApplyAcknowledged: false },
+        `truthy value ${JSON.stringify(value)} must not arm auto-apply`,
+      );
+    }
+  });
+
+  it("returns exactly the two keys, so no other gmail.* field can ride along", () => {
+    const extra = {
+      autoApplyActions: true,
+      autoApplyAcknowledged: true,
+      syncActions: true,
+    } as unknown as Partial<AppConfig["gmail"]>;
+    assert.deepEqual(Object.keys(normalizeAutoApplyConsent(extra)), [
+      "autoApplyActions",
+      "autoApplyAcknowledged",
+    ]);
+  });
+
+  it("is the implementation normalizeSettings uses, for every combination", () => {
+    // Pins the delegation: if normalizeSettings ever grows a second copy of
+    // the rule, this fails rather than drifting quietly.
+    for (const autoApplyActions of [true, false]) {
+      for (const autoApplyAcknowledged of [true, false]) {
+        const gmail = { autoApplyActions, autoApplyAcknowledged };
+        assert.deepEqual(
+          normalizeSettings({ gmail }).gmail,
+          normalizeAutoApplyConsent(gmail),
+          `normalizeSettings disagreed for ${JSON.stringify(gmail)}`,
+        );
+      }
+    }
   });
 });
 
