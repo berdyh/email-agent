@@ -38,6 +38,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // `applied === 0 && failed > 0` — every claimed row failed at Gmail — is a
+    // deliberate 200, not an oversight. It is a different event from the 409
+    // above and the status has to keep saying so: there, the server could claim
+    // NOTHING and the client's view of the queue is stale; here the server
+    // owned every row it was given, called Gmail for each, and recorded a
+    // terminal `failed` — a complete, authoritative result. The per-operation
+    // record IS the answer, and it only survives on this path: the client's
+    // `errorFromResponse` collapses a non-2xx into a single `Error` and throws
+    // `outcomes`/`errors` away, so a non-2xx would trade N specific reasons for
+    // one generic toast. The rows also changed state, so the caller must
+    // refresh — which is what the mutation's success path does.
+    //
+    // The cost, stated rather than hidden: a caller keying off HTTP status
+    // ALONE reads this as "the changes landed". No status can carry that
+    // distinction; `applied`/`failed`/`outcomes` in the body can, and every
+    // client here reads them (`describeApplyOutcome` toasts `failed > 0` as an
+    // error). A non-browser client must read the body too.
     return NextResponse.json(body);
   } catch (err) {
     const validation = validationResponse(err);
