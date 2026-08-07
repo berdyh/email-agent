@@ -341,40 +341,95 @@ Opened by the codebase audit and its Codex (gpt-5.6-sol) review passes,
 swallowing failed runs, dropping system prompts, and parsing obsolete CLI
 output shapes. Those are fixed; what follows is what the fixes did not reach.
 
-### `tokensUsed` means a different thing in every executor
-**Priority:** P3
-`claude-executor.ts:82` records `usage.output_tokens` only; `codex-executor.ts`
-records input+output (or `total_token_usage.total_tokens`); the SDK executor
-sums input+output; `openai-compatible.ts` prefers `total_tokens`. Cost or usage
-reporting built on the `action_results.tokensUsed` column therefore compares
-values that are not the same measurement. Pick one definition (total is the
-obvious one), apply it across all executors, and say which it is at the schema
-field. Only direct-api/openrouter were standardized during the cleanup.
+### Document the `tokensUsed` definition at the schema field
+**Priority:** P4
+Follow-up left open by `feature/todos-w4-executors` (2026-08-07), which unified
+the definition across every executor but could not touch the schema because
+`db/**` and `actions/**` belonged to a concurrent wave. The canonical meaning —
+**total tokens processed = all input (cached at full weight) + all output; `0`
+means "not reported", never "free"** — is now stated in
+`packages/core/src/agents/tokens.ts`, the agents `MODULE.md`, and
+`CLAUDE.md`/`AGENTS.md`, but not where a reader of the column would look first.
+Add a comment at all three declarations: `db/connection.ts:65`
+(`new Field("tokensUsed", new Int32())`), `db/schema.ts:34`, and
+`actions/types.ts:59`. Pure documentation — no behaviour change.
 
-### Codex/Gemini token counts are inferred, not verified
-**Priority:** P3
-The *text* parsing of both CLIs is live-verified (a one-word canary and a
-system-prompt canary both round-trip). The token-count field shapes were read
-from docs, not observed: `msg.info.total_token_usage.total_tokens` for codex and
-`stats.totalTokenCount` for gemini. A live codex smoke run reported **27,124
-tokens for a one-word reply**, which looks like cached-context accounting rather
-than the request's own usage — verify against a real run before trusting the
-number for cost tracking.
+Worth a glance while in there: `Int32` is a real ceiling, not a formality. A
+single codex request already costs ~21k tokens (see below), so anything that
+sums this column will reach 2^31 far sooner than the old output-only numbers
+suggested.
 
-### The Gemini executor path is effectively unexercised
+### Gemini token counts are source-verified, never live-verified
 **Priority:** P3
-`isAvailable()` now probes without installing (it used to `npx`-install the CLI
-as a side effect of the availability check), so on a machine without the CLI it
-correctly reports false — which also means nothing has ever exercised its
-execute/parse path end to end. Verify on a machine with `gemini` installed, or
-decide the executor is unsupported and say so.
+Narrowed by `feature/todos-w4-executors` (2026-08-07). The codex half of the
+original entry is now fully verified live and has moved to Completed; the gemini
+half is not, and cannot be on this machine.
 
-### direct-api / OpenRouter routing is unit-tested only
+**Verified** — by reading the installed `@google/gemini-cli` 0.54.0 package
+itself (its `JsonFormatter`, its `uiTelemetry` metrics initialiser, and its
+shipped `docs/cli/headless.md`):
+- The `--output-format json` envelope is
+  `{session_id?, response?, stats?, error?, warnings?}`.
+- For that format the CLI passes `uiTelemetryService.getMetrics()` straight
+  through as `stats`, so the shape is
+  `stats.models[<model>].tokens = {input, prompt, candidates, total, cached,
+  thoughts, tool}` alongside `stats.tools` and `stats.files`.
+- There is **no `stats.totalTokenCount`**. The executor had been reading exactly
+  that field, so every gemini run silently recorded 0 tokens. Fixed: sum
+  `stats.models[*].tokens.total`, which derives from the GenAI SDK's
+  `usageMetadata.totalTokenCount` and is already a true total.
+- `JsonFormatter.formatError()` emits `error` with **no** `response` field, so a
+  failed run used to parse to empty text and persist as a successful empty
+  answer. It now throws.
+
+**Still unverified:** no live gemini invocation has produced any of these
+payloads. `gemini` 0.54.0 *is* installed here, but it is **unauthenticated** —
+it opens an interactive browser OAuth prompt and blocks, which is not something
+an agent can complete on the user's behalf. The fixtures in
+`gemini-executor.test.ts` are therefore derived from source, not observed. One
+authenticated run would settle it; until then treat the numbers as
+well-evidenced but unconfirmed.
+
+### `isAvailable()` reports gemini usable when it is merely installed
 **Priority:** P3
-`apiExecutorOrder()` (`router.ts`) and the availability semantics are covered by
-unit tests, but no live call has been made through either API executor. The
-first real use is also the first test of the request shape, error handling, and
-abort propagation.
+Found while investigating the above (`feature/todos-w4-executors`, 2026-08-07).
+`GeminiExecutor.isAvailable()` probes `npx --no-install @google/gemini-cli
+--version`, which answers "is the CLI present", not "can it run a prompt". On
+this machine it returns **true** while the CLI is unauthenticated, so the router
+will select gemini as a fallback and then block on an interactive OAuth prompt
+until the 120s `execFile` timeout kills it — a dead agent run per attempt,
+surfacing as a timeout rather than a usable error.
+
+Options: probe something auth-sensitive and cheap; cache a negative result for
+the process lifetime after the first auth failure; or map the CLI's documented
+exit codes (`1` general/API failure, `42` input error, `53` turn limit) to a
+clear "installed but not authenticated" message. Deliberately not fixed here —
+every option needs a live authenticated CLI to validate against, which is the
+same thing blocking the entry above.
+
+### direct-api / OpenRouter have still never made a live call
+**Priority:** P3
+Narrowed by `feature/todos-w4-executors` (2026-08-07).
+
+**Now covered**, with no network and no API key, by driving both executors
+against a local `node:http` stub on an ephemeral port
+(`agents/api-executors.test.ts`; both gained an injectable
+`baseURL`/`apiKey`/`model`, defaults unchanged): the exact request shape we send
+(model, a leading `system` message rather than a concatenated prompt, the user
+message, `max_tokens`, the 0.3 temperature default, auth header), success
+mapping to `AgentResult`, HTTP error propagation, malformed response body, empty
+`choices`, absent `usage`, and abort propagation both mid-flight and
+already-aborted. `apiExecutorOrder()` and availability semantics remain
+unit-covered.
+
+**Still unverified:** the stub asserts our request against the *documented*
+OpenAI chat-completions contract — it cannot show that the real providers accept
+it, nor that their error and usage payloads match the fixtures. OpenRouter's
+usage accounting and error envelope in particular are assumed OpenAI-compatible
+on the strength of its compatibility claim, not observed. The first live call is
+still the first test of the contract; it is simply no longer also the first test
+of our own plumbing. Doing it needs a funded key and explicit authorisation to
+spend.
 
 ## Core config
 
@@ -829,6 +884,81 @@ projections, the dedupe key, the age rule, the retention cutoff. The
 surface, so they say nothing about the message a user is shown; see "THE
 SURFACES WAVE" above. Remaining LanceDB halves are listed under "Queue
 helpers with real-table behaviour are unit-tested only".
+
+### `tokensUsed` means a different thing in every executor
+**Completed:** feature/todos-w4-executors (2026-08-07)
+Was P3. Four executors reported four different measurements into one column:
+the Claude CLI executor recorded `usage.output_tokens` only, codex recorded
+input+output, the SDK executor summed input+output, and `openai-compatible.ts`
+preferred `total_tokens`. Any aggregate over `action_results.tokensUsed` was
+comparing unlike things.
+
+Picked one definition and gave it a single home (`agents/tokens.ts`):
+**tokensUsed = total tokens processed = all input (cached counted at full
+weight) + all output.** It measures work, not money — we deliberately do not
+model per-provider cache discounts, because each provider prices them
+differently and none reports a normalised figure. `0` now means "not reported",
+never "free".
+
+The root cause of the drift turned out to be worth writing down: providers use
+the same field name for opposite things, so "sum input and output" is not a
+portable instruction.
+- **Anthropic** (Claude CLI + Agent SDK): `input_tokens` is the *uncached
+  remainder*; `cache_creation_input_tokens` and `cache_read_input_tokens` are
+  **additive**. Live `claude -p --output-format json` run whose entire answer was
+  the word "pong": `input_tokens: 2`, `cache_creation_input_tokens: 13901`,
+  `cache_read_input_tokens: 15242`, `output_tokens: 4` — a true total of
+  **29,149** against the **4** the executor was recording. Roughly four orders of
+  magnitude of under-reporting, on the default agent.
+- **Codex**: `input_tokens` is the *complete* input and `cached_input_tokens` is
+  a **subset** of it (see the next entry).
+- **OpenAI-compatible**: `total_tokens` is already the total.
+- **Gemini**: `tokens.total` derives from `usageMetadata.totalTokenCount`, also
+  already a total.
+
+Unit tests pin each provider's arithmetic against its recorded shape and guard
+explicitly against both historical miscounts (output-only; double-counted
+cached input). Documented in `agents/tokens.ts`, the agents `MODULE.md`, and
+`CLAUDE.md`/`AGENTS.md`. One piece is deliberately left open — the comment at
+the schema field declarations, which live in another wave's territory; see
+"Document the `tokensUsed` definition at the schema field" above.
+
+### Codex token counts are inferred, not verified
+**Completed:** feature/todos-w4-executors (2026-08-07)
+Was P3 (the gemini half of the original entry remains open above). The suspicion
+was that codex's **27,124 tokens for a one-word reply** was cached-context
+accounting rather than the request's own usage. It is not — the number was
+real, and the parsing was already correct; only the interpretation was wrong.
+
+Live `codex exec --json` run (codex-cli 0.145.0), whole answer "pong":
+
+```json
+{"type":"turn.completed","usage":{"input_tokens":21403,
+ "cached_input_tokens":5888,"cache_write_input_tokens":0,
+ "output_tokens":5,"reasoning_output_tokens":0}}
+```
+
+A delta test settled the semantics: adding ~4,000 tokens of filler to the prompt
+moved `input_tokens` 21,403 → 25,412 (**+4,009**) while `output_tokens` stayed
+at 5. So `input_tokens` is **request-scoped and tracks the prompt 1:1** — not
+cumulative across a session — and `cached_input_tokens` is a **subset** of it,
+since a ~21k prompt cannot also carry 5,888 additional tokens. The old 27,124
+figure is what you get by adding the cached field in (21,403 + 5,888 + 5 =
+27,296, same shape); the executor never did that, so no fix to the arithmetic
+was needed.
+
+The ~21k baseline is genuine: codex ships its own system prompt, tool
+definitions and skill descriptions on **every** request. That is a real cost
+signal, so recording `null`/0 instead — the alternative the entry offered —
+would have discarded information rather than improving it. Rejected on that
+basis.
+
+Two secondary findings recorded in code comments: the legacy
+`msg.info.total_token_usage.total_tokens` branch has **never** been observed
+(0.145.0 emits no `msg` envelope at all) and its semantics remain unverified;
+and `reasoning_output_tokens` is treated as a subset of `output_tokens`, which
+matches OpenAI convention but was 0 in every observed run and so is itself
+unconfirmed.
 
 ### User actions are silently broken on the declared Node floor
 **Completed:** worktree-approval-gate-bypass (2026-08-06)

@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import type { AgentId } from "../config/types.js";
 import type { AgentRequest, AgentResult } from "./types.js";
+import { openAiTotalTokens } from "./tokens.js";
 
 export interface OpenAiCompatibleConfig {
   /** Agent id reported on the result (distinct per executor). */
@@ -45,13 +46,10 @@ export async function executeOpenAiCompatible(
 
   const choice = response.choices[0];
   const text = choice?.message?.content ?? "";
-  const usage = response.usage;
-  // Prefer the provider's total_tokens; fall back to prompt + completion for
-  // providers that report only the components. Some providers supply only
-  // total_tokens, so summing the components alone would report 0.
-  const tokensUsed = usage
-    ? (usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0))
-    : 0;
+  // Canonical tokensUsed (see tokens.js): all input + all output. For
+  // OpenAI-compatible providers `total_tokens` is already that figure, with
+  // prompt+completion as the fallback for providers reporting only components.
+  const tokensUsed = openAiTotalTokens(response.usage);
 
   return {
     text,
