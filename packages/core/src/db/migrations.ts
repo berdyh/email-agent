@@ -35,7 +35,7 @@
 // is nothing for a crash to destroy: `addColumns` is a single MVCC commit that
 // either lands or does not.
 //
-// IF YOU UPGRADE `@lancedb/lancedb`, re-check the four facts above. They are
+// IF YOU UPGRADE `@lancedb/lancedb`, re-check all five facts above. They are
 // facts about a version, not about LanceDB in general.
 
 import type { Connection } from "@lancedb/lancedb";

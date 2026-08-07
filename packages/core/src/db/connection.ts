@@ -172,6 +172,15 @@ export function initDb(): Promise<void> {
  * sentinel, so the in-place path is both cheaper and simpler. It also leaves
  * the codebase with zero drop-and-recreate migrations, which is what keeps the
  * rule from eroding back into one.
+ *
+ * Consequence of leaving the legacy rows under `""`: row identity is
+ * `accountId` + Gmail `id`, so if the user later fetches those same messages
+ * under a NAMED account, the named rows do not merge with the `""` rows and
+ * BOTH are visible. Not a regression — the same ADC-then-named-account
+ * transition already produced this before this migration existed — but it is
+ * the standing cost of the sentinel. De-duplicating it means a deliberate
+ * re-keying pass, not a silent migration that would discard paid-for
+ * embeddings.
  */
 export async function migrateSchema(conn: Connection): Promise<void> {
   await ensureTableColumns(conn, emailsTable, emailSchema, emailColumnDefaults);

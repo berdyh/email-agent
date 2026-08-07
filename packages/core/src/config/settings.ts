@@ -171,6 +171,17 @@ export function isSettingsCacheFresh(
  * So: ENOENT means the user genuinely has no settings file yet (first run) and
  * defaults are the right answer. Every other errno means we do not know what
  * the user configured, and the caller must fail rather than guess.
+ *
+ * KNOWN CONSEQUENCE, accepted deliberately: every settings path goes through
+ * `loadSettings()` first, so once the file is unreadable or unparsable NO tool
+ * can repair it. CLI `config get` and `config set` throw, and the web settings
+ * PUT throws before it can merge and write. There is no self-repair path, by
+ * design — a writer that fell back to defaults in order to "fix" the file
+ * would persist those defaults over the user's configuration, which is the
+ * exact data loss this refusal exists to prevent. Recovery is the instruction
+ * in the error text: repair the file by hand, or move it aside to start from
+ * defaults. If you ever add a repair command, it must bypass `loadSettings()`
+ * explicitly rather than softening the fallback here.
  */
 async function readSettingsBytes(path: string): Promise<Buffer | null> {
   try {

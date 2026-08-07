@@ -207,8 +207,8 @@ export function selectStaleApplyingOperations(
  * `@email-agent/core/db` and has no caller in web or CLI, so stranded rows
  * remain invisible on every surface — they are neither listed nor actionable.
  * The capability exists; the recovery does not. Approval surfaces should call
- * this and offer the rows for review; see TODOS.md ("Surfaces do not show rows
- * stranded in `applying`") for the exact files.
+ * this and offer the rows for review; see TODOS.md under "⚠ THE SURFACES
+ * WAVE", item 2, for the exact files.
  */
 export async function getStaleApplyingOperations(options?: {
   olderThanMs?: number;
@@ -274,9 +274,15 @@ export function buildPruneFilter(olderThanIso: string): string {
 }
 
 /**
- * Deletes resolved queue rows older than `olderThanIso`, returning how many
- * went. Without this the table is append-only for the life of the install and
- * every approvals query scans the whole history.
+ * Deletes resolved queue rows older than `olderThanIso`. Without this the table
+ * is append-only for the life of the install and every approvals query scans
+ * the whole history.
+ *
+ * The returned count is ADVISORY. It is the count taken BEFORE the delete, so a
+ * concurrent sweep or a row resolved between the count and the delete makes it
+ * drift from the number of rows this call actually removed. Nothing consumes it
+ * for correctness — it exists for logging and tests. Do not build a check on
+ * it; re-count if you need a true figure.
  */
 export async function prunePendingOperations(
   olderThanIso: string,

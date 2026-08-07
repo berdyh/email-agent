@@ -546,7 +546,7 @@ to migrate — cannot arise.
 Closed by this:
 - **`pending_operations` migrates without a drop** (was the crash-recoverable
   migration). The durable snapshot, the cross-process `mkdir` lock and the
-  merge-by-id replay are gone: 975 lines across `db/table-backup.ts`,
+  merge-by-id replay are gone: 953 lines across `db/table-backup.ts`,
   `db/migration-lock.ts`, `db/pending-operations-migration.ts` and its test.
   Two review rounds had found real defects inside that subsystem (swallowed
   fsync failures, a `mkdir` lock that can admit two owners, a replay window in

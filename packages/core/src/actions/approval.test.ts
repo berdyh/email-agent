@@ -407,8 +407,16 @@ describe("chunked apply claims one chunk at a time", () => {
     assert.deepEqual(claimed.map((chunk) => chunk.length), [10, 10, 5]);
     assert.deepEqual(resolved.map((chunk) => chunk.length), [10, 10, 5]);
     assert.equal(result.applied, 25);
-    // Outcome order still follows input order, which every surface pairs
-    // positionally against the operations it submitted.
+    // Outcome order still follows input order. NOBODY relies on that today —
+    // no surface consumes `outcomes` positionally, or at all: web and CLI read
+    // the aggregate counts and `errors`, and the `outcomes` fields in
+    // `use-actions.ts` / `use-approvals.ts` are typed but never read. It is
+    // pinned as a contract rather than as a description of a caller. Note what
+    // would break if it decayed: the "skips a chunk it won no rows for" case
+    // below emits fewer outcomes than ids submitted, so a positional consumer
+    // would pair every outcome after the lost chunk against the wrong
+    // operation and mislabel it — a reason to keep the guarantee, not evidence
+    // that anyone currently depends on it.
     assert.deepEqual(
       result.outcomes.map((outcome) => outcome.emailId),
       ids(25).map((id) => `msg-${id}`),

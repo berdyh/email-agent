@@ -68,8 +68,8 @@ export function deriveResultAccountId(
  * apply those instead and never mentions the chunk that may already have hit
  * Gmail. Different routes, same outcome: neither tells the user that mail may
  * really have been trashed. What this branch changed is the core data, not what
- * anybody sees. The adoption is tracked in TODOS.md ("Surfaces still read only
- * `queueError`") and names the exact files.
+ * anybody sees. The adoption is tracked in TODOS.md under "⚠ THE SURFACES
+ * WAVE", item 1, which names the exact files.
  *
  * The wording itself must not claim more than we know.
  * `applyPendingOperationsByIds` claims rows before any Gmail call, which means
