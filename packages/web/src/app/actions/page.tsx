@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { ActionChatCard } from "@/components/actions/action-chat-card";
 import { AppendActionCard } from "@/components/actions/append-action-card";
 import { ApprovalPanel, StrandedOperationsPanel } from "@/components/actions/approval-panel";
+import { SnapshotRestoreDialog } from "@/components/actions/snapshot-restore-dialog";
 import { describeActionRunOutcome } from "@/modules/api/action-run-contract";
 import { useActionChatStore } from "@/store/action-chat-store";
 import { useEmailStore } from "@/store/email-store";
@@ -184,6 +185,13 @@ export default function ActionsPage() {
                             <Pencil className="h-3 w-3" />
                             Edit
                           </Button>
+                          {/* The recovery path for an action the edit chat
+                              overwrote. It existed only in the CLI, which is
+                              not where the person who just overwrote it is. */}
+                          <SnapshotRestoreDialog
+                            filename={action.filename}
+                            actionName={action.name}
+                          />
                           <Button
                             size="sm"
                             variant="outline"
