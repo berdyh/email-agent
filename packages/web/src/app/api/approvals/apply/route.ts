@@ -8,8 +8,8 @@ import {
   validationResponse,
 } from "@/modules/api/validation";
 import {
-  isFullyStaleApply,
-  staleApplyMessage,
+  claimedNothing,
+  unclaimedApplyMessage,
   summarizeApplyResult,
   type ApplyApprovalsResult,
 } from "@/modules/api/approvals-contract";
@@ -27,12 +27,13 @@ export async function POST(request: NextRequest) {
     const body: ApplyApprovalsResult = { ...result, requested, skipped };
 
     // A no-op is not a success. Core returns all-zero counts both when a batch
-    // was empty and when every row had already been resolved by another tab,
-    // the CLI, or an auto-apply run — and the UI used to toast the second case
-    // as "Applied 0 changes". Say which one actually happened.
-    if (isFullyStaleApply(ids, result)) {
+    // was empty and when this call could claim none of the rows — and the UI
+    // used to toast the second case as "Applied 0 changes". 409 says the
+    // client's view of the queue conflicts with the server's, which is exactly
+    // what is known; the message does not guess at why each row was unclaimable.
+    if (claimedNothing(ids, result)) {
       return NextResponse.json(
-        { ...body, error: staleApplyMessage(requested) },
+        { ...body, error: unclaimedApplyMessage(requested) },
         { status: 409 },
       );
     }

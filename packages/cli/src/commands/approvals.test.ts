@@ -389,7 +389,7 @@ describe("committing review decisions", () => {
     assert.equal(text.includes("already recorded"), false);
     assert.equal(text.includes("was recorded before the apply ran"), false);
     assert.match(text, /None of your 1 rejection could be recorded/);
-    assert.match(text, /another\s+run had already claimed it/);
+    assert.match(text, /another\s+run had already claimed or resolved it/);
   });
 
   it("reports a partly-claimed reject by the number actually recorded", () => {

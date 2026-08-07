@@ -127,8 +127,8 @@ export function describeRejectOutcome(outcome: RejectOutcome): string {
   const base = `Rejected ${outcome.rejected} pending change${outcome.rejected === 1 ? "" : "s"}.`;
   if (outcome.unclaimed === 0) return base;
   return (
-    `${base} ${outcome.unclaimed} could not be claimed — they were no longer pending, so ` +
-    `another run had already taken them.`
+    `${base} ${outcome.unclaimed} could not be claimed — they were not pending any more, so ` +
+    `another run had already claimed or resolved them.`
   );
 }
 
@@ -317,8 +317,8 @@ export function describeReviewCommit(result: ReviewCommitResult): string[] {
       } else if (rejected === 0) {
         lines.push(
           `None of your ${rejectedCount} rejection${rejectedCount === 1 ? "" : "s"} could be recorded: ` +
-            `${unclaimed === 1 ? "that row was" : "those rows were"} no longer pending, so another ` +
-            `run had already claimed ${unclaimed === 1 ? "it" : "them"}. Their final state is whatever that run decided.`,
+            `${unclaimed === 1 ? "that row was" : "those rows were"} not pending any more, so another ` +
+            `run had already claimed or resolved ${unclaimed === 1 ? "it" : "them"}. Their final state is whatever that run decided.`,
         );
       } else {
         lines.push(

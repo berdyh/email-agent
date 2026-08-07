@@ -565,20 +565,37 @@ and `packages/cli/src/` because `packages/core` was owned by another branch this
 wave; the duplication (including a copied `escapeSql`) is recorded as its own
 follow-up, as is the fact that only the filter *string* is under test.
 
-### Distinguish "already resolved" from a no-op apply
+### Distinguish an unclaimed apply from a no-op apply
 **Completed:** feature/todos-w2-surfaces (2026-08-07)
-Was P3. `POST /api/approvals/apply` answered 200 with all-zero counts when every
-submitted id was stale, and the panel toasted "Applied 0 changes" as a success —
-telling the user their approval went through when nothing reached Gmail. Core
-claims each row before touching Gmail and reports one applied-or-failed entry per
-claimed row, so `requested - (applied + failed)` is exactly the set another tab,
-the CLI or an auto-apply run got to first; deriving it from the result instead of
-re-reading the table keeps it race-free. The route now returns
-`requested`/`skipped` on every response and 409 when nothing at all was claimed,
-the reject route reports the same accounting, the hooks read the server's message
-off a failed response and invalidate the approvals query on error so the panel
-re-syncs, and the toast wording is a pure tested function. `approvals apply` in
-the CLI says the same thing. Core's return shape was not touched.
+Was P3. `POST /api/approvals/apply` answered 200 with all-zero counts when it
+could claim none of the submitted ids, and the panel toasted "Applied 0 changes"
+as a success — telling the user their approval went through when nothing reached
+Gmail. Core claims each row before touching Gmail and reports one
+applied-or-failed entry per claimed row, so `requested - (applied + failed)` is
+exactly the set of ids **this call did not claim**; deriving it from the result
+instead of re-reading the table keeps it race-free. The apply route returns
+`requested`/`skipped` on the 200 and on the 409 — the two responses the apply
+itself produces — and answers 409 when nothing at all was claimed; a guard
+failure (403), a validation failure (400) and an unexpected error (500) return
+`{ error }` only, as they always did. The reject route reports the same
+accounting, the hooks read the server's message off a failed response and
+invalidate the approvals query on error so the panel re-syncs, and the toast
+wording is a pure tested function. `approvals apply` in the CLI says the same
+thing. Core's return shape was not touched.
+
+**Correction (review of PR #10).** The arithmetic was right and its
+interpretation was not. "Not claimed by this call" was being reported as
+"already applied or rejected somewhere else", which is only one of the reasons a
+claim fails: the row may be `applying` in a request that is still running, may
+have failed in an earlier run, or may not exist. Tab B could therefore submit a
+stale selection, get `0/0`, and be told its changes were already applied or
+rejected while tab A was in the middle of applying them. The helpers are renamed
+for what is known (`claimedNothing`, `unclaimedApplyMessage`; the CLI calls the
+count `unclaimed`), every message now asserts only that this run did not touch
+the rows and offers the reasons as possibilities, and the tests assert the
+absence of the old sentences as well as the presence of the new ones. The 409
+stays: "your view of the queue conflicts with the server's" is exactly what is
+known.
 
 ### Snapshot restore has no surface
 **Completed:** feature/todos-w2-surfaces (2026-08-07)

@@ -53,10 +53,16 @@ export interface ApplyApprovalsResult {
   /** How many queue row ids the client submitted. */
   requested: number;
   /**
-   * Submitted ids that were no longer `pending` when the apply ran — another
-   * tab, the CLI, or an auto-apply run resolved them first. `applied + failed`
-   * is the number of rows this call actually claimed, so anything left over was
-   * never touched by it. Non-zero means the client's view of the queue is stale.
+   * Submitted ids this call did not claim: `requested - (applied + failed)`.
+   *
+   * READ THIS AS "not claimed by this call", NOT "already applied or rejected".
+   * Core moves a row to `applying` before it calls Gmail, so a row this call
+   * could not claim may be mid-flight in another apply, may have failed in an
+   * earlier run, or may not exist at all. The only fact the arithmetic
+   * establishes is that this call did not touch it. (The CLI calls the same
+   * quantity `unclaimed`.)
+   *
+   * Non-zero does mean the client's view of the queue is out of date.
    */
   skipped: number;
 }
@@ -64,20 +70,25 @@ export interface ApplyApprovalsResult {
 export interface RejectApprovalsResult {
   rejected: number;
   requested: number;
-  /** Same meaning as on the apply result: submitted ids that were already resolved. */
+  /** Same meaning as on the apply result: ids this call did not claim. */
   skipped: number;
 }
 
 /**
- * Derives the "already resolved elsewhere" count from the core apply result
+ * Derives the "not claimed by this call" count from the core apply result
  * without changing core's return shape.
  *
  * `applyPendingOperationsByIds` claims every row it is going to touch before it
  * calls Gmail and reports one applied-or-failed entry per claimed row, so
- * `requested - (applied + failed)` is exactly the set of ids that were not
- * pending any more. Doing the arithmetic on the result (rather than re-reading
- * the table first) keeps it race-free: there is no window between the check and
- * the claim in which the answer could change.
+ * `requested - (applied + failed)` is exactly the set of ids this call did not
+ * claim. Doing the arithmetic on the result (rather than re-reading the table
+ * first) keeps it race-free: there is no window between the check and the claim
+ * in which the answer could change.
+ *
+ * What it does NOT tell you is WHY a row was not claimed. It may have been
+ * applied or rejected elsewhere; it may equally be `applying` in a request that
+ * is still running, have failed earlier, or never have existed. Anything built
+ * on this number has to stop at "this call did not touch it".
  */
 export function summarizeApplyResult(
   requestedIds: string[],
@@ -91,20 +102,35 @@ export function summarizeApplyResult(
   };
 }
 
-/** True when every submitted id was already resolved — a 409, not a success. */
-export function isFullyStaleApply(
+/**
+ * True when the call claimed none of the submitted ids — a 409, not a success.
+ *
+ * Named for what is known (nothing was claimed) rather than for a guess about
+ * why. The client's view is definitely out of date; the rows' actual state is
+ * not knowable from here.
+ */
+export function claimedNothing(
   requestedIds: string[],
   result: { applied: number; failed: number },
 ): boolean {
   return requestedIds.length > 0 && result.applied + result.failed === 0;
 }
 
-/** The message the UI shows for an apply that touched nothing. */
-export function staleApplyMessage(requested: number): string {
+/**
+ * The message the UI shows for an apply that claimed nothing.
+ *
+ * It used to assert that the rows "were already applied or rejected somewhere
+ * else". That is one possibility among several — the row may be mid-apply in
+ * another tab right now — so the sentence says what is certain (this run sent
+ * nothing to Gmail) and offers the rest as possibilities.
+ */
+export function unclaimedApplyMessage(requested: number): string {
+  const one = requested === 1;
   return (
-    `None of the ${requested} selected change${requested === 1 ? " was" : "s were"} still pending — ` +
-    `${requested === 1 ? "it was" : "they were"} already applied or rejected somewhere else ` +
-    `(another tab, the CLI, or an auto-apply run). Nothing was sent to Gmail.`
+    `None of the ${requested} selected change${one ? "" : "s"} could be claimed, so nothing was ` +
+    `sent to Gmail. ${one ? "It may" : "They may"} already have been applied or rejected somewhere ` +
+    `else (another tab, the CLI, or an auto-apply run), or another apply may still be working on ` +
+    `${one ? "it" : "them"}. Reload to see where ${one ? "it" : "they"} stood.`
   );
 }
 
@@ -115,8 +141,8 @@ export type ToastTone = "success" | "warning" | "error";
  * are covered by tests even though there is no React test harness here — the
  * component only picks `toast[tone](message)`.
  *
- * The fully-stale case never reaches this: it is a 409, so it lands in the
- * mutation's error path with `staleApplyMessage` already attached.
+ * The claimed-nothing case never reaches this: it is a 409, so it lands in the
+ * mutation's error path with `unclaimedApplyMessage` already attached.
  */
 export function describeApplyOutcome(result: {
   applied: number;
@@ -126,7 +152,7 @@ export function describeApplyOutcome(result: {
   const parts = [`Applied ${result.applied} change${result.applied === 1 ? "" : "s"} to Gmail`];
   if (result.failed > 0) parts.push(`${result.failed} failed`);
   if (result.skipped > 0) {
-    parts.push(`${result.skipped} were already resolved elsewhere and were skipped`);
+    parts.push(`${result.skipped} could not be claimed and were not touched by this run`);
   }
 
   const message = parts.join(", ");
@@ -144,8 +170,9 @@ export function describeRejectOutcome(result: {
     return {
       tone: "warning",
       message:
-        `None of the ${result.skipped} selected change${result.skipped === 1 ? "" : "s"} was still pending — ` +
-        `already applied or rejected somewhere else. Nothing changed.`,
+        `None of the ${result.skipped} selected change${result.skipped === 1 ? "" : "s"} could be claimed — ` +
+        `${result.skipped === 1 ? "it was" : "they were"} not pending any more, so another run had ` +
+        `already claimed or resolved ${result.skipped === 1 ? "it" : "them"}. Nothing was rejected here.`,
     };
   }
 
@@ -153,7 +180,7 @@ export function describeRejectOutcome(result: {
   if (result.skipped > 0) {
     return {
       tone: "warning",
-      message: `${base}, ${result.skipped} were already resolved elsewhere and were skipped`,
+      message: `${base}, ${result.skipped} could not be claimed — another run had already claimed or resolved them`,
     };
   }
   return { tone: "success", message: base };
