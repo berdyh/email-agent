@@ -107,26 +107,30 @@ for this section. The claim is "the action pathway cannot execute code", not
 "the machine is sandboxed".
 
 ### No end-to-end denied-case test with an injectable `ACTIONS_DIR`
-**Priority:** P3
-Now covered: `action-source-guard.test.ts` exercises the load-side surface
-directly, because `extractActionData()` is a pure function of (source,
-filename) — round-trip extraction against a fixture object, load-time refusal
-of the enqueue-then-apply and token-exfiltration shapes, `.action.js` parsing,
-`export default` vs an exported `action` binding, safe-name resolution, and a
-regression pin proving the file did not execute (the same payload sets a global
-when imported as a module and does not when extracted). It also pins that
-`user-actions.ts` contains no `import(` at all and that every `import()` in
-`registry.ts` is reachable only from `BUILT_IN_DIR`.
-Still missing: a true end-to-end run through `loadUserAction()` /
-`ActionRegistry.loadAll()` against files on disk, which needs `ACTIONS_DIR` to
-be injectable — it is a homedir constant (`config/defaults.ts:8`) and a test
-cannot write there safely. It was verified manually by overriding `HOME`
-(2026-08-07): a pure-data action loaded with the expected object, an action
-that writes a file at import time was refused with its violations and the file
-was never written, while the same bytes under the old `new Function` import did
-write it. Making that a checked-in test means threading a directory through the
-loader or reading `ACTIONS_DIR` lazily.
-Found by: testing specialist during /review (2026-08-06).
+**Priority:** CLOSED (2026-08-07)
+`ACTIONS_DIR` is now a parameter throughout `user-actions.ts`, defaulting to the
+homedir constant, and `ActionRegistry` takes `{ userActionsDir }`. The checked-in
+test is `load-path-denied.test.ts`: six genuinely malicious `.action.ts` /
+`.action.js` files, each writing a marker file at module evaluation time,
+through six different spellings — a plain `import { writeFileSync } from
+"node:fs"`, a bare member-access side effect on a global, the Function
+constructor reached as `({}).constructor.constructor`, a live `data:` URL behind
+`export { default as type } from`, a `using` disposal hook, and the same payload
+as `.action.js`. Each is first imported natively in a subprocess and the marker
+MUST appear, so a payload that is quietly inert cannot pass the test by being
+harmless. They are then loaded through the real `loadUserAction()`,
+`ActionRegistry.loadAll()` and `listUserActions()`, and the markers must not
+exist, no action may load, every refusal must warn by filename, the built-ins
+must still be present (or "nothing executed" is trivially true), and the files
+must still be on disk afterwards.
+
+This is what replaces the claim the AST scan was making. That scan only
+recognises loader calls whose callee it enumerates — a reviewer defeated it with
+`globalThis.Function("p", "return import(p)")` bound to a local name — so it is
+now described as a fast tripwire and nothing more. No syntactic scan can honestly
+claim "however it is spelled"; a behavioural assertion does not have to.
+Found by: testing specialist during /review (2026-08-06). Closed by the
+second adversarial review pass (2026-08-07).
 
 ### Record which surface approved an operation
 **Priority:** P3

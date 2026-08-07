@@ -752,14 +752,29 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
     delete globals[probe];
   });
 
-  it("keeps every ACTIONS_DIR import out of the load path", async () => {
-    // This test used to match the literal text `await import(`, which is the
-    // denylist mistake the guard itself exists to avoid: reintroducing the
-    // hatch as `const nativeImport = new Function("p", "return import(p)")`
-    // and then `await nativeImport(path)` passed it, and so did moving the
-    // import into a different loader module. So scan the AST instead, for
-    // ANY construct that can reach a module loader or a code evaluator,
-    // however it is spelled, across every module that could be on the path.
+  it("tripwire: no obvious loader call sits on the ACTIONS_DIR path", async () => {
+    // A TRIPWIRE, and nothing more. Read what it does before trusting it.
+    //
+    // It scans the AST for calls that reach a module loader or a code
+    // evaluator, which catches the two regressions that actually happened: the
+    // hatch reintroduced as `new Function("p", "return import(p)")`, and the
+    // hatch moved into a different loader module. Both are cheap to catch here
+    // and cheap to catch early, so it stays.
+    //
+    // What it CANNOT do is recognise a loader reached by a spelling it does not
+    // enumerate. It only matches calls whose callee is a direct identifier, so
+    // `globalThis.Function("p", "return import(p)")` bound to a local name and
+    // called through that name goes straight past it — a property-access call
+    // and then an unrecognised identifier. Earlier versions of this comment
+    // claimed the scan held "however it is spelled". It does not, it cannot,
+    // and no syntactic scan can: enumerating forbidden spellings is precisely
+    // the mistake the guard next door exists to avoid, and this test had been
+    // making it for three rounds while claiming the opposite.
+    //
+    // The claim is carried instead by `load-path-denied.test.ts`, which puts
+    // genuinely malicious files on disk, loads them through the real loaders,
+    // and asserts nothing executed. A behavioural assertion cannot be defeated
+    // by re-spelling, because it is about what happened.
 
     /** Names that hand back a loader or an evaluator when called. */
     const EVALUATOR_NAMES = new Set([
@@ -788,8 +803,17 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
           found.push(at(node));
         } else if (
           (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
-          ts.isIdentifier(node.expression) &&
-          EVALUATOR_NAMES.has(node.expression.text)
+          // Both `Function(...)` and `globalThis.Function(...)`. The property
+          // form was a real miss — a reviewer defeated the identifier-only
+          // version with it. Adding it raises the bar; it does not make the
+          // scan complete, and it is not claimed to.
+          EVALUATOR_NAMES.has(
+            ts.isIdentifier(node.expression)
+              ? node.expression.text
+              : ts.isPropertyAccessExpression(node.expression)
+                ? node.expression.name.text
+                : "",
+          )
         ) {
           found.push(at(node));
         } else if (
