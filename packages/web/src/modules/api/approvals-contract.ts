@@ -88,10 +88,40 @@ export interface ResolveStrandedResult {
   decision: StrandedDecision;
   /** How many ids the client submitted. */
   requested: number;
-  /** How many rows were still `applying` and were actually written. */
+  /** How many rows this call actually wrote. */
   resolved: number;
-  /** `requested - resolved`: rows that had left `applying` before we got there. */
+  /**
+   * `requested - resolved`: rows this call did not write.
+   *
+   * READ THIS AS "not written by this call", NOT "an apply finished them". Core
+   * writes a row only while it is `applying` AND older than the staleness
+   * threshold, so a shortfall means any of: an apply resolved it, another
+   * adjudication answered it, or it was requeued and re-claimed and is no
+   * longer stale. See `strandedSkipReasons`.
+   */
   skipped: number;
+}
+
+/**
+ * Why a row a surface listed as stuck was not written by this call.
+ *
+ * STATES WHAT IS CERTAIN, OFFERS THE REST AS POSSIBILITIES — the precedent set
+ * by `unclaimedApplyMessage` below. The earlier wording asserted one cause as
+ * fact ("an apply that was still running has since finished it, and the outcome
+ * it recorded was kept"), and there are three, only one of which involves a real
+ * apply. A row can equally have been answered by another adjudication, in which
+ * case what was "kept" is another unverified assertion by a person; or it can
+ * have been requeued and re-claimed, in which case it is not stale and no answer
+ * about it is meaningful yet.
+ */
+function strandedSkipReasons(one: boolean): string {
+  return (
+    `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
+    `outcome; another answer (another tab, or the CLI) may already have been recorded; or ` +
+    `${one ? "it may have been" : "they may have been"} requeued and picked up by a fresh apply, ` +
+    `which makes ${one ? "it" : "them"} too new to adjudicate. Reload to see where ` +
+    `${one ? "it stands" : "they stand"}.`
+  );
 }
 
 /**
@@ -108,18 +138,20 @@ export function describeStrandedResolution(result: ResolveStrandedResult): {
   const one = result.resolved === 1;
   const skippedNote =
     result.skipped > 0
-      ? ` ${result.skipped} ${result.skipped === 1 ? "row was" : "rows were"} no longer stuck — ` +
-        `an apply that was still running finished ${result.skipped === 1 ? "it" : "them"}, and ` +
-        `${result.skipped === 1 ? "its" : "their"} real outcome was kept.`
+      ? ` ${result.skipped} ${result.skipped === 1 ? "row was" : "rows were"} not written — ` +
+        `${result.skipped === 1 ? "it was" : "they were"} no longer stuck mid-apply, so whatever ` +
+        `${result.skipped === 1 ? "was" : "were"} already recorded stayed. ` +
+        strandedSkipReasons(result.skipped === 1)
       : "";
 
   if (result.resolved === 0) {
+    const requestedOne = result.requested === 1;
     return {
       tone: "warning",
       message:
-        `Nothing was recorded — ${result.requested === 1 ? "that row is" : "those rows are"} no ` +
-        `longer stuck mid-apply. An apply that was still running has since finished ` +
-        `${result.requested === 1 ? "it" : "them"}, and the outcome it recorded was kept.`,
+        `Nothing was recorded — ${requestedOne ? "that row is" : "those rows are"} no longer stuck ` +
+        `mid-apply, so your answer was not written and whatever was already recorded stayed. ` +
+        strandedSkipReasons(requestedOne),
     };
   }
 

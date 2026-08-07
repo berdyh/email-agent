@@ -499,15 +499,35 @@ describe("stranded rows (`approvals stranded`)", () => {
     assert.ok(requeued.includes("on your word"));
   });
 
-  it("keeps a real outcome over a stale answer", () => {
-    // The ids came from a snapshot; a slow apply may have finished in between.
+  it("keeps whatever was already recorded when the answer arrives too late", () => {
+    // The ids came from a snapshot; the row may have moved on since.
     assert.ok(
       describeStrandedResolution("applied", 1, 0).includes(
-        "the outcome it recorded was kept",
+        "whatever was already recorded stayed",
       ),
     );
     assert.ok(
-      describeStrandedResolution("applied", 3, 2).includes("1 row was no longer stuck"),
+      describeStrandedResolution("applied", 3, 2).includes("1 row was not written"),
     );
+  });
+
+  it("never states a cause for a skipped row as fact", () => {
+    // The regression: the wording said an apply that was still running had
+    // finished the row "and the outcome it recorded was kept". A row can
+    // equally have been answered by another adjudication — in which case what
+    // was kept is another person's unverified assertion, not a real apply's
+    // record — or have been requeued and re-claimed, which makes it too new to
+    // adjudicate at all. Same rule `describeApplyOutcome` already follows.
+    for (const message of [
+      describeStrandedResolution("applied", 1, 0),
+      describeStrandedResolution("notApplied", 2, 1),
+    ]) {
+      assert.ok(message.includes("may have finished"), message);
+      assert.ok(message.includes("another answer"), message);
+      assert.ok(message.includes("requeued"), message);
+      assert.equal(message.includes("has since finished"), false, message);
+      assert.equal(message.includes("the outcome it recorded was kept"), false, message);
+      assert.equal(message.includes("real outcome was kept"), false, message);
+    }
   });
 });

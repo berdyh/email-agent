@@ -438,6 +438,27 @@ export function describeStrandedHeader(count: number): string[] {
   ];
 }
 
+/**
+ * Why a row this command listed as stuck was not written.
+ *
+ * Mirrors the web wording (`approvals-contract.ts`) and follows the precedent
+ * `describeApplyOutcome` above already sets: state what is certain, offer the
+ * rest as possibilities. The earlier version asserted one cause as fact — that
+ * a still-running apply had finished the row and its outcome was kept — when
+ * the row could equally have been answered by another adjudication, whose
+ * "outcome" is another unverified assertion by a person, or requeued and
+ * re-claimed by a fresh apply, which makes it too new to adjudicate at all.
+ */
+function strandedSkipReasons(one: boolean): string {
+  return (
+    `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
+    `outcome; another answer (the web UI, or another shell) may already have been recorded; or ` +
+    `${one ? "it" : "they"} may have been requeued and picked up by a fresh apply, which makes ` +
+    `${one ? "it" : "them"} too new to adjudicate. Run \`email-agent approvals stranded\` again to ` +
+    `see where ${one ? "it stands" : "they stand"}.`
+  );
+}
+
 /** Wording for a finished adjudication. Pure for the same reason as the rest. */
 export function describeStrandedResolution(
   decision: StrandedDecision,
@@ -445,10 +466,11 @@ export function describeStrandedResolution(
   resolved: number,
 ): string {
   if (resolved === 0) {
+    const requestedOne = requested === 1;
     return (
-      `Nothing was recorded — ${requested === 1 ? "that row is" : "those rows are"} no longer ` +
-      `stuck mid-apply. An apply that was still running has since finished ` +
-      `${requested === 1 ? "it" : "them"}, and the outcome it recorded was kept.`
+      `Nothing was recorded — ${requestedOne ? "that row is" : "those rows are"} no longer stuck ` +
+      `mid-apply, so your answer was not written and whatever was already recorded stayed. ` +
+      strandedSkipReasons(requestedOne)
     );
   }
 
@@ -456,8 +478,10 @@ export function describeStrandedResolution(
   const skipped = requested - resolved;
   const skippedNote =
     skipped > 0
-      ? ` ${skipped} ${skipped === 1 ? "row was" : "rows were"} no longer stuck and ` +
-        `${skipped === 1 ? "its" : "their"} real outcome was kept.`
+      ? ` ${skipped} ${skipped === 1 ? "row was" : "rows were"} not written — ` +
+        `${skipped === 1 ? "it was" : "they were"} no longer stuck mid-apply, so whatever ` +
+        `${skipped === 1 ? "was" : "were"} already recorded stayed. ` +
+        strandedSkipReasons(skipped === 1)
       : "";
 
   return decision === "applied"

@@ -130,7 +130,7 @@ describe("stranded row wording", () => {
     assert.ok(notApplied.message.includes("on your word"));
   });
 
-  it("keeps a real outcome over the user's answer when the row moved on", () => {
+  it("keeps whatever was already recorded when the row moved on", () => {
     const none = describeStrandedResolution({
       decision: "applied",
       requested: 1,
@@ -139,7 +139,8 @@ describe("stranded row wording", () => {
     });
     assert.equal(none.tone, "warning");
     assert.ok(none.message.includes("Nothing was recorded"));
-    assert.ok(none.message.includes("the outcome it recorded was kept"));
+    assert.ok(none.message.includes("no longer stuck mid-apply"));
+    assert.ok(none.message.includes("whatever was already recorded stayed"));
 
     const partial = describeStrandedResolution({
       decision: "notApplied",
@@ -148,6 +149,36 @@ describe("stranded row wording", () => {
       skipped: 1,
     });
     assert.equal(partial.tone, "warning");
-    assert.ok(partial.message.includes("1 row was no longer stuck"));
+    assert.ok(partial.message.includes("1 row was not written"));
+  });
+
+  it("never states a cause for a skipped row as fact", () => {
+    // The regression: the wording said an apply that was still running had
+    // finished the row "and the outcome it recorded was kept". A row can
+    // equally have been answered by another adjudication — in which case what
+    // was kept is another person's unverified assertion, not a real apply's
+    // record — or have been requeued and re-claimed, which makes it too new to
+    // adjudicate at all. Same rule `unclaimedApplyMessage` already follows.
+    for (const message of [
+      describeStrandedResolution({
+        decision: "applied",
+        requested: 1,
+        resolved: 0,
+        skipped: 1,
+      }).message,
+      describeStrandedResolution({
+        decision: "applied",
+        requested: 2,
+        resolved: 1,
+        skipped: 1,
+      }).message,
+    ]) {
+      assert.ok(message.includes("may have finished"), message);
+      assert.ok(message.includes("another answer"), message);
+      assert.ok(message.includes("requeued"), message);
+      assert.equal(message.includes("has since finished"), false, message);
+      assert.equal(message.includes("the outcome it recorded was kept"), false, message);
+      assert.equal(message.includes("real outcome was kept"), false, message);
+    }
   });
 });
