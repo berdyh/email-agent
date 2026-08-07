@@ -33,6 +33,9 @@ function record(
     error: "",
     claimToken: "",
     createdAt: "2026-07-31T10:00:00.000Z",
+    // Required, matching the non-nullable Arrow column: "" is what an
+    // unclaimed row really holds, never `undefined`.
+    claimedAt: "",
     resolvedAt: "",
     ...overrides,
   };

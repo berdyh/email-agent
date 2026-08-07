@@ -113,14 +113,15 @@ export interface PendingOperationRecord {
    * before a claim, so a long-queued row claimed a second ago would otherwise
    * read as stale the moment it was picked up.
    *
-   * Optional on the interface, NOT on the table: the Arrow column is
-   * non-nullable and `toPendingOperationRecords` always writes "". It is
-   * declared optional only so that adding it did not invalidate the
-   * `PendingOperationRecord` literals the CLI and web packages already
-   * construct in their fixtures. Tighten it to required once those are
-   * updated (tracked in TODOS.md).
+   * REQUIRED, matching the table: the Arrow column is non-nullable and
+   * `toPendingOperationRecords` always writes "". It spent one wave declared
+   * optional purely so that adding it did not invalidate the
+   * `PendingOperationRecord` literals the CLI and web fixtures already
+   * constructed, on a branch that could not edit those packages. It is not
+   * optional in reality, and an optional declaration invites a reader to
+   * handle an `undefined` the database cannot produce.
    */
-  claimedAt?: string;
+  claimedAt: string;
   resolvedAt: string; // "" while pending
 }
 

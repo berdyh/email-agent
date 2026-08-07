@@ -286,6 +286,10 @@ describe("web API validation", () => {
           fetchInterval: 0,
           fetchScope: "all",
         },
+        // Required on AppConfig: normalizeSettings and defaultConfig always
+        // populate it, so a fixture that omitted it was describing a config
+        // `loadSettings()` cannot return.
+        retention: { approvalQueueDays: 365 },
         dataDir: "/tmp/email-agent",
         accounts: [],
       },
@@ -306,6 +310,7 @@ describe("web API validation", () => {
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
       gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
       ui: { fetchInterval: 0, fetchScope: "unread" },
+      retention: { approvalQueueDays: 365 },
       dataDir: "/tmp/email-agent",
       accounts: [],
     };
@@ -350,6 +355,10 @@ describe("web API validation", () => {
           fetchInterval: 0,
           fetchScope: "unread",
         },
+        // Required on AppConfig: normalizeSettings and defaultConfig always
+        // populate it, so a fixture that omitted it was describing a config
+        // `loadSettings()` cannot return.
+        retention: { approvalQueueDays: 365 },
         dataDir: "/tmp/email-agent",
         accounts: [{ email: "real@example.com", name: "Real", isDefault: true }],
       },
@@ -404,6 +413,7 @@ describe("web API validation", () => {
       prompts: { summary: "", digest: "" },
       embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
       ui: { fetchInterval: 0, fetchScope: "unread" },
+      retention: { approvalQueueDays: 365 },
       dataDir: "/tmp/email-agent",
       accounts: [],
     } as unknown as AppConfig;
