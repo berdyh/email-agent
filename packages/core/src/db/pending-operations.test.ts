@@ -11,6 +11,8 @@ import {
   PRUNABLE_STATUSES,
   selectStaleApplyingOperations,
   buildStrandedClaimFilter,
+  buildStrandedAgeClause,
+  describeLostClaimedOutcomes,
 } from "./pending-operations.js";
 import type { PendingOperationRecord } from "./schema.js";
 
@@ -181,23 +183,48 @@ describe("stranded `applying` rows", () => {
 });
 
 describe("stranded-row adjudication filter", () => {
+  const cutoffIso = "2026-08-07T10:15:00.000Z";
+
   it("can only ever touch rows still in applying", () => {
     // The ids come from a surface's stale-list snapshot, and the user may take
     // minutes to answer. Without the status clause, an apply that was merely
     // slow could finish and write `applied`/`failed`, and the adjudication
     // would then overwrite that fact with the user's guess.
-    assert.equal(
-      buildStrandedClaimFilter(["a", "b"]),
-      "id IN ('a', 'b') AND status = 'applying'",
+    assert.ok(
+      buildStrandedClaimFilter(["a", "b"], cutoffIso).startsWith(
+        "id IN ('a', 'b') AND status = 'applying' AND (",
+      ),
     );
   });
 
-  it("escapes the ids it interpolates", () => {
-    assert.ok(buildStrandedClaimFilter(["a'b"]).includes("'a''b'"));
+  it("re-asserts the staleness cutoff inside the write predicate", () => {
+    // The lists filter by age; the ids they submit are just ids. Without this
+    // clause a row claimed one second ago by a healthy apply is adjudicable by
+    // any client that names it.
+    const filter = buildStrandedClaimFilter(["a"], cutoffIso);
+    assert.ok(filter.includes(`\`claimedAt\` <= '${cutoffIso}'`));
+    assert.ok(filter.includes(`\`createdAt\` <= '${cutoffIso}'`));
+  });
+
+  it("mirrors selectStaleApplyingOperations' three age cases", () => {
+    // Same rule as the JS selector, or a row could be listed as stranded and
+    // then refuse to be adjudicated: claimed-before-cutoff, migrated in with no
+    // claim stamp (aged from createdAt), and a stamp that cannot be read at all.
+    assert.equal(
+      buildStrandedAgeClause(cutoffIso),
+      "(`claimedAt` = '' AND `createdAt` <= '2026-08-07T10:15:00.000Z') OR " +
+        "(`claimedAt` != '' AND `claimedAt` <= '2026-08-07T10:15:00.000Z') OR " +
+        "(`claimedAt` != '' AND `claimedAt` NOT LIKE '____-__-__T__:__:__.___Z')",
+    );
+  });
+
+  it("escapes the ids and the cutoff it interpolates", () => {
+    assert.ok(buildStrandedClaimFilter(["a'b"], cutoffIso).includes("'a''b'"));
+    assert.ok(buildStrandedAgeClause("a'b").includes("'a''b'"));
   });
 
   it("refuses an empty id list rather than widening to every stranded row", () => {
-    assert.throws(() => buildStrandedClaimFilter([]));
+    assert.throws(() => buildStrandedClaimFilter([], cutoffIso));
   });
 });
 

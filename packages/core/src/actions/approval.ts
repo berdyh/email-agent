@@ -6,6 +6,7 @@ import {
   prunePendingOperations,
   resolveClaimedOperations,
   resolveStrandedApplyingOperations,
+  STALE_APPLYING_THRESHOLD_MS,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
 import type { PendingOperationRecord } from "../db/schema.js";
@@ -439,11 +440,16 @@ export interface ChunkedApplyDeps {
   ): Promise<PendingOperationRecord[]>;
   /** Performs the Gmail mutations. */
   apply(operations: GmailOperation[]): Promise<ActionApplyResult>;
-  /** Writes the outcomes back, scoped to `token`. */
+  /**
+   * Writes the outcomes back, scoped to `token`. The return value is
+   * deliberately unconstrained: the real implementation reports which outcomes
+   * it managed to record (see `resolveClaimedOperations`), but the sequencing
+   * this function is responsible for does not depend on it.
+   */
   resolve(
     outcomes: PendingOperationOutcome[],
     token: string,
-  ): Promise<void>;
+  ): Promise<unknown>;
 }
 
 /**
@@ -557,24 +563,48 @@ export const STRANDED_APPLIED_NOTE =
  * and `resolvedAt` cleared so a future staleness check ages it from its next
  * claim rather than the one that died.
  *
+ * THE STALENESS THRESHOLD IS RE-ASSERTED HERE, not merely in the lists. The ids
+ * arrive from a surface's snapshot and are just ids; without a fresh cutoff
+ * computed at write time, a row claimed one second ago by a healthy apply could
+ * be adjudicated by any client that named it. The cutoff is folded into the
+ * update predicate itself (`buildStrandedClaimFilter`), because a JS pre-filter
+ * would leave a window between the age test and the destructive token stamp.
+ *
  * The count can be lower than `ids.length`, and that is information, not an
- * error: the ids came from a stale-list snapshot, and any row an in-flight
- * apply resolved in the meantime is no longer `applying` and is left alone.
+ * error. THREE things produce a shortfall, and the surfaces must not assert any
+ * one of them as the cause: an in-flight apply resolved the row (it is no longer
+ * `applying`); another adjudication answered it first; or the row is not
+ * actually stale — it left `applying`, was requeued, and a fresh apply claimed
+ * it inside the threshold.
+ *
+ * WHAT IS STILL NOT PROTECTED: an apply hung PAST the threshold that later
+ * returns from Gmail. Its write-back is scoped to the token this call
+ * overwrites, so it matches nothing and the real outcome is discarded —
+ * `resolveClaimedOperations` logs it, and on a `notApplied` answer the change
+ * can then be sent to Gmail a second time. Letting the hung apply win instead
+ * would strand the user with a row they have personally checked and cannot
+ * close, so this direction is chosen deliberately. See
+ * `resolveStrandedApplyingOperations`.
  */
 export async function adjudicateStrandedOperations(
   ids: string[],
   decision: StrandedDecision,
+  options?: { olderThanMs?: number; now?: Date },
 ): Promise<number> {
   if (ids.length === 0) return 0;
 
+  const olderThanMs = options?.olderThanMs ?? STALE_APPLYING_THRESHOLD_MS;
+  const now = options?.now ?? new Date();
+  const cutoffIso = new Date(now.getTime() - olderThanMs).toISOString();
+
   const resolved =
     decision === "applied"
-      ? await resolveStrandedApplyingOperations(ids, randomUUID(), {
+      ? await resolveStrandedApplyingOperations(ids, randomUUID(), cutoffIso, {
           status: "applied",
           error: STRANDED_APPLIED_NOTE,
           resolvedAt: new Date().toISOString(),
         })
-      : await resolveStrandedApplyingOperations(ids, randomUUID(), {
+      : await resolveStrandedApplyingOperations(ids, randomUUID(), cutoffIso, {
           status: "pending",
           error: "",
           resolvedAt: "",
