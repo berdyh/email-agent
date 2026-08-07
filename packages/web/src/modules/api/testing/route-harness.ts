@@ -8,14 +8,20 @@
  * loaded, which is what `packages/core/src/testing/lancedb-fixture.ts` already
  * does for core's own tests. This is those two, in the order that works:
  *
- *   1. redirect `$HOME` (so `LANCEDB_DIR` resolves into a temp directory),
- *   2. register the alias hook (so `@/…` and `@email-agent/core/…` resolve),
- *   3. `initDb()` on the temp database,
- *   4. only then import the route under test.
+ *   1. register the alias hook (so `@/…` and `@email-agent/core/…` resolve),
+ *   2. import core's fixture THROUGH that alias — safe before `$HOME` moves,
+ *      because the fixture deliberately has no static core import,
+ *   3. `useTempHome()`, which redirects `$HOME`, verifies `LANCEDB_DIR` landed
+ *      inside it, and registers the teardown,
+ *   4. `initTempDb()`,
+ *   5. only then import the route under test.
  *
- * Both the ordering guard and the seeding helpers are core's — importing them
- * through the alias rather than copying them is the point, since the whole
- * reason this file exists is that there were five hand-rolled fixtures.
+ * Both the ordering guard and the seeding helpers are core's, reached through
+ * the alias rather than copied — which is the point, since the whole reason
+ * this file exists is that there were several hand-rolled fixtures. Going
+ * through the alias also guarantees the test and the route hold ONE core module
+ * instance: a second copy resolved via node_modules would give them two
+ * different databases.
  *
  * WHAT IT DOES NOT COVER, stated because the gap is easy to lose: this is the
  * handler, not the framework. Next's routing, middleware, response streaming
