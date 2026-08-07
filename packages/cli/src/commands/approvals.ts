@@ -9,6 +9,8 @@ import {
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
   describeGmailOperation,
+  emailRefKey,
+  getEmailsByIds,
   parseLabelIds,
   STALE_APPLYING_THRESHOLD_MS,
 } from "@email-agent/core";
@@ -17,7 +19,7 @@ import type {
   PendingOperationRecord,
   StrandedDecision,
 } from "@email-agent/core";
-import { emailRefKey, getEmailsByRefs } from "../email-lookup.js";
+
 import {
   askOnce,
   usingPrompt,
@@ -54,8 +56,8 @@ export async function loadOperationDisplays(
   // One batched scan for the whole queue rather than one per operation. The
   // queue routinely holds dozens of rows over a handful of emails, and the
   // per-row version walked the emails table every time.
-  const emails = await getEmailsByRefs(
-    ops.map((op) => ({ accountId: op.accountId, emailId: op.emailId })),
+  const emails = await getEmailsByIds(
+    ops.map((op) => ({ accountId: op.accountId, id: op.emailId })),
   );
 
   return ops.map((op) => {

@@ -139,6 +139,129 @@ export async function countEmails(options?: {
   return table.countRows(filter);
 }
 
+/** One (account, message) pair. Gmail message ids are per-mailbox. */
+export interface EmailRef {
+  accountId: string;
+  id: string;
+}
+
+/**
+ * Stable Map key for an (accountId, id) pair, separated by NUL because NUL
+ * cannot occur in either half.
+ *
+ * The separator is written as the `\u0000` ESCAPE, never as a literal NUL byte:
+ * a literal one makes git classify the file as binary, so `git diff` prints
+ * `Bin 0 -> N bytes` instead of a patch and the file reaches review unread.
+ * That happened once already, to both surface copies of this code at the same
+ * time.
+ */
+export function emailRefKey(accountId: string, id: string): string {
+  return `${accountId}\u0000${id}`;
+}
+
+/**
+ * One predicate covering every (accountId, id) pair, or `undefined` when there
+ * is nothing to look up.
+ *
+ * Two LanceDB rules are load-bearing:
+ *  - DataFusion folds unquoted identifiers to lowercase, so `accountId` must be
+ *    backticked or the query dies with `No field named accountid`.
+ *  - `.where()` maps to `onlyIf` and REPLACES the previous predicate, so this
+ *    has to be one combined string; it can never be chained.
+ *
+ * Grouped BY ACCOUNT for the same reason `buildEmailReplacementFilter` is:
+ * `accountId IN (...) AND id IN (...)` is a cross product that matches pairs
+ * the caller never named.
+ */
+export function buildEmailLookupFilter(
+  refs: ReadonlyArray<EmailRef>,
+): string | undefined {
+  const byAccount = new Map<string, Set<string>>();
+  for (const ref of refs) {
+    const ids = byAccount.get(ref.accountId);
+    if (ids) ids.add(ref.id);
+    else byAccount.set(ref.accountId, new Set([ref.id]));
+  }
+  if (byAccount.size === 0) return undefined;
+
+  const clauses: string[] = [];
+  for (const [accountId, ids] of byAccount) {
+    const idList = [...ids].map((id) => `'${escapeSql(id)}'`).join(", ");
+    clauses.push(
+      `(\`accountId\` = '${escapeSql(accountId)}' AND id IN (${idList}))`,
+    );
+  }
+  return clauses.join(" OR ");
+}
+
+/**
+ * The slice of a LanceDB table this lookup uses. Narrow on purpose: it is the
+ * seam the tests open a real temp-directory table through, without the module
+ * reaching for the user's actual `~/.email-agent` database. It is also the only
+ * way to build the duplicate-`(accountId, id)` case, which `upsertEmails`
+ * replaces and therefore cannot produce.
+ */
+export interface EmailLookupTable {
+  query(): {
+    where(filter: string): { limit(n: number): { toArray(): Promise<unknown[]> } };
+  };
+}
+
+async function openEmailsTable(): Promise<EmailLookupTable> {
+  const db = await getDb();
+  return (await db.openTable(emailsTable)) as unknown as EmailLookupTable;
+}
+
+/**
+ * Batched replacement for one `getEmailById` per queued row.
+ *
+ * ONE COPY, IN CORE. This lived in `packages/web/src/modules/api/email-lookup.ts`
+ * and `packages/cli/src/email-lookup.ts` at once, hand-copied `escapeSql` and
+ * all, because core belonged to another branch when the approval surfaces
+ * needed it. Two copies of a LanceDB predicate builder is exactly the shape that
+ * drifts, and it went wrong in both copies simultaneously TWICE: once with
+ * `limit(refs.length)`, and once with no limit at all behind a comment asserting
+ * — falsely, and unchecked — that LanceDB's default limit applies to vector
+ * searches only.
+ *
+ * The approval list routinely holds dozens of operations across a handful of
+ * emails; the per-row version walked the emails table once per distinct email.
+ * This is a single scan, keyed back to `(accountId, id)` by the caller.
+ *
+ * Rows no longer in the local DB simply have no Map entry — callers must treat a
+ * miss as "not in local DB", exactly as a `null` from `getEmailById` meant.
+ *
+ * `limit(UNLIMITED_QUERY_ROWS)`, NOT `limit(refs.length)` and NOT no limit.
+ * `limit(refs.length)` assumes one row per pair and nothing enforces that: a
+ * duplicate eats a slot and the truncated scan drops a DIFFERENT pair's row,
+ * which the UI renders as "not in local DB" for an email sitting right there. No
+ * limit at all is ten rows (verified on a real 25-row table against
+ * `@lancedb/lancedb` 0.15.0, 2026-08-07). So the scan is explicitly unbounded
+ * and the predicate is what bounds it. If the table does hold two rows for one
+ * pair the last one scanned wins; the property that matters is that neither a
+ * duplicate nor a default can displace another pair's row.
+ */
+export async function getEmailsByIds(
+  refs: ReadonlyArray<EmailRef>,
+  openTable: () => Promise<EmailLookupTable> = openEmailsTable,
+): Promise<Map<string, EmailRecord>> {
+  const filter = buildEmailLookupFilter(refs);
+  const found = new Map<string, EmailRecord>();
+  if (!filter) return found;
+
+  const table = await openTable();
+  const rows = (await table
+    .query()
+    .where(filter)
+    .limit(UNLIMITED_QUERY_ROWS)
+    .toArray()) as EmailRecord[];
+
+  for (const row of rows) {
+    found.set(emailRefKey(row.accountId, row.id), row);
+  }
+  return found;
+}
+
 export async function getEmailById(
   id: string,
   accountId: string,
