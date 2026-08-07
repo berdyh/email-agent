@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 import chalk from "chalk";
-import ora from "ora";
+import ora, { type Ora } from "ora";
 import {
   initDb,
   getPendingOperations,
@@ -10,7 +10,7 @@ import {
   describeGmailOperation,
   parseLabelIds,
 } from "@email-agent/core";
-import type { PendingOperationRecord } from "@email-agent/core";
+import type { ActionApplyResult, PendingOperationRecord } from "@email-agent/core";
 import { emailRefKey, getEmailsByRefs } from "../email-lookup.js";
 
 export function describeOperation(op: PendingOperationRecord): string {
@@ -66,52 +66,170 @@ export function printOperationList(displays: OperationDisplay[]): void {
   }
 }
 
-export async function applyOperationIds(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const spinner = ora(`Applying ${ids.length} changes to Gmail...`).start();
-  const result = await applyPendingOperationsByIds(ids);
-  // Core claims each row before touching Gmail and reports one applied-or-failed
-  // entry per claimed row, so the remainder was already resolved elsewhere.
-  const skipped = Math.max(0, ids.length - (result.applied + result.failed));
+export interface ApplyOutcome {
+  requested: number;
+  applied: number;
+  failed: number;
+  /**
+   * Ids this run did not claim.
+   *
+   * NOT "already applied or rejected". Core claims a row before it calls Gmail,
+   * so a row this run failed to claim may equally be mid-flight in another
+   * apply (`applying`), have failed earlier, or not exist. The one thing that
+   * is certain is that THIS run did not touch it.
+   */
+  unclaimed: number;
+}
 
-  if (result.applied === 0 && result.failed === 0 && skipped > 0) {
-    spinner.warn(
-      `None of the ${skipped} change${skipped === 1 ? "" : "s"} was still pending — ` +
-        `already applied or rejected elsewhere. Nothing was sent to Gmail.`,
-    );
-    return;
+export interface RejectOutcome {
+  requested: number;
+  rejected: number;
+  /** Same meaning as on the apply outcome: not claimed by this run. */
+  unclaimed: number;
+}
+
+/** Wording for a finished apply. Pure, so the sentences are under test. */
+export function describeApplyOutcome(outcome: ApplyOutcome): {
+  tone: "success" | "warn";
+  message: string;
+} {
+  if (outcome.applied === 0 && outcome.failed === 0 && outcome.unclaimed > 0) {
+    const plural = outcome.unclaimed === 1 ? "" : "s";
+    return {
+      tone: "warn",
+      message:
+        `None of the ${outcome.unclaimed} change${plural} could be claimed — nothing was sent ` +
+        `to Gmail by this run. They may already have been applied or rejected elsewhere, or ` +
+        `another run may still be applying them. Run \`email-agent approvals list\` to see ` +
+        `what is still pending.`,
+    };
   }
 
-  const skippedNote = skipped > 0 ? `, ${skipped} already resolved elsewhere` : "";
-  if (result.failed > 0) {
-    spinner.warn(
-      `Applied ${result.applied} changes, ${chalk.red(`${result.failed} failed`)}${skippedNote}`,
-    );
-    for (const err of result.errors) {
-      console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
+  const unclaimedNote =
+    outcome.unclaimed > 0 ? `, ${outcome.unclaimed} not claimed by this run` : "";
+  if (outcome.failed > 0) {
+    return {
+      tone: "warn",
+      message: `Applied ${outcome.applied} changes, ${chalk.red(`${outcome.failed} failed`)}${unclaimedNote}`,
+    };
+  }
+  if (outcome.unclaimed > 0) {
+    return {
+      tone: "warn",
+      message: `Applied ${outcome.applied} changes to Gmail${unclaimedNote}`,
+    };
+  }
+  return { tone: "success", message: `Applied ${outcome.applied} changes to Gmail` };
+}
+
+/** Wording for a finished reject. Pure for the same reason. */
+export function describeRejectOutcome(outcome: RejectOutcome): string {
+  const base = `Rejected ${outcome.rejected} pending change${outcome.rejected === 1 ? "" : "s"}.`;
+  if (outcome.unclaimed === 0) return base;
+  return (
+    `${base} ${outcome.unclaimed} could not be claimed — they were no longer pending, so ` +
+    `another run had already taken them.`
+  );
+}
+
+/**
+ * What the CLI can honestly say after an apply threw.
+ *
+ * It cannot say "the rest stay queued". `applyPendingOperationsByIds` moves
+ * rows out of `pending` and stamps them `applying` BEFORE it calls Gmail, and
+ * the finalization that writes them back to applied/failed can itself throw —
+ * so a failed apply can leave rows in a state `approvals list` (which lists
+ * `pending`) does not show at all.
+ */
+export function describeApplyFailure(ids: string[], error: unknown): string[] {
+  return [
+    `Failed to apply ${ids.length} approved change${ids.length === 1 ? "" : "s"}: ${errorText(error)}`,
+    "Their state could not be confirmed. Some may have reached Gmail before the failure, and " +
+      "rows this run had already claimed can be left mid-apply, where `email-agent approvals " +
+      "list` will not show them. Check Gmail, then re-run `email-agent approvals list`.",
+  ];
+}
+
+export interface ApplyDeps {
+  apply?: (ids: string[]) => Promise<ActionApplyResult>;
+  /**
+   * Test seam: build the spinner. Tests hand back a REAL ora pointed at a fake
+   * TTY, so the lifecycle under test is ora's own, not a stand-in for it.
+   */
+  createSpinner?: (text: string) => Ora;
+}
+
+export async function applyOperationIds(
+  ids: string[],
+  deps: ApplyDeps = {},
+): Promise<ApplyOutcome> {
+  if (ids.length === 0) {
+    return { requested: 0, applied: 0, failed: 0, unclaimed: 0 };
+  }
+
+  const apply = deps.apply ?? applyPendingOperationsByIds;
+  const createSpinner = deps.createSpinner ?? ((text: string) => ora(text));
+  const spinner = createSpinner(`Applying ${ids.length} changes to Gmail...`).start();
+
+  try {
+    const result = await apply(ids);
+    const outcome: ApplyOutcome = {
+      requested: ids.length,
+      applied: result.applied,
+      failed: result.failed,
+      unclaimed: Math.max(0, ids.length - (result.applied + result.failed)),
+    };
+
+    const { tone, message } = describeApplyOutcome(outcome);
+    if (tone === "warn") spinner.warn(message);
+    else spinner.succeed(message);
+
+    if (result.failed > 0) {
+      for (const err of result.errors) {
+        console.log(chalk.red(`  ${err.emailId}: ${err.error}`));
+      }
     }
-  } else if (skipped > 0) {
-    spinner.warn(`Applied ${result.applied} changes to Gmail${skippedNote}`);
-  } else {
-    spinner.succeed(`Applied ${result.applied} changes to Gmail`);
+    return outcome;
+  } catch (err) {
+    spinner.fail(`Apply failed: ${errorText(err)}`);
+    throw err;
+  } finally {
+    // TEAR THE SPINNER DOWN ON EVERY PATH. Ora holds a referenced interval and
+    // puts stdin into a discard mode while it spins, so an apply that threw used
+    // to leave the process alive forever — the CLI printed its failure message
+    // and then span with the cursor hidden until the user killed it. `stop()`
+    // clears the line and restores the cursor.
+    if (spinner.isSpinning) spinner.stop();
   }
 }
 
-export async function rejectOperationIds(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const rejected = await rejectPendingOperationsByIds(ids);
-  const skipped = Math.max(0, ids.length - rejected);
-  console.log(
-    chalk.dim(
-      `Rejected ${rejected} pending changes.` +
-        (skipped > 0 ? ` ${skipped} were already resolved elsewhere.` : ""),
-    ),
-  );
+export interface RejectDeps {
+  reject?: (ids: string[]) => Promise<number>;
+}
+
+export async function rejectOperationIds(
+  ids: string[],
+  deps: RejectDeps = {},
+): Promise<RejectOutcome> {
+  if (ids.length === 0) return { requested: 0, rejected: 0, unclaimed: 0 };
+
+  const reject = deps.reject ?? rejectPendingOperationsByIds;
+  const rejected = await reject(ids);
+  const outcome: RejectOutcome = {
+    requested: ids.length,
+    rejected,
+    unclaimed: Math.max(0, ids.length - rejected),
+  };
+  console.log(chalk.dim(describeRejectOutcome(outcome)));
+  return outcome;
 }
 
 export interface ReviewCommitResult {
   approvedIds: string[];
   rejectedIds: string[];
+  /** Present only when the handler returned; absent when it threw. */
+  applyOutcome?: ApplyOutcome;
+  rejectOutcome?: RejectOutcome;
   rejectError?: unknown;
   applyError?: unknown;
 }
@@ -132,8 +250,8 @@ export interface ReviewCommitResult {
 export async function commitReviewDecisions(
   decisions: { approved: string[]; rejected: string[] },
   handlers: {
-    applyIds: (ids: string[]) => Promise<void>;
-    rejectIds: (ids: string[]) => Promise<void>;
+    applyIds: (ids: string[]) => Promise<ApplyOutcome>;
+    rejectIds: (ids: string[]) => Promise<RejectOutcome>;
   } = { applyIds: applyOperationIds, rejectIds: rejectOperationIds },
 ): Promise<ReviewCommitResult> {
   const result: ReviewCommitResult = {
@@ -142,13 +260,16 @@ export async function commitReviewDecisions(
   };
 
   try {
-    await handlers.rejectIds(decisions.rejected);
+    // Keep what the reject actually recorded. Reporting off the REQUESTED ids
+    // was how the CLI came to tell a user "your 1 rejection was already
+    // recorded" for a row another tab had claimed a moment earlier.
+    result.rejectOutcome = await handlers.rejectIds(decisions.rejected);
   } catch (err) {
     result.rejectError = err;
   }
 
   try {
-    await handlers.applyIds(decisions.approved);
+    result.applyOutcome = await handlers.applyIds(decisions.approved);
   } catch (err) {
     result.applyError = err;
   }
@@ -164,34 +285,64 @@ function errorText(err: unknown): string {
  * Turns a commit result into the lines the user sees. Pure so the honesty of
  * the failure wording — which decisions were recorded and which were not — is
  * covered by tests rather than by reading the code.
+ *
+ * The rule every line here follows: say only what the handler observed. When a
+ * handler threw, the CLI knows nothing about the rows it was given, so it says
+ * so instead of picking the comfortable answer.
  */
 export function describeReviewCommit(result: ReviewCommitResult): string[] {
   const lines: string[] = [];
+  const rejectedCount = result.rejectedIds.length;
 
   if (result.rejectError) {
     lines.push(
-      `Failed to record ${result.rejectedIds.length} rejection${result.rejectedIds.length === 1 ? "" : "s"}: ${errorText(result.rejectError)}`,
+      `Failed to record ${rejectedCount} rejection${rejectedCount === 1 ? "" : "s"}: ${errorText(result.rejectError)}`,
     );
     lines.push(
-      "Those changes are still pending — nothing was applied to Gmail for them. Re-run `email-agent approvals review` to answer again.",
+      "Their state could not be confirmed — the reject claims rows one at a time, so some may " +
+        "have been recorded before it failed. Nothing was applied to Gmail for them. Run " +
+        "`email-agent approvals list` to see which are still pending.",
     );
   }
 
   if (result.applyError) {
-    lines.push(
-      `Failed to apply ${result.approvedIds.length} approved change${result.approvedIds.length === 1 ? "" : "s"}: ${errorText(result.applyError)}`,
-    );
-    if (result.rejectedIds.length > 0 && !result.rejectError) {
-      lines.push(
-        `Your ${result.rejectedIds.length} rejection${result.rejectedIds.length === 1 ? " was" : "s were"} already recorded and are not affected.`,
-      );
+    lines.push(...describeApplyFailure(result.approvedIds, result.applyError));
+
+    if (rejectedCount > 0 && result.rejectOutcome) {
+      const { rejected, unclaimed } = result.rejectOutcome;
+      if (rejected === rejectedCount) {
+        lines.push(
+          `Your ${rejected} rejection${rejected === 1 ? " was" : "s were"} recorded before the apply ran and ${rejected === 1 ? "is" : "are"} not affected.`,
+        );
+      } else if (rejected === 0) {
+        lines.push(
+          `None of your ${rejectedCount} rejection${rejectedCount === 1 ? "" : "s"} could be recorded: ` +
+            `${unclaimed === 1 ? "that row was" : "those rows were"} no longer pending, so another ` +
+            `run had already claimed ${unclaimed === 1 ? "it" : "them"}. Their final state is whatever that run decided.`,
+        );
+      } else {
+        lines.push(
+          `${rejected} of your ${rejectedCount} rejections were recorded; the other ${unclaimed} ` +
+            `could not be claimed and were left to whatever run had already taken them.`,
+        );
+      }
     }
-    lines.push(
-      "Some of the approved changes may have reached Gmail before the failure; the rest stay queued. Run `email-agent approvals list` to see what is left.",
-    );
   }
 
   return lines;
+}
+
+/**
+ * Did the run leave anything the caller should treat as a failure?
+ *
+ * A thrown handler is one case. The other — the one that used to exit 0 — is a
+ * per-operation Gmail failure: core catches those and returns them as `failed`
+ * rather than throwing, so `applyError` stays unset while mail the user
+ * approved was never changed.
+ */
+export function commitFailed(result: ReviewCommitResult): boolean {
+  if (result.applyError !== undefined || result.rejectError !== undefined) return true;
+  return (result.applyOutcome?.failed ?? 0) > 0;
 }
 
 /**
@@ -287,7 +438,7 @@ export function registerApprovals(program: Command) {
         console.log(chalk.dim(`${remaining} changes left pending.`));
       }
 
-      if (commit.applyError || commit.rejectError) process.exitCode = 1;
+      if (commitFailed(commit)) process.exitCode = 1;
     });
 
   approvals
@@ -313,7 +464,20 @@ export function registerApprovals(program: Command) {
       } finally {
         rl.close();
       }
-      await applyOperationIds(ops.map((op) => op.id));
+
+      try {
+        const outcome = await applyOperationIds(ops.map((op) => op.id));
+        // A Gmail 403 on the only approved mutation is a failure, not a
+        // success with a note. Core catches per-operation Gmail errors and
+        // reports them as `failed`, so an exit code taken only from a thrown
+        // exception told shell automation everything worked.
+        if (outcome.failed > 0) process.exitCode = 1;
+      } catch (err) {
+        for (const line of describeApplyFailure(ops.map((op) => op.id), err)) {
+          console.error(chalk.red(line));
+        }
+        process.exitCode = 1;
+      }
     });
 
   approvals
