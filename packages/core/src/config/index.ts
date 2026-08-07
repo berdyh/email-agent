@@ -2,7 +2,7 @@ export {
   type AppConfig,
   type AgentMode,
   type AgentId,
-  type GmailSyncConfig,
+  type GmailAutoApplyConfig,
   type RetentionConfig,
   type AccountConfig,
 } from "./types.js";

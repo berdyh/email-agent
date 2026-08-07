@@ -23,7 +23,15 @@ export interface EmbeddingConfig {
   dimensions: number;
 }
 
-export interface GmailSyncConfig {
+/**
+ * The `gmail` section of `AppConfig`: the two booleans that decide whether an
+ * action run may mutate Gmail without a further prompt.
+ *
+ * Named for what it holds. It used to be `GmailSyncConfig`, from a `syncActions`
+ * field that no longer exists, and the name sent readers to `gmail/sync.ts` —
+ * the fetch→embed→store pipeline, which has nothing to do with these flags.
+ */
+export interface GmailAutoApplyConfig {
   /**
    * Apply AI-proposed Gmail changes (trash, spam, archive, labels) immediately
    * instead of queueing them for approval. Opt-in and off by default; it only
@@ -78,7 +86,7 @@ export interface AppConfig {
   gcp: GcpConfig;
   prompts: PromptsConfig;
   embedding: EmbeddingConfig;
-  gmail: GmailSyncConfig;
+  gmail: GmailAutoApplyConfig;
   ui: UiConfig;
   retention?: RetentionConfig;
   dataDir: string;
