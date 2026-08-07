@@ -56,24 +56,51 @@ export function buildEmailLookupFilter(refs: EmailRef[]): string | undefined {
 }
 
 /**
- * Batched replacement for one `getEmailById` per queued operation. A miss means
- * the email is no longer in the local DB, exactly as a `null` did before.
+ * The slice of a LanceDB table this module uses. Narrow on purpose: it is the
+ * seam the tests open a real temp-directory table through, without the module
+ * reaching for the user's actual `~/.email-agent` database.
+ */
+export interface EmailLookupTable {
+  query(): { where(filter: string): { toArray(): Promise<unknown[]> } };
+}
+
+async function openEmailsTable(): Promise<EmailLookupTable> {
+  const db = await getDb();
+  return (await db.openTable(emailsTable)) as unknown as EmailLookupTable;
+}
+
+/**
+ * Batched replacement for one `getEmailById` per queued row.
+ *
+ * The approval list routinely holds dozens of operations across a handful of
+ * emails; the per-row version walked the emails table once per distinct email.
+ * This is a single scan, keyed back to `(accountId, emailId)` by the caller.
+ *
+ * Rows that are no longer in the local DB simply have no Map entry — callers
+ * must treat a miss as "not in local DB", exactly as a `null` from
+ * `getEmailById` meant before.
+ *
+ * NO `.limit()`. It used to be `limit(refs.length)`, on the assumption that the
+ * table holds at most one row per `(accountId, id)` pair. Nothing enforces
+ * that: `upsertEmails` merges on the pair, but a duplicate written any other
+ * way silently eats a slot, and the truncated scan then drops a DIFFERENT
+ * pair's row — which the UI renders as "not in local DB" for an email that is
+ * sitting right there. LanceDB applies no default limit to a plain filtered
+ * query (a default of 10 applies to VECTOR searches only), so leaving it off is
+ * both correct and bounded by the predicate. If the table does hold two rows
+ * for one pair, the last one scanned wins; the property that matters is that a
+ * duplicate can no longer displace another pair.
  */
 export async function getEmailsByRefs(
   refs: EmailRef[],
+  openTable: () => Promise<EmailLookupTable> = openEmailsTable,
 ): Promise<Map<string, EmailRecord>> {
   const filter = buildEmailLookupFilter(refs);
   const found = new Map<string, EmailRecord>();
   if (!filter) return found;
 
-  const db = await getDb();
-  const table = await db.openTable(emailsTable);
-  const rows = (await table
-    .query()
-    .where(filter)
-    // At most one row per distinct pair, so this can never truncate a result.
-    .limit(refs.length)
-    .toArray()) as unknown as EmailRecord[];
+  const table = await openTable();
+  const rows = (await table.query().where(filter).toArray()) as EmailRecord[];
 
   for (const row of rows) {
     found.set(emailRefKey(row.accountId, row.id), row);

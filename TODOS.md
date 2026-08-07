@@ -224,8 +224,20 @@ branch during wave 2 and the CLI may only import the core barrel. This belongs
 in `core/src/db/emails.ts` as `getEmailsByIds(refs: {accountId, id}[])` next to
 `buildEmailFilters`, exported from `db/index.ts`, with both surfaces deleting
 their copy. Two copies of a LanceDB predicate builder is exactly the shape that
-drifts — the backticked `accountId` and the never-chain-`.where()` rule have to
-stay right in both.
+drifts — the backticked `accountId`, the never-chain-`.where()` rule and the
+absence of a `.limit()` (see below) have to stay right in both, and the review of
+PR #10 already caught the same `.limit()` defect in both copies at once.
+
+Core-side follow-ups this carries with it, deferred because `packages/core` was
+owned by another branch:
+  - `escapeSql` is hand-copied into both surfaces. The core version should be the
+    only one.
+  - The duplicate-row case the `.limit()` fix now tolerates would be better
+    prevented: nothing enforces one row per `(accountId, id)` in the `emails`
+    table. `upsertEmails` merges on that pair, so a duplicate can only arrive by
+    another path, but the invariant is unwritten and unenforced. Either state it
+    where the schema is defined or make the lookup pick deterministically
+    (newest `date` wins) rather than "last row scanned wins".
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### Retention / prune policy for pending_operations
@@ -377,19 +389,6 @@ a live run. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` must keep bypassing it.
 **Still out of scope even then, by construction:** a process running as *this*
 user. It can read the token file, and it can read the OAuth tokens under
 `~/.email-agent/accounts/` and call Gmail without the app at all.
-Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
-
-### The batched email lookup is unverified against a real LanceDB table
-**Priority:** P2
-`getEmailsByRefs` builds ``(`accountId` = '…' AND id IN ('…','…')) OR …`` and the
-filter *string* is unit-tested at both call sites, but nothing in the suite
-executes it against a real table — the tests are pure string assertions, as
-everything DB-shaped in this repo is. So the one thing that could actually be
-wrong is untested: whether LanceDB's DataFusion parser accepts `id IN (...)` and
-the parenthesised `OR` grouping at all. If it does not, the approvals list and
-`approvals list` both throw where they used to work. Verify with one live run
-against a populated `~/.email-agent` DB, or fold it into the integration harness
-below.
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### Snapshot restore is reachable from the CLI but not the UI
@@ -563,7 +562,22 @@ through a Map on `(accountId, emailId)`, since a Gmail id repeats across
 accounts. Implemented at the surface layer in `packages/web/src/modules/api/`
 and `packages/cli/src/` because `packages/core` was owned by another branch this
 wave; the duplication (including a copied `escapeSql`) is recorded as its own
-follow-up, as is the fact that only the filter *string* is under test.
+follow-up.
+
+**Correction (review of PR #10).** The scan carried `.limit(refs.length)` with a
+comment asserting "at most one row per pair, so this can never truncate".
+Nothing enforces one row per `(accountId, id)`: with two `a@x.com/id1` rows and
+one `b@x.com/id2` row, a limit of 2 stopped on the duplicates and the Map came
+back without `b@x.com/id2` — which both approval surfaces render as "not in
+local DB" for an email that is sitting in the table. The limit is gone; LanceDB
+applies no default limit to a plain filtered query (the default of 10 is for
+vector searches), so the predicate alone bounds the scan. Both files gained a
+test that opens a REAL temp-directory LanceDB table, inserts an actual duplicate
+row, and asserts the other account's row still comes back — replacing the "only
+the filter string is under test" gap that had its own P2 entry. The same tests
+run the apostrophe-escaping and injection cases against the real parser, which
+also settles whether DataFusion accepts `id IN (...)` with parenthesised `OR`
+grouping: it does.
 
 ### Distinguish an unclaimed apply from a no-op apply
 **Completed:** feature/todos-w2-surfaces (2026-08-07)
