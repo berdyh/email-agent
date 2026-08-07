@@ -243,8 +243,12 @@ approval panel on `/actions`), and `email-agent approvals stranded [--review]`.
 `approvals list` points at it too, because a `pending`-scoped list saying "no
 Gmail changes awaiting approval" was the only thing a user with an unaccounted-
 for mutation saw. Adjudication is `adjudicateStrandedOperations(ids, "applied" |
-"notApplied")` (core), claim-then-write by token so an apply that has since
-recorded a real outcome is left alone. **Two answers, no retry, no
+"notApplied")` (core), claim-then-write by token, with the staleness cutoff
+re-asserted inside the same atomic write predicate — so neither a row an apply
+already resolved nor one an apply claimed inside the threshold can be
+overwritten. What it still does not cover has its own entry below ("An apply
+hung past the staleness threshold still loses its outcome"); do not describe
+this as closing the in-flight window. **Two answers, no retry, no
 verification:** the buttons say "I checked Gmail — it happened" / "— it didn't",
 the toast says the outcome was recorded "on your word", and an `applied` row
 carries `STRANDED_APPLIED_NOTE` saying Email Agent did not check. Skipping is a
@@ -271,6 +275,65 @@ browser was available.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); scope corrected after
 the codex (gpt-5.6-sol xhigh) review of PR #8, 2026-08-07, which found the
 branch describing these as fixed.
+
+### An apply hung past the staleness threshold still loses its outcome
+**Priority:** P2
+**Narrowed:** feature/todos-w7-surface-adoption (2026-08-07)
+The stranded-row adjudication protects an outcome recorded BEFORE it claims. It
+does not protect an apply that is in flight AT claim time — it can only refuse
+to touch rows that are not stale, which is what
+`buildStrandedClaimFilter(ids, cutoffIso)` now does, folding the age test into
+the same atomic write that stamps the token (a JS pre-filter would leave a
+window between the test and the destructive stamp).
+
+**What remains, exactly.** An apply that claims a row, calls Gmail, hangs past
+`STALE_APPLYING_THRESHOLD_MS` (15 minutes) and THEN succeeds. The user, seeing
+the row listed as stranded, answers "it didn't happen"; the adjudication stamps
+its own token and requeues the row; the apply's write-back — scoped to the token
+it no longer holds — matches zero rows. **What a user would observe:** the change
+really is in Gmail (the message is in Trash), the queue row is `pending` again
+and re-approvable, and the audit trail says the change never happened. Approving
+it again sends the same mutation a second time. For `trash`/`spam` that is
+idempotent; for a label pair racing an opposing operation it is not.
+
+`resolveClaimedOperations` now DETECTS this: it keeps its claim token on every
+row it writes, reads back by token, and warns with the row ids and — for a lost
+`applied` — the double-mutation consequence. It reports, it does not repair;
+overwriting the adjudication would replace an answer the user personally
+checked with a record they have already contradicted.
+
+**Why this losing direction was chosen.** The other direction (a hung apply's
+late write wins) leaves a user who has personally looked in Gmail unable to
+close out the row at all, which is the exact failure the stranded surface exists
+to remove. Closing the window entirely needs the apply to hold a lease it
+renews, or a two-phase record that survives the process — neither of which
+LanceDB's update primitives express without a lock. Pinned by
+`db/stranded-adjudication.race.test.ts`, which drives both directions against a
+real temp-directory LanceDB under a throwaway `$HOME`.
+Found by: codex adversarial review of PR #13, 2026-08-07.
+
+### The adjudication count can undercount, and other queue helpers still hold stale handles
+**Priority:** P3
+**Found while fixing the above:** a LanceDB `Table` handle is PINNED to the
+version it was opened at. A handle another writer has moved past reads OLD rows
+with no error and THROWS `Commit conflict for version N` on write;
+`checkoutLatest()` refreshes it in place. Verified on a real table against
+`@lancedb/lancedb` 0.15.0, 2026-08-07.
+
+`db/pending-operations.ts` now routes its claim/resolve/adjudicate writes
+through `updateAtLatestVersion`/`queryAtLatestVersion` (refresh + bounded
+conflict retry). **The other modules do not.** `db/emails.ts`, `db/actions.ts`
+and `db/clusters.ts` each open a handle and write, and a multi-step sequence
+there would hit the same conflict. Nothing observed yet, and the email/cluster
+paths are single-write, so this is recorded rather than swept.
+
+Also open, and smaller: `resolveStrandedApplyingOperations` can UNDERCOUNT what
+it wrote. A `notApplied` row written back to `pending` can be claimed by a fresh
+apply before the count read, which re-stamps the token and hides the row from
+it. Undercounting understates what we did; overcounting would claim credit for
+another answer, so the direction is deliberate. Making it exact needs a count
+LanceDB's `update()` does not return.
+Found by: work on the PR #13 review, 2026-08-07.
 
 ### Concurrent applies over one batch are not serialized
 **Priority:** P3
@@ -332,7 +395,12 @@ into a silent no-op), and editable on Settings → Gmail with the consequence
 stated — resolved records are deleted permanently, `pending`/`applying`/`failed`
 never are. `normalizeRetentionConfig` fills a missing block with the built-in
 365 rather than 0, because 0 means "keep forever" and defaulting to it would
-promise the opposite of what core's sweep does.
+promise the opposite of what core's sweep does. The page holds the field's raw
+string and parses it through `modules/api/retention-contract.ts`, so a cleared
+input is `null` rather than the 0 `Number("")` yields — an empty field no longer
+silently means "keep forever" — and its pre-load value comes from the settings
+response rather than a client-side literal, so no second copy of the default
+exists to drift from `defaultConfig`.
 
 **Still open:** the sweep itself is opportunistic and inspectable nowhere. A CLI
 `approvals prune [--older-than-days N]` would make it something a user can run
@@ -356,7 +424,10 @@ and `emails` shapes, rows in `applied`/`rejected`/`failed`/`applying`, both
 halves of a concurrent-init race, and a refusal that leaves rows intact), and
 the chunked apply's claim/apply/resolve ordering — including the per-call
 scope of the stranded-chunk bound — is pinned in `actions/approval.test.ts`
-through injected dependencies.
+through injected dependencies. A third is covered now as well:
+`db/stranded-adjudication.race.test.ts` drives the claim, the adjudication and
+the apply's write-back against a real temp-directory LanceDB under a throwaway
+`$HOME`, including two adjudications racing over one row.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); narrowed after the
 PR #8 review pass, 2026-08-07.
 
@@ -386,10 +457,21 @@ the installed 0.15.0 (five forked runs): one commits, the loser fails with
 interleaving. That shows Lance commits are conflict-checked for a *schema*
 operation. It says nothing about whether two `update()` commits with
 overlapping predicates can both land, which is a different conflict class.
-Confirm the `update()` case specifically — a two-process test over one row, or
+Confirm the `update()` case specifically — a two-PROCESS test over one row, or
 the Rust commit-conflict path — and write down the answer.
-Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
-read-only review); narrowed 2026-08-07 after the addColumns concurrency probe.
+
+**Narrowed again, 2026-08-07, and still not the answer.** Two `update()` calls
+on ONE row through two handles of one connection WERE tested on a real
+temp-directory table against 0.15.0: the second throws
+`Commit conflict for version N` (`lance::io::commit`), so two overlapping
+`update()` commits cannot both land silently in that configuration — which is
+the half the gate needs. Two caveats keep this open. The conflict arises from
+the handle's pinned READ VERSION, so a handle refreshed with `checkoutLatest()`
+immediately before its write can commit against the newer version and the
+predicate is what decides the outcome (this is why
+`updateAtLatestVersion` retries a conflict rather than failing); and the probe
+was in-process, not two OS processes over the same directory, which is the
+scenario the entry is actually about. Do not close it on this evidence.
 
 ### The batched email lookup is duplicated in two surfaces
 **Priority:** P3
