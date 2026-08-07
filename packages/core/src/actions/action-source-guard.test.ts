@@ -506,6 +506,24 @@ export default null;
     // Nothing to fall back to: still nothing.
     assert.equal(extractActionData(`export default null;\n`, "x.action.ts"), undefined);
   });
+
+  it("refuses `export default undefined` rather than falling back — on purpose", () => {
+    // Correcting the record: commit 9461eef claimed this case got the fallback
+    // "for free" alongside `export default null`. It does not. Bare `undefined`
+    // is an unbound identifier, so the file is refused as `computed-export`
+    // before the coalescing is reached, even though Node would have loaded it
+    // and resolved `undefined ?? mod.action` to the named action.
+    //
+    // Refusing is the correct direction — we return less than the runtime, never
+    // more — but it is a fail-closed DIVERGENCE, not the parity that was
+    // claimed. This test exists so the difference is recorded as a fact rather
+    // than restated as an equivalence.
+    const source = `export const action = { id: "named", name: "N", prompt: "p" };
+export default undefined;
+`;
+    assert.deepEqual(rulesFor(source), ["computed-export"]);
+    assert.throws(() => extractActionData(source, "x.action.ts"), UnsafeActionSourceError);
+  });
 });
 
 describe("action source extraction (load path)", () => {

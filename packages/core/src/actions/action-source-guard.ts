@@ -723,6 +723,15 @@ export function extractActionData(
   // NAMED action at runtime, because `null ?? mod.action` is `mod.action`. An
   // absent default export is `undefined`, which the same expression covers, so
   // presence never needs to be consulted separately.
+  //
+  // CORRECTION to commit 9461eef, which claimed `export default undefined` gets
+  // the same fallback "for free". It does not, and the parity it claimed does
+  // not exist: bare `undefined` is an unbound identifier, so the file is refused
+  // with `computed-export` above and never reaches this line. Refusing is the
+  // safe direction — the file would have fallen back to the named export at
+  // runtime, so we return less, never more — but that is a fail-closed
+  // divergence, not parity, and saying otherwise is the defect. Two operands
+  // reach here nullish: an ABSENT default export, and `export default null`.
   const value = analysis.defaultExport?.value ?? analysis.namedActionExport?.value;
 
   // Nothing exported at all, or everything exported was nullish — the runtime
