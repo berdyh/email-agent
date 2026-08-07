@@ -85,8 +85,11 @@ export interface ActionRunResult {
    * rows before it calls Gmail, so a throw here may mean nothing happened OR
    * that mail was really trashed/marked spam and only the bookkeeping failed.
    * Surfaces must report it as "may have been applied"; the message built by
-   * `describeAutoApplyFailure` already says so. The rows are recoverable via
-   * `getStaleApplyingOperations()`.
+   * `describeAutoApplyFailure` already says so. The stranded rows can be
+   * LISTED by `getStaleApplyingOperations()` — that is a report, not a
+   * recovery. It re-applies nothing, rolls back nothing and resolves nothing,
+   * and it still has no caller on any surface. Only the user can say whether
+   * the Gmail change landed, so do not call those rows "recoverable".
    */
   applyError?: string;
   /**

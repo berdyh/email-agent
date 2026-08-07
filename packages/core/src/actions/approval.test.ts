@@ -434,6 +434,90 @@ describe("chunked apply claims one chunk at a time", () => {
       [APPLY_RESOLUTION_CHUNK_SIZE, 1],
     );
   });
+
+  it("bounds the stranded set PER CALL, not per batch", async () => {
+    // The honest scope of "at most one chunk can be stranded". Two concurrent
+    // applies over one batch leapfrog: A claims 1-10 and starts calling Gmail;
+    // B loses those to A's claim, does NOT stop, and claims 11-20 while A is
+    // still in flight. Both then die, and twenty rows — two chunks — sit in
+    // `applying`. Nothing serializes applies at batch level, so this is the
+    // real invariant, and the comments must not promise the stronger one.
+    const owned = new Set<string>();
+    let releaseA = () => {};
+    const aReachedGmail = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    function racingDeps(onApply: () => Promise<void>): ChunkedApplyDeps {
+      return {
+        newToken: () => `tok-${owned.size}`,
+        async claim(chunkIds) {
+          const won = chunkIds.filter((id) => !owned.has(id));
+          for (const id of won) owned.add(id);
+          return won.map(
+            (id) =>
+              ({
+                id,
+                batchId: "b1",
+                actionId: "a1",
+                actionName: "A",
+                accountId: "",
+                emailId: `msg-${id}`,
+                type: "trash",
+                labelIds: "[]",
+                status: "applying",
+                error: "",
+                claimToken: "t",
+                createdAt: "2026-08-07T00:00:00.000Z",
+                claimedAt: "2026-08-07T00:00:00.000Z",
+                resolvedAt: "",
+              }) satisfies PendingOperationRecord,
+          );
+        },
+        async apply(operations) {
+          await onApply();
+          return {
+            applied: operations.length,
+            failed: 0,
+            errors: [],
+            outcomes: operations.map((op) => ({
+              emailId: op.emailId,
+              type: op.type,
+              ok: true,
+            })),
+          } satisfies ActionApplyResult;
+        },
+        async resolve() {
+          throw new Error("process died before the outcome was written");
+        },
+      };
+    }
+
+    const batch = ids(20);
+    // A blocks inside Gmail, holding chunk 1 claimed.
+    const a = applyClaimedOperationsInChunks(
+      batch,
+      racingDeps(async () => {
+        releaseA();
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }),
+      10,
+    );
+    await aReachedGmail;
+    // B starts while A is mid-flight, loses chunk 1 and takes chunk 2.
+    const b = applyClaimedOperationsInChunks(
+      batch,
+      racingDeps(async () => {}),
+      10,
+    );
+
+    await assert.rejects(b, /process died/);
+    await assert.rejects(a, /process died/);
+
+    // Twenty rows claimed across two in-flight callers: one chunk each, not
+    // one chunk in total.
+    assert.equal(owned.size, 20);
+  });
 });
 
 describe("retention cutoff", () => {

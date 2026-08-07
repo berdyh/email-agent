@@ -197,9 +197,18 @@ export interface EnqueueOperationsResult {
  * local-filesystem backend is separately unconfirmed; see TODOS.md
  * "Cross-process claim atomicity is unconfirmed".)
  *
- * The failure is benign in the direction that matters: a duplicate is a
- * redundant proposal the user can see and reject, never a mutation applied
- * without approval.
+ * HOW BAD THE RACE IS DEPENDS ON `gmail.autoApplyActions`. With the approval
+ * gate on — the default — the failure is benign in the direction that matters:
+ * the duplicate is a redundant proposal sitting in the pending list, which the
+ * user can see and reject, and no mutation happens without approval. With
+ * auto-apply ON it is NOT benign: each racing runner immediately applies its
+ * own queued ids (`actions/runner.ts`, the auto-apply branch), so neither
+ * duplicate is ever pending for review and **Gmail receives both calls** for
+ * the same change. Re-trashing an already-trashed message is idempotent enough
+ * to be harmless; a second `addLabels`/`markUnread` pair racing an opposing
+ * operation is not necessarily. Do not describe this as "a duplicate the user
+ * can reject" without naming the auto-apply case, where there is nothing to
+ * reject.
  */
 export async function enqueueOperationsDetailed(
   input: EnqueueOperationsInput,
@@ -264,6 +273,15 @@ export function resolveRetentionCutoff(
  * Never throws: a housekeeping failure must not turn a successful approval
  * into a reported failure, which would tell the user their Gmail changes did
  * not happen when they did.
+ *
+ * Fails CLOSED on an unreadable configuration. `loadSettings()` now throws for
+ * every read/parse failure that is not ENOENT rather than silently returning
+ * the built-in defaults, so a settings file that cannot be read lands in the
+ * catch below and NO rows are pruned. Previously it resolved to the 365-day
+ * default and deleted audit rows belonging to a user who had explicitly set
+ * `approvalQueueDays: 0` to keep them forever. "Keep too much" is the only
+ * acceptable direction here — the rows record Gmail mutations that really
+ * happened and nothing can reconstruct them.
  */
 async function pruneResolvedOperationsQuietly(): Promise<void> {
   try {
@@ -394,9 +412,18 @@ export interface ChunkedApplyDeps {
  * or a LanceDB failure during the first chunk left every remaining row sitting
  * in `applying`, ineligible for approval or rejection, even though only ten had
  * reached Gmail. With the claim inside the loop the claimed set and the
- * in-flight set coincide, so what is actually guaranteed is: at most one chunk
- * can be stranded in `applying`, and every id after it is still `pending` and
- * still approvable or rejectable.
+ * in-flight set coincide.
+ *
+ * THE BOUND IS PER CALL, NOT PER BATCH. State it that way everywhere: at most
+ * one chunk *of this invocation* can be stranded in `applying`, and every id
+ * this invocation has not yet reached is still `pending`. Nothing serializes
+ * two concurrent apply calls over one batch, and they leapfrog — A claims ids
+ * 1-10 and starts calling Gmail; B loses those to A's claim, continues, and
+ * claims 11-20 while A is still in flight; a process death now strands twenty
+ * rows, two chunks, one per caller. The invariant that survives concurrency is
+ * "one chunk per in-flight caller", and the only way to make it "one chunk,
+ * full stop" is to serialize applies at batch level, which is not done here.
+ * Do not restate the per-call bound as a per-batch one.
  *
  * A fresh token per chunk keeps the claim/lease discipline intact — resolution
  * predicates are scoped to `claimToken` AND `status`, so a chunk can only ever
