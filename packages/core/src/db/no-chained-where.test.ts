@@ -204,9 +204,12 @@ function buildsLanceQuery(file: string, source: string): boolean {
 
 /**
  * Query builders that live OUTSIDE `core/src/db`, each with the reason it is
- * there. Both surface copies are the duplication tracked in TODOS.md ("The
- * batched email lookup is duplicated in two surfaces"); when that lands in core
- * they come off this list. Adding a file here is a decision someone writes down.
+ * there. Adding a file here is a decision someone writes down.
+ *
+ * The two surface copies of the batched email lookup used to be on this list.
+ * They are gone: `getEmailsByIds` lives in `db/emails.ts` and is scanned with
+ * the rest of the directory, so the sweep below now proves there is no query
+ * surface outside `db/` other than the two test helpers.
  */
 const QUERY_BUILDERS_OUTSIDE_DB = new Map<string, string>([
   [
@@ -216,14 +219,6 @@ const QUERY_BUILDERS_OUTSIDE_DB = new Map<string, string>([
   [
     "core/src/testing/claim-race-worker.ts",
     "the forked claim-race worker reads back what it won; same reasoning as the fixture",
-  ],
-  [
-    "web/src/modules/api/email-lookup.ts",
-    "hand-copied batched email lookup — belongs in core/src/db/emails.ts (TODOS.md)",
-  ],
-  [
-    "cli/src/email-lookup.ts",
-    "the CLI's copy of the same lookup; the CLI may only import the core barrel (TODOS.md)",
   ],
 ]);
 

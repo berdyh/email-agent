@@ -24,6 +24,37 @@ import { escapeSql, UNLIMITED_QUERY_ROWS } from "./utils.js";
  * a refresh, a sequence that is *supposed* to degrade into "my predicate now
  * matches nothing" instead explodes, and a read-back taken to count what a
  * write reached can be a snapshot from before someone else's commit.
+ *
+ * # WHICH FUNCTIONS HERE NEED THE WRAPPERS, AND WHICH DO NOT
+ *
+ * The rule is not "reads are safe": a stale handle's `countRows()` answers from
+ * its own snapshot with no error (measured — 6 where the table held 5). The
+ * rule is that a handle is only stale if something committed AFTER it was
+ * opened, so a function that opens a fresh handle and takes ONE step is
+ * reading the version current at the moment it asked, which is the most any
+ * caller could get.
+ *
+ * SINGLE-STEP, therefore safe as written — each opens its own handle and does
+ * one thing before returning:
+ *   - `getPendingOperations`, `getPendingOperationsByIds`,
+ *     `getPendingOperationsForEmails`, `countPendingOperations` (one read)
+ *   - `savePendingOperations` (one append; appends do not conflict, and there
+ *     is nothing after it to go stale)
+ * `getStaleApplyingOperations` is single-step too — it delegates to
+ * `getPendingOperations` and filters in JS.
+ *
+ * MULTI-STEP, therefore routed through the wrappers below:
+ *   - `claimPendingOperations` (update, then read back by token)
+ *   - `resolveClaimedOperations` (several updates, then a read back)
+ *   - `resolveStrandedApplyingOperations` (claim, read, write, read, release)
+ *   - `prunePendingOperations` (count, then delete)
+ *
+ * Elsewhere in `db/`: `emails.ts` and `clusters.ts` deliberately take the raw
+ * error. `upsertEmails` and `saveClusters` are delete-then-append pairs and
+ * would hit the same conflict, but they are single-write non-queue paths where
+ * an error surfacing to a caller who can repeat the action is the right
+ * outcome — a failed `fetch` is repeatable, a queue write that is supposed to
+ * lose a race quietly is not.
  */
 const COMMIT_CONFLICT_BACKOFF_MS = [1, 5, 20, 80] as const;
 
@@ -49,6 +80,36 @@ async function updateAtLatestVersion(
     await table.checkoutLatest();
     try {
       await table.update(args);
+      return;
+    } catch (err) {
+      if (
+        !isCommitConflict(err) ||
+        attempt >= COMMIT_CONFLICT_BACKOFF_MS.length
+      ) {
+        throw err;
+      }
+      await sleep(COMMIT_CONFLICT_BACKOFF_MS[attempt] as number);
+    }
+  }
+}
+
+/**
+ * Refreshes the handle, then deletes. Same contract as
+ * `updateAtLatestVersion`, and needed for the same measured reason: a
+ * `table.delete()` on a handle another writer has moved past THROWS
+ * `Commit conflict for version N` — verified against `@lancedb/lancedb` 0.15.0
+ * on a real temp-directory table (2026-08-07) by racing an `update()` from a
+ * second handle between this handle's read and its delete. The error text is
+ * the same one `isCommitConflict()` already keys off.
+ *
+ * The prune predicate is status- and time-scoped and therefore idempotent, so
+ * re-running it against the newer version is exactly right.
+ */
+async function deleteAtLatestVersion(table: Table, where: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    await table.checkoutLatest();
+    try {
+      await table.delete(where);
       return;
     } catch (err) {
       if (
@@ -536,8 +597,18 @@ export function buildPruneFilter(olderThanIso: string): string {
  * The returned count is ADVISORY. It is the count taken BEFORE the delete, so a
  * concurrent sweep or a row resolved between the count and the delete makes it
  * drift from the number of rows this call actually removed. Nothing consumes it
- * for correctness — it exists for logging and tests. Do not build a check on
- * it; re-count if you need a true figure.
+ * for correctness — it exists for logging, for `approvals prune` to report, and
+ * for tests. Do not build a check on it; re-count if you need a true figure.
+ *
+ * MULTI-STEP ON ONE HANDLE, so it refreshes. The count and the delete are two
+ * steps with an await between them, and a LanceDB handle is pinned to the
+ * version it was opened at: an apply committing in that window makes the raw
+ * `table.delete()` THROW `Commit conflict for version N` (measured, 0.15.0,
+ * 2026-08-07 — same behaviour as `update()`), and makes the raw `countRows()`
+ * answer from the stale snapshot with no error at all. The sweep runs after
+ * every apply/reject, and the caller in `actions/approval.ts` swallows its
+ * failures with a warning, so the un-refreshed version degraded into "the
+ * retention sweep quietly stops running whenever anything else is writing".
  */
 export async function prunePendingOperations(
   olderThanIso: string,
@@ -547,10 +618,12 @@ export async function prunePendingOperations(
   const filter = buildPruneFilter(olderThanIso);
   // Count first: a LanceDB delete rewrites the table, so a no-op sweep should
   // not pay for one. This runs after every apply/reject, where nothing to
-  // prune is the common case.
+  // prune is the common case. At the latest version, so the decision is not
+  // made from a snapshot taken before someone else's commit.
+  await table.checkoutLatest();
   const doomed = await table.countRows(filter);
   if (doomed === 0) return 0;
-  await table.delete(filter);
+  await deleteAtLatestVersion(table, filter);
   return doomed;
 }
 

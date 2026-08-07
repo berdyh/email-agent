@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, lstat, readFile, readdir, readlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 const root = process.cwd();
@@ -58,6 +58,62 @@ async function collectSourceFiles(dir, files = []) {
 
 const violations = [];
 
+/**
+ * `CLAUDE.md` and `AGENTS.md` must be ONE FILE.
+ *
+ * They used to be two separate files with heavily overlapping content, hand-
+ * synced, and they drifted — repeatedly, and in the direction that costs most:
+ * a `mergeInsert` recommendation survived in one after being disproved and
+ * removed from the other, `getEmails` was still described as chaining
+ * `.where()` long after it stopped, and a find/replace had rewritten the whole
+ * Agent Executors section into advice about a `Codex-executor.ts` and a `Codex`
+ * env var that do not exist. Every agent session loads one of these two files,
+ * so a wrong line in the copy nobody fixed teaches the wrong thing until
+ * somebody notices — which is how it produced real defects rather than just
+ * untidiness.
+ *
+ * A symlink makes the drift IMPOSSIBLE rather than detectable-after-the-fact,
+ * and it matches the convention the bare-repo container already documents. This
+ * check exists for the ways a symlink can quietly stop being one: a checkout on
+ * a filesystem without symlink support materialises it as a text file
+ * containing the target path, and an editor or a script can replace it with a
+ * regular copy. Either way the two files are separate again, and nothing else
+ * would say so.
+ */
+async function checkInstructionFilesAreOneFile() {
+  let stats;
+  try {
+    stats = await lstat(join(root, "CLAUDE.md"));
+  } catch {
+    violations.push("CLAUDE.md is missing; it must be a symlink to AGENTS.md");
+    return;
+  }
+
+  if (!stats.isSymbolicLink()) {
+    violations.push(
+      "CLAUDE.md is a regular file. It must be a symlink to AGENTS.md — two separate " +
+        "instruction files drift, and the drift teaches the wrong thing to whichever " +
+        "agent reads the copy nobody fixed. Restore it with: " +
+        "rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md",
+    );
+    return;
+  }
+
+  const target = await readlink(join(root, "CLAUDE.md"));
+  if (target !== "AGENTS.md") {
+    violations.push(
+      `CLAUDE.md points at "${target}"; it must point at AGENTS.md (a relative link, ` +
+        "so it survives being cloned to any path)",
+    );
+  }
+
+  if (!(await exists(join(root, "AGENTS.md")))) {
+    violations.push("AGENTS.md is missing; it is the real instruction file");
+  }
+}
+
+await checkInstructionFilesAreOneFile();
+
 for (const card of requiredCards) {
   if (!(await exists(join(root, card)))) {
     violations.push(`missing module card: ${card}`);
@@ -103,4 +159,7 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(`Module boundary check passed (${requiredCards.length} cards checked).`);
+console.log(
+  `Module boundary check passed (${requiredCards.length} cards checked, ` +
+    "CLAUDE.md -> AGENTS.md verified).",
+);

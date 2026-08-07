@@ -51,10 +51,14 @@ export interface GmailAutoApplyConfig {
 /**
  * Retention policy for append-only audit tables.
  *
- * Optional on `AppConfig` so that adding it does not invalidate the explicit
- * `AppConfig` literals the web and CLI packages already declare. It is always
- * populated by `normalizeSettings`/`defaultConfig`, so a value read straight
- * out of `loadSettings()` is never undefined in practice.
+ * REQUIRED on `AppConfig`. `normalizeSettings` and `defaultConfig` always
+ * populate it, so a value read out of `loadSettings()` never lacks it — it was
+ * declared optional for one wave only, so that adding it did not invalidate the
+ * explicit `AppConfig` literals the web and CLI fixtures already declared on a
+ * branch that could not edit those packages. An optional declaration on a field
+ * that is always present invites callers to write a fallback, and the fallback
+ * a reader reaches for here is `0`, which means "keep every record forever" —
+ * the opposite of what core's sweep does with a missing block.
  */
 export interface RetentionConfig {
   /**
@@ -89,7 +93,7 @@ export interface AppConfig {
   embedding: EmbeddingConfig;
   gmail: GmailAutoApplyConfig;
   ui: UiConfig;
-  retention?: RetentionConfig;
+  retention: RetentionConfig;
   dataDir: string;
   accounts: AccountConfig[];
   oauth?: OAuthConfig;

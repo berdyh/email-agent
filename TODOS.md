@@ -133,7 +133,7 @@ Found by: testing specialist during /review (2026-08-06). Closed by the
 second adversarial review pass (2026-08-07).
 
 ### `POST /api/actions` answers 404 for a file that WAS found
-**Priority:** P3
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 `packages/web/src/app/api/actions/route.ts:64` returns a flat
 `{ error: "Action not found" }` whenever `loadUserAction()` yields nothing. Two
 different situations reach that line: no file answers to the id at all, and a
@@ -142,10 +142,13 @@ construct the evaluator refuses. The second is now diagnosed loudly in the
 server log by `loadUserAction()`, but the user sees the same 404 either way and
 the reason never reaches the browser.
 
-`UserActionMeta.problem` (from `listUserActions()`) carries the exact reason, so
-the fix is to look the id up and answer 422 with `problem` when one exists,
-reserving 404 for an id nothing presents. Not done in this pass because it is in
-`packages/web`, which was out of scope for the review round that found it.
+`UserActionMeta.problem` (from `listUserActions()`) carries the exact reason.
+The route now looks the id up and answers **422 with that reason** when a file
+presents it, reserving 404 for an id nothing on disk presents.
+`modules/api/actions.route.test.ts` drives the real handler against a real temp
+`$HOME` with two real files — one that loads and one the evaluator refuses — and
+also asserts that `GET` still LISTS the unloadable file, without which the id in
+the 422 would not be something the user can act on.
 Found by: codex (gpt-5.6-sol xhigh) adversarial pass, round 2 (2026-08-07).
 
 ### Record which surface approved an operation
@@ -210,9 +213,10 @@ own property shadows the polluted prototype (verified by running exactly that �
 `"autoApplyAcknowledged" in gmail` is true either way, but the value read is the
 own `false`). The reason to add the guard anyway is that the safety belongs to a
 different function, holds only while that function materializes every key, and
-was written down nowhere. **`packages/cli/src/commands/config.ts` still uses its
-own private `getNestedValue`/`setNestedValue`**, so the guard protects no caller
-yet — see the CLI entry below.
+was written down nowhere. `packages/cli/src/commands/config.ts` now calls the
+shared helpers (feature/todos-w10-cleanup (2026-08-07)), so the guard finally has a caller; the
+threat-model half of this entry is unchanged and stays open as a statement
+rather than a task.
 
 ## Core actions / approval queue
 
@@ -313,22 +317,39 @@ LanceDB's update primitives express without a lock. Pinned by
 real temp-directory LanceDB under a throwaway `$HOME`.
 Found by: codex adversarial review of PR #13, 2026-08-07.
 
-### The adjudication count can undercount, and other queue helpers still hold stale handles
-**Priority:** P3
+### The adjudication count can undercount (the stale-handle half is closed)
+**Priority:** P3 for the undercount; the stale-handle half closed on feature/todos-w10-cleanup (2026-08-07)
 **Found while fixing the above:** a LanceDB `Table` handle is PINNED to the
 version it was opened at. A handle another writer has moved past reads OLD rows
 with no error and THROWS `Commit conflict for version N` on write;
 `checkoutLatest()` refreshes it in place. Verified on a real table against
 `@lancedb/lancedb` 0.15.0, 2026-08-07.
 
-`db/pending-operations.ts` now routes its claim/resolve/adjudicate writes
-through `updateAtLatestVersion`/`queryAtLatestVersion` (refresh + bounded
-conflict retry). **The other modules do not.** `db/emails.ts`, `db/actions.ts`
-and `db/clusters.ts` each open a handle and write, and a multi-step sequence
-there would hit the same conflict. Nothing observed yet, and the email/cluster
-paths are single-write, so this is recorded rather than swept.
+**The stale-handle half is done, and it found a live bug.** Two further facts
+were measured against 0.15.0 while doing it: `table.delete()` on a stale handle
+THROWS the same commit conflict `update()` does, and `countRows()` answers from
+the stale snapshot with no error (6 where the table held 5).
+`prunePendingOperations` counts and then deletes — two steps on one handle — and
+its only caller swallows failures with a warning by design, so the retention
+sweep quietly stopped running whenever anything else was writing, on an
+append-only table. It now goes through a new `deleteAtLatestVersion` plus a
+refresh before the count (`db/prune-stale-handle.test.ts`, which establishes the
+raw hazard first so the fix's case is known to be exercising something).
 
-Also open, and smaller: `resolveStrandedApplyingOperations` can UNDERCOUNT what
+The rest is answered rather than swept: the module header now names every
+function here as SINGLE-STEP (one fresh handle, one operation, nothing after it
+to go stale — `getPendingOperations`, `getPendingOperationsByIds`,
+`getPendingOperationsForEmails`, `countPendingOperations`,
+`savePendingOperations`, and `getStaleApplyingOperations`, which delegates) or
+MULTI-STEP (routed). `db/emails.ts` and `db/clusters.ts` are named too, with why
+they deliberately keep taking the raw error: `upsertEmails` and `saveClusters`
+are delete-then-append pairs on single-write non-queue paths, where an error
+surfacing to a caller who can repeat the action is the right outcome. A failed
+`fetch` is repeatable; a queue write that is supposed to lose a race quietly is
+not. `db/actions.ts` turned out to be single-step throughout.
+
+**Still open, and it is the half that cannot be fixed from here:**
+`resolveStrandedApplyingOperations` can UNDERCOUNT what
 it wrote. A `notApplied` row written back to `pending` can be claimed by a fresh
 apply before the count read, which re-stamps the token and hides the row from
 it. Undercounting understates what we did; overcounting would claim credit for
@@ -385,8 +406,8 @@ resurrect it speculatively; write it here if and when this is actually
 fixed.) Do not weaken the PENDING scoping to get it.
 Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 
-### The retention window is visible, but the sweep still is not
-**Priority:** P3
+### The retention window is visible, and so is the sweep
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 **Partly completed:** feature/todos-w7-surface-adoption (2026-08-07)
 `retention.approvalQueueDays` governs pruning of resolved `pending_operations`
 rows. It is now returned by `sanitizeSettingsForResponse`, accepted by
@@ -403,25 +424,37 @@ silently means "keep forever" — and its pre-load value comes from the settings
 response rather than a client-side literal, so no second copy of the default
 exists to drift from `defaultConfig`.
 
-**Still open:** the sweep itself is opportunistic and inspectable nowhere. A CLI
-`approvals prune [--older-than-days N]` would make it something a user can run
-and see the result of, instead of a side effect of the next apply or reject.
-Not built here.
+**Now closed** (feature/todos-w10-cleanup (2026-08-07)). `email-agent approvals prune
+[--older-than-days N] [--dry-run]` makes the sweep something a user can run and
+see the result of. `--dry-run` counts through the SAME predicate the delete
+uses, rather than a second one written to match it. `describePrune` is pure,
+because every sentence it produces is a promise about deleted audit rows: which
+statuses are eligible, which never are, that the count is advisory, and that 0
+days means KEEP FOREVER — `Number("")` is 0 and 0 is the documented opt-out, so
+a command reading it as "cutoff = now" would delete the audit trail of the user
+who most explicitly asked to keep it. Six e2e cases through the built binary,
+asserting which rows survive rather than what was printed.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
 ### Tighten the two fields declared optional for the surfaces' benefit
-**Priority:** P4
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 `PendingOperationRecord.claimedAt` and `AppConfig.retention` are both
 declared optional purely so the `PendingOperationRecord` / `AppConfig`
 literals in `packages/cli/src/commands/approvals.test.ts` and
 `packages/web/src/modules/api/validation.test.ts` kept compiling while core
 changed on its own branch. Neither is optional in reality: the Arrow column
-is non-nullable and `normalizeSettings` always populates `retention`. Add the
-fields to those fixtures and make both required.
+is non-nullable and `normalizeSettings` always populates `retention`. Both are
+required now and the three fixtures carry the fields. Nothing in product code
+needed changing, which is the evidence that the optionality was only ever about
+the fixtures. Worth stating why it mattered beyond tidiness: an optional
+declaration on a field that is always present invites a caller to write a
+fallback for an `undefined` the system cannot produce, and the fallback a reader
+reaches for on `retention` is `0` — which means "keep every record forever", the
+opposite of what core's sweep does with a missing block.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
 ### The batched email lookup is duplicated in two surfaces
-**Priority:** P3
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 `buildEmailLookupFilter`/`getEmailsByRefs` exist twice —
 `packages/web/src/modules/api/email-lookup.ts` and
 `packages/cli/src/email-lookup.ts` — including a hand-copied `escapeSql`. They
@@ -438,17 +471,26 @@ a comment asserting LanceDB's default limit applies to vector searches only)
 capped the lookup at ten emails in both copies. Both now pass
 `UNLIMITED_QUERY_ROWS` from the core barrel.
 
-Core-side follow-ups this carries with it, deferred because `packages/core` was
-owned by another branch:
-  - `escapeSql` is hand-copied into both surfaces. The core version should be the
-    only one.
+**Closed on feature/todos-w10-cleanup (2026-08-07).** `getEmailsByIds(refs: {accountId, id}[])`
+lives in `core/src/db/emails.ts` next to `buildEmailFilters` and
+`buildEmailReplacementFilter` — which is where the two rules it depends on were
+already written down — with `emailRefKey`, `buildEmailLookupFilter` and the
+`EmailLookupTable` seam, exported from `db/index.ts`. Both surface copies are
+deleted, hand-copied `escapeSql` included. The two test files merge into
+`db/email-lookup.test.ts`, which deliberately does NOT use `useTempHome()`, for
+the reason both predecessors did not: the duplicate-`(accountId, id)` case
+cannot be produced through `upsertEmails`, which replaces that pair.
+`no-chained-where.test.ts` loses both allowlist entries, so its sweep now proves
+there is no LanceDB query surface outside `db/` other than the two test helpers.
+
+Still open, and carried forward here rather than lost:
   - The duplicate-row case the `.limit()` fix now tolerates would be better
     prevented: nothing enforces one row per `(accountId, id)` in the `emails`
     table. `upsertEmails` deletes that pair before appending it (it no longer
     merges — see the fetch entry in Completed), so a duplicate can only arrive by
     another path, but the invariant is unwritten and unenforced. Either state it
     where the schema is defined or make the lookup pick deterministically
-    (newest `date` wins) rather than "last row scanned wins".
+    (newest `date` wins) rather than "last row scanned wins". **Priority: P4.**
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### action_results `accountId: ""` carries two meanings
@@ -525,7 +567,7 @@ authenticated run would settle it; until then treat the numbers as
 well-evidenced but unconfirmed.
 
 ### `isAvailable()` reports gemini usable when it is merely installed
-**Priority:** P3
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 Found while investigating the above (`feature/todos-w4-executors`, 2026-08-07).
 `GeminiExecutor.isAvailable()` probes `npx --no-install @google/gemini-cli
 --version`, which answers "is the CLI present", not "can it run a prompt". On
@@ -534,12 +576,35 @@ will select gemini as a fallback and then block on an interactive OAuth prompt
 until the 120s `execFile` timeout kills it — a dead agent run per attempt,
 surfacing as a timeout rather than a usable error.
 
-Options: probe something auth-sensitive and cheap; cache a negative result for
-the process lifetime after the first auth failure; or map the CLI's documented
-exit codes (`1` general/API failure, `42` input error, `53` turn limit) to a
-clear "installed but not authenticated" message. Deliberately not fixed here —
-every option needs a live authenticated CLI to validate against, which is the
-same thing blocking the entry above.
+**Fixed, and verified live in the direction that matters.** Two changes, both
+from facts read out of the INSTALLED `@google/gemini-cli` 0.54.4 rather than
+from documentation:
+
+- `geminiCredentialSource()` checks the locations the CLI itself reads —
+  `GOOGLE_API_KEY`/`GEMINI_API_KEY` (`getApiKeyFromEnv`),
+  `<homedir>/.gemini/oauth_creds.json` and `GOOGLE_APPLICATION_CREDENTIALS`
+  (`fetchCachedCredentialsList`), the `GOOGLE_GENAI_USE_VERTEXAI` +
+  `GOOGLE_CLOUD_PROJECT` pair, and the `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE`
+  keychain opt-in. `isAvailable()` requires presence AND one of those.
+- `execute()` spawns with `NO_BROWSER=1` (`noBrowser: !!process.env["NO_BROWSER"]`
+  in the CLI's own config builder), so it can never open a consent screen nobody
+  is watching. An unauthenticated run then fails fast with gemini's
+  `FatalAuthenticationError`, translated into a message naming the fix — the
+  CLI's own wording says "run it in an interactive terminal", which is not
+  something this process can do on the user's behalf.
+
+Measured on this machine, gemini installed and unauthenticated: `isAvailable()`
+now false in 0ms where it was true, and `execute()` throws in ~3.9s where it hung
+for 120s. The presence probe also gained a 15s timeout; it had none.
+
+**What this does NOT establish, and must not be read as:** that the credentials
+WORK. An expired refresh token, a revoked key and a mistyped project all look
+identical from here, and only a real call can tell. The probe is deliberately
+generous at the edges (the keychain and Vertex cases are believed rather than
+inspected) because a false negative silently drops a usable agent, while a false
+positive now costs one fast, clearly-worded failure instead of a two-minute
+hang. A SUCCESSFUL gemini run remains unverified — see the entry above, which
+stays open.
 
 ### direct-api / OpenRouter have still never made a live call
 **Priority:** P3
@@ -568,22 +633,21 @@ spend.
 ## Core config
 
 ### The consent invariant is shared but not yet adopted by web
-**Priority:** P3
-**Half done** by `feature/todos-w4b-config` (2026-08-07). Core now has ONE
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+**Half done** by `feature/todos-w4b-config` (2026-08-07); adopted on this wave. Core now has ONE
 implementation of "autoApplyActions requires autoApplyAcknowledged" —
 `normalizeAutoApplyConsent` in `config/settings.ts`, called by
 `normalizeSettings`, exported from `@email-agent/core/config`, with the truth
 table and the truthy-non-boolean refusals under test.
 
-What is NOT done, because `packages/web` belonged to a concurrent branch: the
-web copy still exists. `normalizeGmailConfig` in
-`packages/web/src/modules/api/validation.ts` is a hand-written duplicate of the
-same body with the same signature, called from `mergeSettingsUpdate` and
-`sanitizeSettingsForResponse`. It should become a call to the core export,
-imported from `@email-agent/core/config` — the specifier that file already uses
-for `defaultConfig` and `AppConfig`. Keep the second enforcement point; it is
-deliberate defense in depth at the API boundary. Only the second *implementation*
-goes away.
+`normalizeGmailConfig` in `packages/web/src/modules/api/validation.ts` is now a
+CALL to `normalizeAutoApplyConsent`, imported from `@email-agent/core/config` —
+the specifier that file already used for `defaultConfig` and `AppConfig`. The
+second ENFORCEMENT point stays, deliberately: a settings PUT that somehow
+bypassed core's `normalizeSettings` must still not be able to arm unattended
+Gmail writes. Only the second IMPLEMENTATION is gone. The 36 existing
+`validation.test.ts` cases, including the truthy-non-boolean refusals, pass
+unchanged — which is the check that the two bodies really were identical.
 
 ## Web
 
@@ -620,14 +684,24 @@ user. It can read the token file, and it can read the OAuth tokens under
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### Snapshot restore is reachable from the CLI but not the UI
-**Priority:** P3
-`email-agent actions snapshots list|restore` now exists, so the recovery path is
-no longer unreachable. The web actions page still has no restore control, which
-is where a user who overwrote an action via the edit chat actually is when they
-notice. Wants a "Previous versions" affordance on the action card, calling the
-existing `GET/POST /api/actions/user/snapshots`, and it must surface an
-`UnsafeActionSourceError` refusal as the specific rule violations (the CLI
-already does) rather than as a generic failure toast.
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+A "Versions" control on each user-action card
+(`components/actions/snapshot-restore-dialog.tsx`) lists snapshots and restores
+one through the existing routes. The half that was not decoration: a refusal now
+carries the RULES. `restoreSnapshot` writes through `saveUserAction`, which
+re-validates, so a snapshot predating the source guard is refused — and that was
+reaching the browser as a 500 "Failed to restore action snapshot", which tells a
+user with an unrecoverable action nothing at all while the CLI has always printed
+the violations. The route answers **422 with
+`UnsafeActionSourceError.violations`** and the surface renders them, one per
+line, with "nothing was changed" and what to do instead.
+
+**Kept honest about coverage:** there is still no component testing library, so
+the dialog itself is verified by reading. The wording
+(`modules/api/snapshot-contract.ts`) and the request shaping
+(`hooks/use-action-snapshots.ts`) live outside it and are tested, and
+`modules/api/snapshots.route.test.ts` drives both real handlers against a real
+temp `$HOME` with a pre-guard snapshot on disk.
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### The OAuth state/CSRF guard has never been run against Google
@@ -656,17 +730,23 @@ discover them at the consent screen.
 ## CLI
 
 ### `actions snapshots` list/restore are only covered by their filename parser
-**Priority:** P4
-`originalFilenameFromSnapshot` is unit-tested; `collectSnapshots` and the
-restore path are not, because they read and write the real
-`~/.email-agent/actions/.snapshots` directory and the suite has no filesystem
-fixture convention. The interesting case — restoring a pre-guard snapshot and
-getting the `UnsafeActionSourceError` branch instead of the generic one — is
-verified by reading only.
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+`commands/action-snapshots.e2e.test.ts` runs the BUILT binary against the CLI
+harness's temp `$HOME`, with real action files and real snapshots on disk:
+`list` (including the newest-first order and the no-snapshots message),
+`restore` on `y`, the snapshot it writes of the version it replaced, an
+unrecognised snapshot name — and the interesting case, restoring a pre-guard
+snapshot and getting the `UnsafeActionSourceError` branch with its specific rule
+violations rather than the generic one.
+
+It also caught the regression that made this wave necessary: the confirmation
+prompt was still `rl.question()`, so `restore X < /dev/null` hung commander's
+action promise and exited 0 having restored nothing and said nothing.
+Mutation-checked by restoring `rl.question()`: exactly the EOF case fails.
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
 ### Adopt the shared dotted-path config helpers
-**Priority:** P3
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 `packages/cli/src/commands/config.ts` still declares its own `getNestedValue` and
 `setNestedValue`. Replace both with `getNestedConfigValue`/`setNestedConfigValue`
 from `@email-agent/core` (`config/dotted-path.ts`, added on
@@ -675,14 +755,17 @@ and `prototype` in any path position and also fix a latent bug the CLI copy has:
 `typeof null === "object"`, so a null intermediate is walked into rather than
 replaced.
 
-Until this lands the guard has no caller, so `config set __proto__.x true` still
-writes to `Object.prototype` in the CLI process. That is not currently
-exploitable — see "The consent flag records consent…" above for why, and for why
-the guard exists regardless — but "not currently exploitable" is the whole reason
-this is P3 rather than higher, not a reason to skip it.
+Done. Both local copies are gone; `UnsafeConfigPathError` is caught on `get` and
+on `set` (reading walks the same chain) and printed as one line plus the
+offending segment.
 
-`UnsafeConfigPathError` carries `path` and `segment`, so the command can print a
-specific message instead of a stack trace.
+`commands/config.e2e.test.ts` drives the built binary. Its refusal case asserts
+three things, and the third is the one that matters: the output must carry NO
+stack trace. Without it the case passes even with the write left unguarded,
+because the read-back after `saveSettings` throws the same error a moment later
+— same exit code, same words, and the pollution has already happened. That was
+found by mutation-checking, not by design: the first version of the test passed
+against the unguarded setter.
 
 ## Core Gmail
 
@@ -848,8 +931,14 @@ setup DELIBERATELY, noted here so nobody reads them as missed:
     per-operation failure, because there is no linked account. The claim, the
     resolution, the reporting and the exit codes are covered; "the trash really
     reached Gmail" is not, and cannot be from here.
-  - **The action runner's agent half.** Nothing drives a real model, so a run
-    still cannot be exercised end to end from prompt to queued operations.
+  - **A REAL MODEL.** Narrowed on feature/todos-w10-cleanup (2026-08-07): `run-action` IS now
+    driven end to end — prompt construction, the HTTP call, `parseActionOutput`,
+    `mapResultToOperations`, the queue write, the approval prompt and the exit
+    code — by pointing `OPENAI_BASE_URL` at a local `node:http` stub under
+    `agentMode: "direct-api"`, which the OpenAI SDK honours. What that does NOT
+    cover is a real model: the stub answers a fixed body, so nothing in the
+    suite says an LLM would produce that shape, or that a real provider would
+    accept the request. The plumbing is covered; the model is not.
   - **`fetch`.** `syncEmails` needs the Gmail API; only its storage half
     (`upsertEmails`) is now covered.
 
@@ -875,6 +964,9 @@ overflow at 375, 640, 800 or 1024 px.
     buttons are unobserved in a browser.
   - **No automated React test exists**, so nothing prevents a regression in any
     of the above — the pass was manual and is not repeatable by CI.
+  - **The "Versions" snapshot-restore control** (added
+    feature/todos-w10-cleanup, 2026-08-07) has never been seen in a browser at
+    all. Its routes and its wording are tested; the dialog is not.
   - Streaming chat generation and its abort-on-close behaviour, and the per-card
     action Run/Delete pending state under concurrency, were not exercised.
 
@@ -899,6 +991,84 @@ a 400. Found while writing the route tests; pinned as-is in
 `approvals.route.test.ts` with a comment saying it is a wart rather than a
 contract, so the behaviour cannot drift unnoticed. When it becomes a 400, change
 that assertion in the same commit.
+
+### The two instruction files were separate, and the drift caused defects
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+`CLAUDE.md` and `AGENTS.md` were two files with heavily overlapping content,
+hand-synced. They drifted, and it was not untidiness: every agent session loads
+one of them, so a wrong line in the copy nobody fixed keeps teaching the wrong
+thing. What had actually diverged, all of it in the direction of undoing a fix:
+
+- AGENTS.md still recommended `mergeInsert` for keyed rows, which the other file
+  documents as measurably broken on these tables. That is advice to reintroduce
+  the bug that stopped `email-agent fetch` storing a single email.
+- AGENTS.md still described `getEmails` as chaining `.where()`, which is the
+  exact bug `no-chained-where.test.ts` exists to prevent.
+- AGENTS.md's whole Agent Executors section had been through a Claude→Codex
+  find/replace: `Codex-executor.ts`, "strip the `Codex` env var", "spawning
+  `Codex` CLI from inside Codex". None of those exist; the file is
+  `claude-executor.ts` and the variable is `CLAUDECODE`.
+
+**Made one file rather than kept in step.** `AGENTS.md` is the real file
+(matching what the bare-repo container already documents) and `CLAUDE.md` is a
+symlink to it. The argument for the symlink over a divergence check: a check can
+only report drift AFTER it has happened and after an agent has already read the
+wrong copy, while a symlink makes drift impossible; and the repo already ships a
+checked-in symlink (`packages/web/package-lock.json`), so it is not a new
+mechanism. `scripts/check-module-boundaries.mjs` guards the ways a symlink stops
+being one — a checkout on a filesystem without symlink support materialises it
+as a text file, and an editor or script can replace it with a copy — and fails
+with the one-line fix. Mutation-checked by replacing the link with a copy.
+
+### The CLI prompt layer: EOF, Ctrl-C, and two interfaces over one stdin
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+Three defects, one new module (`packages/cli/src/prompt.ts`).
+
+1. **Two sites still used `rl.question()`** after the rule against it was
+   written down: `run-action`'s post-run `[a/r/S]` prompt and
+   `actions snapshots restore`'s confirmation. Both hung commander's action
+   promise at EOF and exited 0 having done nothing and said nothing.
+2. **Porting them was not enough.** `printf 'r\ny\nn\n' | email-agent run-action junk`
+   STILL lost both review answers: the `[a/r/S]` interface is in flowing mode,
+   so it had already buffered `y` and `n` before it closed, and the interface
+   `reviewOperations` opened next saw immediate EOF. A second, independent
+   defect, found by the new e2e test rather than by reading. Fixed by threading
+   ONE session through both prompts (`usingPrompt`).
+3. **Ctrl-C committed partial decisions.** With no `SIGINT` listener, node's
+   readline closes the interface on `^C`, which ends the iterator —
+   byte-identical to EOF — so `^C` half-way through a review classified as
+   `stop` and the y answers were applied to Gmail.
+
+**The Ctrl-C decision, and why.** SIGINT aborts and commits nothing (exit 130);
+EOF keeps what was decided. The two must differ because they mean different
+things: piped input running out is the normal end of a scripted review, and
+Ctrl-D means "end of input", while Ctrl-C is what a user reaches for the moment
+they realise the wrong thing is about to be trashed. The asymmetry settles it —
+aborting costs a re-run and loses nothing, since every row stays queued and
+reviewable; committing on Ctrl-C costs a Gmail mutation no surface here can
+undo. Scope stated rather than overclaimed: readline only emits `SIGINT` in
+TERMINAL mode, so with piped stdin `^C` kills the process before any commit,
+which is the same outcome by a different mechanism. There is no pty library in
+this repo, so `prompt.test.ts` drives node's own `^C` decoding over a
+`terminal: true` PassThrough pair — the mechanism is the real one; an actual
+terminal is not observed.
+
+### The test resolve hook was more permissive than the real resolver
+**Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
+`module-aliases.mjs` fell back to `<rest>.ts` for any `@email-agent/core/`
+subpath with no `index.ts`, while `packages/web/tsconfig.json` maps the wildcard
+to `*/index.ts` plus one explicit deep path (`gmail/operations`). A test-only
+`import "@email-agent/core/db/utils"` therefore resolved under test and would be
+refused by both tsc and webpack — tests passing against a module graph the
+application can never build, which is the one thing a harness must not do. Its
+comment claimed it "mirrors the tsconfig deliberately and nothing more", which
+was false.
+
+Tightened rather than re-documented: barrel-only wildcard, the one deep path
+listed by name, and an unmappable specifier THROWS with the two ways to fix it.
+`modules/api/module-aliases.test.ts` reads the tsconfig and fails if the two
+disagree — set-for-set on the deep paths and target-for-target on each. No
+existing import needed the fallback.
 
 ## Completed
 
@@ -1328,8 +1498,8 @@ read this entry as covering the web and CLI adoptions.
   as OWN properties and an own property shadows the polluted prototype — a
   property of a DIFFERENT function, which is the whole argument for guarding
   here. Also fixes a latent `typeof null === "object"` bug carried from the CLI
-  original. **The CLI still uses its private copies**, so the guard has no caller
-  yet; tracked under "Adopt the shared dotted-path config helpers".
+  original. (The CLI adopted them on feature/todos-w10-cleanup (2026-08-07); at the time of this
+  entry it still used its private copies, so the guard had no caller yet.)
 - **Notify when a legacy `gmail.syncActions` key is dropped** (was P3). Done.
   `loadSettingsFromPath` warns once per settings path per process, saying what
   the key did, that its value is dropped, that changes are queued for approval

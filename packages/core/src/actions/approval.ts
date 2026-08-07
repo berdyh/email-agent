@@ -337,7 +337,7 @@ export function resolveRetentionCutoff(
 async function pruneResolvedOperationsQuietly(): Promise<void> {
   try {
     const settings = await loadSettings();
-    const cutoff = resolveRetentionCutoff(settings.retention?.approvalQueueDays);
+    const cutoff = resolveRetentionCutoff(settings.retention.approvalQueueDays);
     if (cutoff === null) return;
     await prunePendingOperations(cutoff);
   } catch (err) {

@@ -20,7 +20,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,12 +58,28 @@ export interface QueueRow {
   [key: string]: unknown;
 }
 
+export interface RunOptions {
+  stdin?: string;
+  /**
+   * Extra environment for this invocation.
+   *
+   * The reason it exists: `agentMode: "direct-api"` sends the runner through
+   * the OpenAI SDK, which reads `OPENAI_BASE_URL`/`OPENAI_API_KEY` from the
+   * environment. Pointing those at a local `node:http` stub is how a full
+   * `run-action` — prompt, agent call, result parse, queue write, approval
+   * prompt — becomes reachable in a test without a model or a key.
+   */
+  env?: Record<string, string>;
+}
+
 export interface CliHarness {
   home: string;
   seed: (spec: SeedSpec) => Promise<void>;
   /** Every `pending_operations` row, id-sorted. */
   queue: () => Promise<QueueRow[]>;
-  run: (args: string[], options?: { stdin?: string }) => Promise<RunResult>;
+  /** Writes `$HOME/.email-agent/settings.json`. Partial: core fills defaults. */
+  writeSettings: (settings: Record<string, unknown>) => Promise<void>;
+  run: (args: string[], options?: RunOptions) => Promise<RunResult>;
 }
 
 /** Strips ANSI, so an assertion is about words rather than colour codes. */
@@ -94,12 +110,21 @@ export async function startCli(label: string): Promise<CliHarness> {
       await seedRun(["seed", JSON.stringify(spec)]);
     },
     queue: async () => JSON.parse(await seedRun(["read"])) as QueueRow[],
+    writeSettings: async (settings) => {
+      const dir = join(home, ".email-agent");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "settings.json"), JSON.stringify(settings), "utf-8");
+    },
     run: (args, options = {}) =>
       new Promise<RunResult>((resolvePromise, rejectPromise) => {
         const child = execFile(
           process.execPath,
           [CLI_BIN, ...args],
-          { env, cwd: PACKAGES, maxBuffer: 8 * 1024 * 1024 },
+          {
+            env: { ...env, ...(options.env ?? {}) },
+            cwd: PACKAGES,
+            maxBuffer: 8 * 1024 * 1024,
+          },
           (error, stdout, stderr) => {
             // A non-zero exit is an ANSWER here, not a failure: several commands
             // exit 1 deliberately (a stranded row is an unresolved change to the

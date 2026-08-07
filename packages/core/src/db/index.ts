@@ -19,6 +19,11 @@ export {
   markStaleUnreadEmailsRead,
   buildStaleUnreadFilter,
   buildEmailFilters,
+  buildEmailLookupFilter,
+  emailRefKey,
+  getEmailsByIds,
+  type EmailRef,
+  type EmailLookupTable,
 } from "./emails.js";
 export { saveActionResult, getActionResults } from "./actions.js";
 export {

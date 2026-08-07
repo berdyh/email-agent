@@ -6,6 +6,7 @@ import {
   applyOperationIds,
   commitFailed,
   commitReviewDecisions,
+  describeAbortedReview,
   describeApplyOutcome,
   describeOperation,
   describeRejectOutcome,
@@ -33,6 +34,9 @@ function record(
     error: "",
     claimToken: "",
     createdAt: "2026-07-31T10:00:00.000Z",
+    // Required, matching the non-nullable Arrow column: "" is what an
+    // unclaimed row really holds, never `undefined`.
+    claimedAt: "",
     resolvedAt: "",
     ...overrides,
   };
@@ -529,5 +533,36 @@ describe("stranded rows (`approvals stranded`)", () => {
       assert.equal(message.includes("the outcome it recorded was kept"), false, message);
       assert.equal(message.includes("real outcome was kept"), false, message);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The abort wording
+// ---------------------------------------------------------------------------
+//
+// Pure for the same reason every other sentence in this file is: it makes a
+// PROMISE — that nothing was written — and that promise is the entire value of
+// aborting. A wording that hedged it would undo the guarantee even though the
+// code kept it. It cannot be reached by the e2e tests, because `^C` is not
+// something a pipe can deliver (see `prompt.ts` on why the piped case is
+// covered by the process dying instead).
+
+describe("describeAbortedReview", () => {
+  it("promises both halves: nothing applied AND nothing rejected", () => {
+    const message = describeAbortedReview(3);
+    assert.match(message, /nothing was applied to Gmail/i);
+    assert.match(message, /nothing was rejected/i);
+  });
+
+  it("says the changes are still queued, and how to come back to them", () => {
+    // The reason an abort is cheap. A user who is told only "aborted" does not
+    // know whether their queue survived.
+    const message = describeAbortedReview(3);
+    assert.match(message, /All 3 changes are still queued/);
+    assert.match(message, /approvals review/);
+  });
+
+  it("reads correctly for a single change", () => {
+    assert.match(describeAbortedReview(1), /The change is still queued/);
   });
 });

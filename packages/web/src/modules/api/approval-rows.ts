@@ -3,7 +3,7 @@ import {
   isDestructiveOperation,
   parseLabelIds,
 } from "@email-agent/core/actions";
-import { emailRefKey, getEmailsByRefs } from "@/modules/api/email-lookup";
+import { emailRefKey, getEmailsByIds } from "@email-agent/core/db";
 import type {
   ApprovalEmailSummary,
   ApprovalOperation,
@@ -37,8 +37,8 @@ export interface ApprovalRowInput {
 export async function toApprovalOperations(
   rows: readonly ApprovalRowInput[],
 ): Promise<ApprovalOperation[]> {
-  const emails = await getEmailsByRefs(
-    rows.map((row) => ({ accountId: row.accountId, emailId: row.emailId })),
+  const emails = await getEmailsByIds(
+    rows.map((row) => ({ accountId: row.accountId, id: row.emailId })),
   );
 
   return rows.map((row) => {
