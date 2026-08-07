@@ -618,17 +618,29 @@ batch serializes N network calls with the panel blocked. Both faster shapes were
 examined on `feature/todos-w4b-config`; the reasoning is now at the function.
 
 **`messages.batchModify` is REJECTED, not deferred. Do not re-propose it.**
-- It returns an empty success with **no per-message result**, so N queue rows
-  would collapse onto one all-or-nothing status. On a partial failure we would
-  either retire rows as applied without evidence, or mark rows failed that were
-  really mutated — precisely the ambiguity `toOperationOutcomes` fails closed on
-  today.
-- It cannot express `trash`. `messages.batchDelete` is PERMANENT deletion, a
-  different and far more destructive operation, and must never be substituted
-  for it.
-- Only operations sharing an identical (account, addLabelIds, removeLabelIds)
-  tuple can share a call, so a typical junk batch (trash + spam + archive
-  interleaved) fragments into single-operation calls anyway.
+Both grounds were read off the REST reference on 2026-08-07:
+- "If successful, the response body is empty" — **no per-message result**, so N
+  queue rows would collapse onto one all-or-nothing status. On a partial failure
+  we would either retire rows as applied without evidence, or mark rows failed
+  that were really mutated — precisely the ambiguity `toOperationOutcomes` fails
+  closed on today. (`messages.modify`, used today, returns the modified
+  `Message` per call.)
+- One request is one `ids[]` list against one `addLabelIds`/`removeLabelIds`
+  pair under one `userId`, so only operations sharing an identical (account,
+  addLabelIds, removeLabelIds) tuple can share a call. A typical junk batch
+  (trash + spam + archive interleaved) is three distinct tuples, so it fragments
+  into single-operation calls anyway.
+
+**Correction (2026-08-07):** an earlier revision of this entry listed a third
+ground — that `batchModify` "cannot express `trash`" and that `batchDelete` was
+the only batch route. That was false and had never been checked. Gmail's labels
+guide lists `TRASH` as manually appliable (unlike `SENT`/`DRAFT`), and
+`batchModify` documents no restriction on `addLabelIds` beyond the 1000-id cap,
+so `addLabelIds: ["TRASH"]` is the batched equivalent of `messages.trash()` —
+the same relationship `markAsSpam()` already relies on with `modify` +
+`["SPAM"]`. `messages.batchDelete` is the analogue of `messages.delete`
+(PERMANENT) and must never be substituted for trash, but it is not a reason to
+reject `batchModify`. The rejection stands on the two verified grounds above.
 
 **A bounded pool is deferred**, and what it needs is known:
 1. **Partition by (account, message), serial inside a partition.** The queue can

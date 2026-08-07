@@ -141,17 +141,29 @@ function mapSubscriptionResult(result: ActionEmailResult): GmailOperation[] {
  * large batch is N awaited network calls with the approval surface blocked —
  * and it is left that way for now. Both faster shapes were examined:
  *
- * `messages.batchModify` is REJECTED, not deferred. It returns an empty
- * success with **no per-message result**, so N rows would have to collapse onto
- * one all-or-nothing status: on a partial failure we would either retire rows
- * as applied without evidence, or mark rows failed that really were mutated.
- * That is precisely the ambiguity `toOperationOutcomes` fails closed on. It
- * also does not cover `trash` — `messages.batchDelete` is PERMANENT deletion,
- * a different and far more destructive operation, and must never be
- * substituted — and only operations sharing an identical (account,
- * addLabelIds, removeLabelIds) tuple can share a call, so the typical junk
- * batch (trash + spam + archive interleaved) fragments into single-operation
- * calls anyway.
+ * `messages.batchModify` is REJECTED, not deferred, on two grounds — both read
+ * off its REST reference on 2026-08-07:
+ * - "If successful, the response body is empty." **No per-message result**, so
+ *   N rows would have to collapse onto one all-or-nothing status: on a partial
+ *   failure we would either retire rows as applied without evidence, or mark
+ *   rows failed that really were mutated. That is precisely the ambiguity
+ *   `toOperationOutcomes` fails closed on. (`messages.modify`, which the write
+ *   helpers below use, returns the modified `Message` for each call.)
+ * - One request is one `ids[]` list against one `addLabelIds`/`removeLabelIds`
+ *   pair, under one `userId`. Only operations sharing an identical (account,
+ *   addLabelIds, removeLabelIds) tuple can therefore share a call, and the
+ *   typical junk batch (trash + spam + archive interleaved) is three distinct
+ *   tuples, so it fragments into single-operation calls anyway.
+ *
+ * It is NOT rejected for being unable to express `trash`. An earlier version of
+ * this comment asserted that; it was wrong and never verified. Gmail's labels
+ * guide lists `TRASH` as manually appliable (unlike `SENT`/`DRAFT`), and
+ * `batchModify` documents no restriction on `addLabelIds` beyond the 1000-id
+ * cap, so `addLabelIds: ["TRASH"]` is the batched equivalent of
+ * `messages.trash()` — exactly as `markAsSpam()` already uses `modify` +
+ * `["SPAM"]`. `messages.batchDelete` is the batch analogue of `messages.delete`
+ * (PERMANENT) and must never be substituted for trash, but it is not the only
+ * batch route to the trash.
  *
  * A bounded concurrency pool is DEFERRED, and the shape it must take is already
  * clear. Ordering is the easy part (fill a pre-sized outcome array by index).
