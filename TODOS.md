@@ -216,64 +216,61 @@ yet — see the CLI entry below.
 
 ## Core actions / approval queue
 
-### ⚠ THE SURFACES WAVE — nothing wave 1 added is visible to a user yet
-**Priority:** P1
-**Read this before claiming any wave-1 queue improvement is "fixed".** Wave 1
-(feature/todos-w1-queue) added core data and core capabilities. It changed
-**nothing** about what the web UI or the CLI shows. Two of the improvements
-below are worded as if the user-facing bug were fixed; it is not, and the
-misleading message a user reads after a failed auto-apply is still shipped.
+### THE SURFACES WAVE — adopted, except the test that goes through a surface
+**Completed (items 1, 2 and 4):** feature/todos-w7-surface-adoption (2026-08-07)
+**Priority:** P2 for what remains (item 3 below).
 
-**1. `applyError` / `persistError` / `duplicateOperations` are written and
-never read.** `ActionRunResult` distinguishes three failures; no surface reads
-more than `queueError`, and on an auto-apply failure `queueError` is UNSET, so
-neither surface prints its copy — they take different wrong branches instead.
-Concretely, when Gmail trash succeeds and the queue write-back then fails, the
-runner leaves `pendingOperations` populated and sets `applyError` — the web
-still reports those now-`applying` rows as "N changes await your approval", and
-the CLI queries `status: "pending"` for the batch and prints "nothing was
-applied" when that comes back empty (a multi-chunk abort instead leaves later
-ids pending, so it prompts to apply those). Every one of those messages is
-false about mail that has really been trashed.
+Wave 1 (feature/todos-w1-queue) added core data and core capabilities and
+changed **nothing** about what the web UI or the CLI shows. This wave wired it
+to the surfaces. What a user can now actually see:
 
-Files that must change:
-- `packages/web/src/hooks/use-actions.ts` — the run-result type omits
-  `applyError`, `persistError` and `duplicateOperations`; add them.
-- `packages/web/src/app/actions/page.tsx` (~L49-52) — reads `queueError`
-  only. Print `applyError` when present, with the "may already have been
-  applied" emphasis, and stop reporting `pendingOperations` as awaiting
-  approval when `applyError` is set (those rows are `applying`, not
-  `pending`).
-- `packages/cli/src/commands/run-action.ts` (~L73-79) — same field, same
-  wrong message; it must not print "nothing was applied" when `applyError`
-  is set.
-- Print the core strings (`describeAutoApplyFailure`,
-  `describeUnrecordedBatchFailure`, exported from `@email-agent/core`)
-  rather than composing new copy — they are already worded for display.
-- Surface `duplicateOperations` ("3 were already awaiting approval")
-  instead of silently showing fewer rows than the action proposed.
+**1. `applyError` / `persistError` / `duplicateOperations` are read. DONE.**
+`describeActionRunOutcome` (`packages/web/src/modules/api/action-run-contract.ts`,
+used by `app/actions/page.tsx`) and `describeRunOutcome`
+(`packages/cli/src/commands/run-action.ts`) both branch on `applyError` FIRST
+and print core's `describeAutoApplyFailure` string verbatim. Neither reports the
+batch as awaiting approval on that branch, and the CLI does not prompt to apply
+anything — those rows are `applying`, not `pending`, which is what made the old
+messages false. `persistError` and `duplicateOperations` are surfaced too. Both
+wordings are pure functions with tests; the components/commands only pick a tone
+and print. Also fixed on the way: `promptApproval`'s empty-queue message, which
+claimed rows "could not be queued — nothing was applied" for rows that were
+definitely queued and had since been claimed or resolved elsewhere.
 
-**2. `getStaleApplyingOperations()` has no caller.** Exported from
-`@email-agent/core` and `@email-agent/core/db`, threshold
-`STALE_APPLYING_THRESHOLD_MS` (15 min), returns `pending_operations` rows a
-crash left claimed. Nothing calls it, so those rows are invisible on every
-surface — not listed, not actionable. Needed: a section in
-`packages/web/src/components/actions/approval-panel.tsx` (plus a
-`/api/approvals/stranded` route) and an `approvals stranded` block in
-`packages/cli/src/commands/approvals.ts`, each stating plainly that the Gmail
-change may or may not have landed and letting the user resolve the row by
-hand. Do NOT auto-retry — re-trashing an already-trashed message is not free,
-and only the user can adjudicate.
+**2. `getStaleApplyingOperations()` has callers. DONE.**
+`GET /api/approvals/stranded` → `StrandedOperationsPanel` (rendered above the
+approval panel on `/actions`), and `email-agent approvals stranded [--review]`.
+`approvals list` points at it too, because a `pending`-scoped list saying "no
+Gmail changes awaiting approval" was the only thing a user with an unaccounted-
+for mutation saw. Adjudication is `adjudicateStrandedOperations(ids, "applied" |
+"notApplied")` (core), claim-then-write by token so an apply that has since
+recorded a real outcome is left alone. **Two answers, no retry, no
+verification:** the buttons say "I checked Gmail — it happened" / "— it didn't",
+the toast says the outcome was recorded "on your word", and an `applied` row
+carries `STRANDED_APPLIED_NOTE` saying Email Agent did not check. Skipping is a
+first-class answer. Do not describe any of this as recovery.
 
-**3. A test must go through a surface.** `packages/core/src/actions/runner.test.ts`
-only asserts the text of two string builders; it cannot pin what a user is
-told. The regression that closes item 1 has to exercise the surface, which
-needs the harness tracked under "Integration harness for the approval gate".
+**3. A test must go through a surface. NOT DONE — still P2.**
+Every wording above is pinned by pure-function tests
+(`action-run-contract.test.ts`, `run-action.test.ts`, `approvals-contract.test.ts`,
+`approvals.test.ts`). That is strictly better than `runner.test.ts` asserting two
+string builders, but it has the same ceiling: nothing fails if
+`app/actions/page.tsx` stops calling `describeActionRunOutcome`, if the panel
+stops rendering, or if the route stops returning the field. There is still no
+harness that drives a run through a surface and reads what the user is told; it
+needs the work tracked under "Integration harness for the approval gate".
+Live-exercised by hand instead (seeded LanceDB, real CLI binary, real dev
+server): CLI `approvals list` / `stranded` / `stranded --review` for both
+answers and skip, exit codes, and the web routes end to end including guards,
+validation, the stale-snapshot `resolved: 0` case and the settings round trip.
+The React components themselves were only type-checked and server-rendered; no
+browser was available.
+
+**4. The retention window has a surface. DONE** — see its own entry below.
 
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); scope corrected after
 the codex (gpt-5.6-sol xhigh) review of PR #8, 2026-08-07, which found the
-branch describing these as fixed. Deferred here because a concurrent branch
-owns `packages/web/**` and `packages/cli/**`.
+branch describing these as fixed.
 
 ### Concurrent applies over one batch are not serialized
 **Priority:** P3
@@ -324,17 +321,23 @@ resurrect it speculatively; write it here if and when this is actually
 fixed.) Do not weaken the PENDING scoping to get it.
 Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
 
-### The retention window has no surface
+### The retention window is visible, but the sweep still is not
 **Priority:** P3
-`retention.approvalQueueDays` (default 365) governs pruning of resolved
-`pending_operations` rows and is honoured by `loadSettings`, but the web
-Settings page cannot show or edit it: `sanitizeSettingsForResponse` and
-`SettingsUpdate` in `packages/web/src/modules/api/validation.ts` build
-explicit literals that omit it. It does survive a settings PUT — the merge
-spreads `...current` first — so the only gap is visibility, and hand-editing
-`~/.email-agent/settings.json` is currently the only way to change it. A CLI
-`approvals prune [--older-than-days N]` would also make the sweep
-inspectable rather than purely opportunistic.
+**Partly completed:** feature/todos-w7-surface-adoption (2026-08-07)
+`retention.approvalQueueDays` governs pruning of resolved `pending_operations`
+rows. It is now returned by `sanitizeSettingsForResponse`, accepted by
+`SettingsUpdate` (whole days, 0-36500, 0 = never prune; the upper bound only
+stops a value large enough to make the cutoff date invalid and turn the sweep
+into a silent no-op), and editable on Settings → Gmail with the consequence
+stated — resolved records are deleted permanently, `pending`/`applying`/`failed`
+never are. `normalizeRetentionConfig` fills a missing block with the built-in
+365 rather than 0, because 0 means "keep forever" and defaulting to it would
+promise the opposite of what core's sweep does.
+
+**Still open:** the sweep itself is opportunistic and inspectable nowhere. A CLI
+`approvals prune [--older-than-days N]` would make it something a user can run
+and see the result of, instead of a side effect of the next apply or reject.
+Not built here.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
 ### Queue helpers with real-table behaviour are unit-tested only
@@ -1305,31 +1308,28 @@ Nine entries closed together because they are one path. In queue order:
   one chunk stranded in `applying`, every later id still `pending` and still
   approvable or rejectable.
   Found by: codex (gpt-5.6-sol xhigh) adversarial review of PR #8, 2026-08-07.
-- **Auto-apply failure said "nothing was applied"** — **NOT CLOSED, only
-  half-built** (still P2, tracked above under "THE SURFACES WAVE"). It reused
-  `queueError`, whose comment claimed the rows stay queued — false
-  post-claim, since `applyPendingOperationsByIds` can throw after every Gmail
-  call completed. Auto-apply failures now set a separate `applyError`, worded
-  "may already have been applied; their outcome could not be recorded" and
-  pointing at the stranded rows; `persistError` is new for a lost history
-  row; `queueError` now means only a pre-Gmail queue failure. **What this did
-  NOT change is what the user sees.** No surface reads `applyError` or
-  `persistError` — the web result type omits both — and because `queueError`
-  is unset on an auto-apply failure, neither surface prints its copy either:
-  the web reports the now-`applying` rows as "N changes await your approval",
-  and the CLI either says "nothing was applied" (nothing left pending) or
-  prompts to apply the ids the crashed call never reached. A user whose mail
-  was really trashed is told nothing happened. The field separation is a prerequisite
-  for the fix, not the fix. Listed here only because the core data changed.
-- **Recover rows stranded in `applying`** — **NOT CLOSED, only half-built**
-  (still P2, tracked above). `claimedAt` is now stamped whenever a row leaves
-  `pending`, and `getStaleApplyingOperations()` returns rows claimed longer
-  ago than a threshold (default 15 minutes). `createdAt` could not serve: it
-  records when the change was proposed, so a row queued days ago and claimed
-  a second ago would read as stranded. A row whose timestamp cannot be parsed
-  surfaces rather than hides. Deliberately a report, not an auto-retry.
-  **Nothing calls it**, so stranded rows remain invisible on every surface —
-  the recovery capability exists, the recovery does not.
+- **Auto-apply failure said "nothing was applied"** — closed in two steps.
+  Wave 1 split the fields: it had reused `queueError`, whose comment claimed
+  the rows stay queued — false post-claim, since
+  `applyPendingOperationsByIds` can throw after every Gmail call completed.
+  Auto-apply failures set a separate `applyError`, worded "may already have
+  been applied; their outcome could not be recorded"; `persistError` is a lost
+  history row; `queueError` means only a pre-Gmail queue failure. That changed
+  nothing a user saw. feature/todos-w7-surface-adoption (2026-08-07) wired it
+  up: both surfaces branch on `applyError` first, print core's string verbatim,
+  and neither reports the batch as awaiting approval nor prompts to apply the
+  remainder.
+- **Surface rows stranded in `applying`** — closed in two steps.
+  `claimedAt` is stamped whenever a row leaves `pending`, and
+  `getStaleApplyingOperations()` returns rows claimed longer ago than a
+  threshold (default 15 minutes). `createdAt` could not serve: it records when
+  the change was proposed, so a row queued days ago and claimed a second ago
+  would read as stranded. A row whose timestamp cannot be parsed surfaces
+  rather than hides. Deliberately a report, not an auto-retry.
+  feature/todos-w7-surface-adoption (2026-08-07) gave it callers on both
+  surfaces plus `adjudicateStrandedOperations`, which records what the USER
+  reports about Gmail and verifies nothing. It is adjudication, not recovery —
+  do not restate it as recovery.
 - **Retention / prune policy** (was P2). `prunePendingOperations(olderThanIso)`
   runs opportunistically after every apply and reject, counting before
   deleting because a LanceDB delete rewrites the table. Only `applied` and
@@ -1395,9 +1395,11 @@ the chunked apply's
 claim/apply/resolve ordering is pinned through injected dependencies
 (`actions/approval.test.ts`). Everything else is pure-helper only — filters,
 projections, the dedupe key, the age rule, the retention cutoff. The
-"failure wording" tests assert the text of two string builders and reach no
-surface, so they say nothing about the message a user is shown; see "THE
-SURFACES WAVE" above. Remaining LanceDB halves are listed under "Queue
+wording tests on both surfaces (`action-run-contract.test.ts`,
+`run-action.test.ts`, and the stranded blocks in `approvals-contract.test.ts`
+and `approvals.test.ts`) are pure-function tests: they pin the sentences, but
+nothing fails if a component or route stops calling the function that produces
+them. See "THE SURFACES WAVE" item 3 above. Remaining LanceDB halves are listed under "Queue
 helpers with real-table behaviour are unit-tested only".
 
 ### `tokensUsed` means a different thing in every executor

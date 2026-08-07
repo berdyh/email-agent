@@ -121,6 +121,7 @@ npx email-agent approvals              # list what is waiting
 npx email-agent approvals review       # decide per email: apply / reject / skip
 npx email-agent approvals apply        # approve everything pending, after a confirm
 npx email-agent approvals reject       # discard everything pending
+npx email-agent approvals stranded     # changes stuck mid-apply, whose outcome was never recorded
 
 # Recover a user action the edit flow overwrote
 npx email-agent actions snapshots                    # every saved version, newest first

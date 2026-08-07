@@ -5,7 +5,7 @@
 - scope boundaries: Hooks call web API routes, not core runtime directly.
 - connected modules/submodules: Web feature components, API routes, Zustand stores.
 - allowed change types: Query keys, fetch wrappers, mutation invalidation, typed API return handling.
-- special operating rules: New TanStack Query keys must be invalidated in all relevant mutation success handlers. A single email is keyed `["email", accountId, emailId]` and ONLY via `emailDetailQueryKey`/`useEmailDetail` (`use-email-detail.ts`) — hand-built keys in the opposite order cached the same email twice and made targeted invalidation miss one. Approvals wire types are imported from `modules/api/approvals-contract.ts`, never re-declared here.
+- special operating rules: New TanStack Query keys must be invalidated in all relevant mutation success handlers. A single email is keyed `["email", accountId, emailId]` and ONLY via `emailDetailQueryKey`/`useEmailDetail` (`use-email-detail.ts`) — hand-built keys in the opposite order cached the same email twice and made targeted invalidation miss one. Approvals wire types are imported from `modules/api/approvals-contract.ts`, never re-declared here. The stranded-row query is keyed `["approvals", "stranded"]` — a CHILD of `["approvals"]` on purpose, so every existing invalidation of the approvals cache refreshes it by prefix match and no mutation has to remember a second key. `useRunAction` invalidates the email caches on `applyError` as well as `applyResult`: an auto-apply that threw may already have mutated Gmail.
 - current stubs/placeholders: None known.
 - irrelevant or incomplete code to remove/rework: None known.
 - docs that must stay aligned: Feature component cards and API validation contracts.
