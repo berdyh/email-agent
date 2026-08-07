@@ -13,9 +13,12 @@ import {
 } from "@email-agent/core";
 import {
   applyOperationIds,
+  commitFailed,
+  commitReviewDecisions,
+  describeApplyFailure,
+  describeReviewCommit,
   loadOperationDisplays,
   printOperationList,
-  rejectOperationIds,
   reviewOperations,
 } from "./approvals.js";
 
@@ -136,11 +139,27 @@ async function promptApproval(batchId: string): Promise<void> {
   }
 
   if (answer === "a") {
-    await applyOperationIds(ops.map((op) => op.id));
+    const ids = ops.map((op) => op.id);
+    try {
+      const outcome = await applyOperationIds(ids);
+      if (outcome.failed > 0) process.exitCode = 1;
+    } catch (err) {
+      for (const line of describeApplyFailure(ids, err)) {
+        console.error(chalk.red(line));
+      }
+      process.exitCode = 1;
+    }
   } else if (answer === "r") {
-    const { approved, rejected } = await reviewOperations(displays);
-    await applyOperationIds(approved);
-    await rejectOperationIds(rejected);
+    // Route through `commitReviewDecisions` rather than calling the two halves
+    // directly: it rejects FIRST, so a Gmail failure part-way through the apply
+    // cannot discard the "no" answers the user just typed — the bug that was
+    // fixed in `approvals review` and left in place here — and it reports what
+    // was actually recorded rather than what was requested.
+    const commit = await commitReviewDecisions(await reviewOperations(displays));
+    for (const line of describeReviewCommit(commit)) {
+      console.error(chalk.red(line));
+    }
+    if (commitFailed(commit)) process.exitCode = 1;
   } else {
     console.log(
       chalk.dim(
