@@ -380,8 +380,13 @@ export function loadSettings(): Promise<AppConfig> {
  * callers that want to drop the retained `AppConfig` object.
  *
  * Also forgets which paths have shown the legacy-key notice, so a test can
- * assert the notice itself. That is the only reason it is coupled: in a real
- * process nothing calls this, and the notice stays once per path.
+ * assert the notice itself. That coupling is only safe while this stays a test
+ * affordance. As of 2026-08-07 it has no production caller — the callers are
+ * `config/settings.test.ts`, plus the re-export on the `config` barrel — so the
+ * notice does stay once per path in a real process. It IS a public export,
+ * though, so that is a current fact and not an invariant: a production caller
+ * added later would also reset the notice, and the two should be decoupled
+ * then.
  */
 export function clearSettingsCache(): void {
   cacheEntry = null;
