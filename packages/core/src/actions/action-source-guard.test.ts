@@ -847,9 +847,12 @@ export default { id: "a", name: "A", description: "d", prompt: "p" };
     assert.equal(allowed.length, 1, `expected exactly one built-in import, got:\n${allowed.join("\n")}`);
 
     // ...and the ACTIONS_DIR path really goes through the static evaluator.
-    for (const name of ["registry.ts", "user-actions.ts"]) {
-      const [, source] = [...candidates].find(([f]) => f.endsWith(name)) ?? [];
-      assert.match(source ?? "", /extractActionData/, `${name} must extract, not import`);
-    }
+    // There is exactly ONE reader of that directory — `readUserActionFiles()`
+    // in user-actions.ts — so this checks the reader extracts and that the
+    // registry delegates to it rather than growing a second reader of its own.
+    const sourceOf = (name: string): string =>
+      ([...candidates].find(([f]) => f.endsWith(name)) ?? [])[1] ?? "";
+    assert.match(sourceOf("user-actions.ts"), /extractActionData/, "the reader must extract, not import");
+    assert.match(sourceOf("registry.ts"), /readUserActionFiles/, "registry.ts must delegate to the one reader");
   });
 });

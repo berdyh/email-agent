@@ -1,8 +1,6 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { ACTIONS_DIR } from "../config/defaults.js";
-import { describeActionSourceRefusal, extractActionData } from "./action-source-guard.js";
+import { readdir } from "node:fs/promises";
 import type { EmailAction } from "./types.js";
+import { readUserActionFiles } from "./user-actions.js";
 
 const BUILT_IN_DIR = new URL("./built-in/", import.meta.url);
 
@@ -19,6 +17,16 @@ const isActionFilename = (name: string): boolean =>
  */
 export class ActionRegistry {
   private actions = new Map<string, EmailAction>();
+  /**
+   * Where user actions live. Defaults to `ACTIONS_DIR` (a homedir constant) and
+   * is overridable so `loadAll()` can be tested against a real directory of
+   * real files — including hostile ones — without writing to a developer's home.
+   */
+  private readonly userActionsDir: string | undefined;
+
+  constructor(options: { userActionsDir?: string } = {}) {
+    this.userActionsDir = options.userActionsDir;
+  }
 
   async loadAll(): Promise<void> {
     this.actions.clear();
@@ -66,35 +74,20 @@ export class ActionRegistry {
   }
 
   /**
-   * `ACTIONS_DIR`: parsed as data, never imported. A file that is not pure data
-   * is refused WITH its violations — the previous `catch {}` swallowed every
-   * failure, so a hand-dropped executable file simply vanished from the list.
+   * `ACTIONS_DIR`: parsed as data, never imported, through the SAME reader
+   * `loadUserAction()` and `listUserActions()` use — `readUserActionFiles()`.
+   * Three readers of the same directory is how the id a file presents came to
+   * depend on which function asked. A file that is not pure data is refused
+   * WITH its violations; the original `catch {}` here swallowed every failure,
+   * so a hand-dropped executable file simply vanished from the list.
    */
   private async loadUserActions(): Promise<void> {
-    let entries: string[];
-    try {
-      entries = await readdir(ACTIONS_DIR);
-    } catch {
-      return; // Directory doesn't exist yet
-    }
-
-    for (const entry of entries) {
-      if (!isActionFilename(entry)) continue;
-
-      let action: EmailAction | undefined;
-      try {
-        const content = await readFile(join(ACTIONS_DIR, entry), "utf-8");
-        action = extractActionData(content, entry, {
-          onDiagnostic: (message) => console.warn(`[ActionRegistry] ${message}`),
-        });
-      } catch (err) {
-        console.warn(`[ActionRegistry] ${describeActionSourceRefusal(entry, err)}`);
+    for (const file of await readUserActionFiles(this.userActionsDir)) {
+      if (file.action) {
+        this.actions.set(file.action.id, file.action);
         continue;
       }
-      if (action) {
-        action.builtIn = false;
-        this.actions.set(action.id, action);
-      }
+      if (file.problem !== undefined) console.warn(`[ActionRegistry] ${file.problem}`);
     }
   }
 

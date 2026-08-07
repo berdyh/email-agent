@@ -32,10 +32,6 @@ export function resolveUserActionFilePath(baseDir: string, filename: string): st
   return target;
 }
 
-export function extractActionIdFromSource(source: string): string | undefined {
-  return source.match(/id:\s*["'`]([^"'`]+)["'`]/)?.[1];
-}
-
 export function normalizeSnapshotFilename(filename: string): string {
   const normalized = filename.trim();
 

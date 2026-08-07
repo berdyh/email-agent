@@ -39,13 +39,13 @@ export {
   type ActionSourceViolation,
 } from "./action-source-guard.js";
 export {
-  extractActionIdFromSource,
   normalizeSnapshotFilename,
   normalizeUserActionFilename,
   resolveUserActionFilePath,
 } from "./user-action-paths.js";
-export type { UserActionMeta, SnapshotEntry } from "./user-actions.js";
+export type { UserActionMeta, UserActionFile, SnapshotEntry } from "./user-actions.js";
 export {
+  readUserActionFiles,
   listUserActions,
   saveUserAction,
   deleteUserAction,
