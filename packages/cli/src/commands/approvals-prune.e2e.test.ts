@@ -34,8 +34,20 @@ await cli.seed({
   ],
 });
 
+/**
+ * What the dry run said it WOULD delete, so the next case can assert the real
+ * sweep deleted exactly that many.
+ *
+ * The dry-run count is a SECOND predicate, hand-written in JS to match
+ * `buildPruneFilter`'s SQL — LanceDB's `delete()` returns no row count, so
+ * there is nothing to reuse. Equivalent today; this pins them against each
+ * other so a change to either side fails rather than silently making the
+ * preview lie about what the sweep will do.
+ */
+let previewed: number | undefined;
+
 describe("email-agent approvals prune", () => {
-  it("reports what a run would delete without deleting it", async () => {
+  it("reports what a run would delete WITHOUT claiming it deleted it", async () => {
     const before = await ids();
     const result = await cli.run([
       "approvals",
@@ -47,8 +59,19 @@ describe("email-agent approvals prune", () => {
 
     assert.equal(result.exitCode, 0);
     assert.match(result.output, /Dry run/);
-    assert.match(result.output, /2 rows are eligible/);
+    // The defect this pins: a dry run printing "Deleted 2 rows" tells the user
+    // something untrue about their own audit trail.
+    assert.doesNotMatch(
+      result.output,
+      /Deleted \d/,
+      "a dry run must never report a deletion in the past tense",
+    );
+    assert.match(result.output, /Would delete 2 resolved approval-queue rows/);
+    assert.match(result.output, /Nothing was deleted/);
     assert.deepEqual(await ids(), before, "a dry run must delete nothing");
+
+    previewed = Number(/Would delete (\d+) /.exec(result.output)?.[1]);
+    assert.equal(previewed, 2);
   });
 
   it("deletes only resolved rows past the window, and says which statuses can go", async () => {
@@ -56,6 +79,13 @@ describe("email-agent approvals prune", () => {
 
     assert.equal(result.exitCode, 0);
     assert.match(result.output, /Deleted 2 resolved approval-queue rows/);
+    // The preview and the sweep are two separate predicates; they must agree.
+    const deleted = Number(/Deleted (\d+) /.exec(result.output)?.[1]);
+    assert.equal(
+      deleted,
+      previewed,
+      "the dry-run preview and the real sweep disagree — the two predicates have drifted",
+    );
     // The promise a user needs before running this: what is NEVER eligible.
     assert.match(result.output, /pending, applying and failed rows are never pruned/);
 

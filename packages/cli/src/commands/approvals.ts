@@ -673,6 +673,13 @@ export interface PruneReport {
   cutoff: string | null;
   /** Rows that were eligible, per `PRUNABLE_STATUSES`. */
   deleted: number;
+  /**
+   * True when nothing was actually deleted and `deleted` is only a count of
+   * what WOULD go. The wording has to change with it: every sentence here is a
+   * claim about destroyed audit rows, and a dry run reporting "Deleted 2 rows"
+   * tells the user something untrue about their own history.
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -699,12 +706,22 @@ export function describePrune(report: PruneReport): string[] {
   }
 
   const one = report.deleted === 1;
+  const rows = `resolved approval-queue ${one ? "row" : "rows"}`;
+  const headline = report.dryRun
+    ? `Would delete ${report.deleted} ${rows} resolved before ${report.cutoff} ` +
+      `(${report.days} days ago). Nothing was deleted.`
+    : `Deleted ${report.deleted} ${rows} resolved before ${report.cutoff} ` +
+      `(${report.days} days ago).`;
+
   return [
-    `Deleted ${report.deleted} resolved approval-queue ${one ? "row" : "rows"} ` +
-      `resolved before ${report.cutoff} (${report.days} days ago).`,
+    headline,
     "Only applied and rejected rows are ever eligible — pending, applying and failed rows are " +
-      "never pruned. The count is what was eligible when the sweep started; a row resolved " +
-      "between the count and the delete can make it drift by one or two.",
+      "never pruned. " +
+      (report.dryRun
+        ? "The count is what is eligible right now; a row resolved before you run the real " +
+          "sweep can make it differ."
+        : "The count is what was eligible when the sweep started; a row resolved " +
+          "between the count and the delete can make it drift by one or two."),
   ];
 }
 
@@ -914,10 +931,14 @@ export function registerApprovals(program: Command) {
       const cutoff = resolveRetentionCutoff(days);
       await initDb();
 
-      // A dry run counts through the SAME predicate the delete uses, rather
-      // than a second one written to match it.
+      // Counted only for a dry run, and be honest about what this count is: it
+      // is a SECOND predicate written to match `buildPruneFilter`, not the same
+      // one. `prunePendingOperations` deletes through SQL and LanceDB's
+      // `delete()` reports no row count, so there is nothing to reuse here.
+      // Equivalent today; it can drift, so `approvals-prune.e2e.test.ts` pins
+      // the preview count against what the real sweep deletes.
       const eligible =
-        cutoff === null
+        cutoff === null || !options.dryRun
           ? 0
           : (await getPendingOperations({ status: "applied" }))
               .concat(await getPendingOperations({ status: "rejected" }))
@@ -925,15 +946,22 @@ export function registerApprovals(program: Command) {
               .length;
 
       const deleted =
-        cutoff === null || options.dryRun
-          ? eligible
-          : await prunePendingOperations(cutoff);
+        cutoff === null
+          ? 0
+          : options.dryRun
+            ? eligible
+            : await prunePendingOperations(cutoff);
 
-      const lines = describePrune({ days, cutoff, deleted });
+      const lines = describePrune({
+        days,
+        cutoff,
+        deleted,
+        dryRun: Boolean(options.dryRun),
+      });
       if (options.dryRun && cutoff !== null) {
         console.log(
           chalk.yellow(
-            `Dry run — nothing was deleted. ${eligible} ${eligible === 1 ? "row is" : "rows are"} eligible.`,
+            `Dry run — the queue was not touched.`,
           ),
         );
       }
