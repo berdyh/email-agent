@@ -58,6 +58,15 @@ import type { EmailAction } from "./types.js";
  *    `duplicate-export`, `uninitialized-const`). Accepting a file Node would
  *    reject with `SyntaxError` means loading an action that could not exist.
  *
+ * Those early-error classes are found by DIFFERENTIAL testing, not by reading
+ * the spec and hoping: `action-source-guard.differential.test.ts` runs every
+ * case through real Node and through this evaluator and compares the outcomes.
+ * `uninitialized-const` survived a corpus of a hundred hand-written cases and
+ * fell out on the first run of a MECHANICALLY GENERATED corpus — a
+ * cross-product of the dimensions this walk branches on. Hand-picked cases only
+ * ever cover the bugs someone already imagined; when adding a branch here, add
+ * its dimension to the generator rather than an example to the list.
+ *
  * And the module semantics themselves are modelled, not assumed: a named export
  * is a LIVE binding read at the end of evaluation, while `export default`
  * snapshots its operand where it stands, and `mod.default ?? mod.action` falls
