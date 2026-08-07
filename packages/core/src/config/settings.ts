@@ -155,12 +155,33 @@ export function isSettingsCacheFresh(
   return entry.contentHash === contentHash;
 }
 
-/** The file's bytes, or null when it does not exist / cannot be read. */
+/**
+ * The file's bytes, or null when — and ONLY when — the file does not exist.
+ *
+ * ABSENCE IS NOT THE SAME AS "COULD NOT READ". This used to catch everything
+ * and return null, so a permission change, an I/O error or a path component
+ * turning into a file all resolved to "no settings file" and therefore to the
+ * built-in defaults. That is a fallback that destroys data: the retention
+ * sweep in `actions/approval.ts` reads `retention.approvalQueueDays` from here,
+ * and the default is 365 days while the explicit opt-out is 0. A user who set
+ * 0 to keep their approval audit trail forever would have had rows deleted the
+ * first time the file was momentarily unreadable — an irreversible action taken
+ * because we could not read the instruction saying not to.
+ *
+ * So: ENOENT means the user genuinely has no settings file yet (first run) and
+ * defaults are the right answer. Every other errno means we do not know what
+ * the user configured, and the caller must fail rather than guess.
+ */
 async function readSettingsBytes(path: string): Promise<Buffer | null> {
   try {
     return await readFile(path);
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not read settings at ${path} (${code}: ${message}). Refusing to fall back to default settings — the defaults differ from a configured file in ways that delete data (retention.approvalQueueDays defaults to 365 days, while 0 means never prune). Fix the file's permissions or path and retry.`,
+    );
   }
 }
 
@@ -195,13 +216,23 @@ export async function loadSettingsFromPath(path: string): Promise<AppConfig> {
 
   let config: AppConfig;
   if (raw === null) {
+    // Genuinely absent (ENOENT) — first run, defaults are the right answer.
     config = normalizeSettings({});
   } else {
+    // A file that exists but does not parse is the same class of unknown as a
+    // file that cannot be read: it is NOT evidence that the user configured
+    // nothing. Falling back to defaults here would silently re-arm the 365-day
+    // retention sweep over an explicit `approvalQueueDays: 0`.
+    let parsed: unknown;
     try {
-      config = normalizeSettings(JSON.parse(raw.toString("utf-8")));
-    } catch {
-      config = normalizeSettings({});
+      parsed = JSON.parse(raw.toString("utf-8"));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Settings at ${path} exist but are not valid JSON (${message}). Refusing to fall back to default settings — the defaults differ from a configured file in ways that delete data (retention.approvalQueueDays defaults to 365 days, while 0 means never prune). Repair the file, or move it aside to start from defaults.`,
+      );
     }
+    config = normalizeSettings(parsed);
   }
 
   cacheEntry = { path, config, contentHash };

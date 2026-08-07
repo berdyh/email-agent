@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -258,6 +258,80 @@ describe("loadSettings re-reads a changed settings file", () => {
       (await loadSettingsFromPath(path)).gmail.autoApplyActions,
       false,
       "kill switch must follow the file, not its mtime+size",
+    );
+  });
+});
+
+describe("an unreadable settings file is not the same as an absent one", () => {
+  // These exercise REAL filesystem failures, not malformed content: the bug was
+  // that `catch {}` around `readFile` turned every errno into "no settings
+  // file", and the defaults it then returned prune the approval audit trail on
+  // a 365-day window that an explicit `approvalQueueDays: 0` had opted out of.
+  let dir = "";
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), "email-agent-settings-fail-"));
+  });
+
+  after(async () => {
+    clearSettingsCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("throws rather than defaulting when the path is a directory (EISDIR)", async () => {
+    clearSettingsCache();
+    const asDir = join(dir, "settings-as-dir.json");
+    await mkdir(asDir, { recursive: true });
+    await assert.rejects(
+      loadSettingsFromPath(asDir),
+      /Could not read settings .*Refusing to fall back to default settings/s,
+    );
+  });
+
+  it("throws rather than defaulting when a path component is a file (ENOTDIR)", async () => {
+    clearSettingsCache();
+    const blocker = join(dir, "blocker");
+    await writeFile(blocker, "not a directory");
+    await assert.rejects(
+      loadSettingsFromPath(join(blocker, "settings.json")),
+      /Could not read settings .*Refusing to fall back to default settings/s,
+    );
+  });
+
+  it("throws rather than defaulting when the file is unreadable (chmod 000)", async (t) => {
+    clearSettingsCache();
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      t.skip("root bypasses mode bits");
+      return;
+    }
+    const path = join(dir, "locked.json");
+    await writeFile(path, JSON.stringify({ retention: { approvalQueueDays: 0 } }));
+    await chmod(path, 0o000);
+    try {
+      await assert.rejects(
+        loadSettingsFromPath(path),
+        /Could not read settings .*Refusing to fall back to default settings/s,
+      );
+    } finally {
+      await chmod(path, 0o600);
+    }
+  });
+
+  it("throws rather than defaulting when the file exists but is not JSON", async () => {
+    clearSettingsCache();
+    const path = join(dir, "corrupt.json");
+    await writeFile(path, "{ approvalQueueDays: 0, truncated");
+    await assert.rejects(
+      loadSettingsFromPath(path),
+      /exist but are not valid JSON .*Refusing to fall back to default settings/s,
+    );
+  });
+
+  it("still treats a genuinely absent file (ENOENT) as defaults", async () => {
+    clearSettingsCache();
+    assert.deepEqual(
+      await loadSettingsFromPath(join(dir, "definitely-not-here.json")),
+      defaultConfig,
     );
   });
 });
