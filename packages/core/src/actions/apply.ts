@@ -130,6 +130,71 @@ function mapSubscriptionResult(result: ActionEmailResult): GmailOperation[] {
 
 /**
  * Executes Gmail operations, collecting successes and failures.
+ *
+ * Never throws: every operation is attempted and each failure is recorded as an
+ * outcome. `outcomes` has exactly one entry per input operation, IN THE SAME
+ * ORDER — `toOperationOutcomes` in `actions/approval.ts` pairs it positionally
+ * with the claimed queue rows, so mispairing would write one message's result
+ * onto another message's row. Any change here must keep that alignment.
+ *
+ * ONE ROUND TRIP PER OPERATION, SERIALLY. That is a known cost — approving a
+ * large batch is N awaited network calls with the approval surface blocked —
+ * and it is left that way for now. Both faster shapes were examined:
+ *
+ * `messages.batchModify` is REJECTED, not deferred, on two grounds — both read
+ * off its REST reference on 2026-08-07:
+ * - "If successful, the response body is empty." **No per-message result**, so
+ *   N rows would have to collapse onto one all-or-nothing status: on a partial
+ *   failure we would either retire rows as applied without evidence, or mark
+ *   rows failed that really were mutated. That is precisely the ambiguity
+ *   `toOperationOutcomes` fails closed on. (`messages.modify`, which the write
+ *   helpers below use, returns the modified `Message` for each call.)
+ * - One request is one `ids[]` list against one `addLabelIds`/`removeLabelIds`
+ *   pair, under one `userId`. Only operations sharing an identical (account,
+ *   addLabelIds, removeLabelIds) tuple can therefore share a call, and the
+ *   typical junk batch (trash + spam + archive interleaved) is three distinct
+ *   tuples, so it fragments into single-operation calls anyway.
+ *
+ * It is NOT rejected for being unable to express `trash`. An earlier version of
+ * this comment asserted that; it was wrong and never verified. Gmail's labels
+ * guide lists `TRASH` as manually appliable (unlike `SENT`/`DRAFT`), and
+ * `batchModify` documents no restriction on `addLabelIds` beyond the 1000-id
+ * cap, so `addLabelIds: ["TRASH"]` is the batched equivalent of
+ * `messages.trash()` — exactly as `markAsSpam()` already uses `modify` +
+ * `["SPAM"]`. `messages.batchDelete` is the batch analogue of `messages.delete`
+ * (PERMANENT) and must never be substituted for trash, but it is not the only
+ * batch route to the trash.
+ *
+ * A bounded concurrency pool is DEFERRED, and the shape it must take is already
+ * clear. Ordering is the easy part (fill a pre-sized outcome array by index).
+ * Three things gate it, none of them in this branch's scope:
+ * - **Same-message ordering.** The queue can hold several pending operations
+ *   for one message; dedupe only collapses identical ones. Serial execution
+ *   applies them in queue order — the order the user reviewed — while a pool
+ *   would race, say, `addLabels X` against `removeLabels X` and leave a
+ *   nondeterministic final state. A pool must therefore partition by
+ *   (account, message) and stay serial inside a partition.
+ * - **A failure is terminal here.** There is no retry and no backoff: an error
+ *   becomes a `failed` queue row, which is not `pending` and so can never be
+ *   approved again — the user must re-run the action to re-propose the change.
+ *   Concurrency raises the rate of transient rate-limit and 5xx responses, so
+ *   without backoff it trades latency for a higher chance of permanently
+ *   dropping a change the user explicitly approved. Wrong direction for a
+ *   feature whose whole point is that approved means approved.
+ * - **No test seam and no measurement.** This function imports the write
+ *   operations directly, so a pool cannot be tested without injecting them, and
+ *   no live Gmail timing has ever been taken here — the ~100-300ms per round
+ *   trip quoted at `APPLY_RESOLUTION_CHUNK_SIZE` is an estimate.
+ *
+ * How a pool would interact with the chunked apply, since that is the part
+ * easiest to get wrong: it must live strictly INSIDE one chunk. Chunk rows are
+ * claimed, applied and resolved as a unit, and this function returns an outcome
+ * per operation instead of throwing, so parallelism within the chunk leaves
+ * that unit intact — a mid-chunk failure still resolves the whole chunk and
+ * strands nothing extra. A pool spanning chunks would put more than one chunk
+ * in flight at once and reinstate exactly the "claimed set is larger than the
+ * in-flight set" problem that moving the claim inside the loop was introduced
+ * to fix.
  */
 export async function applyOperations(
   operations: GmailOperation[],

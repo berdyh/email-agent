@@ -15,7 +15,7 @@ A local, AI-powered email analysis tool that uses multiple LLM agents (Claude, C
 
 ## Prerequisites
 
-- **Node.js** 22.18+ or 23.6+ (needed for unflagged TypeScript type stripping, which the native loader uses to import user-created `.action.ts` files; also covers `process.loadEnvFile`, used to load the root `.env`). Note 23.0–23.5 are excluded: they are newer than 22.18 but still gate type stripping behind a flag
+- **Node.js** 22.18+ or 23.6+ (needed for unflagged TypeScript type stripping, which the native loader uses to import the built-in `.action.ts` files when running from source; also covers `process.loadEnvFile`, used to load the root `.env`). User-created `.action.ts` files are parsed rather than imported, so they no longer depend on type stripping. Note 23.0–23.5 are excluded: they are newer than 22.18 but still gate type stripping behind a flag
 - **Google Cloud CLI** (`gcloud`) — for Gmail API authentication
 - **At least one AI agent CLI** (optional but recommended):
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
@@ -38,6 +38,39 @@ gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.modify
 npx email-agent setup --project <your-gcp-project-id>
 ```
+
+### Adding Gmail accounts: authorized redirect URIs
+
+Adding an account runs a Google OAuth consent flow, and Google only returns to a
+redirect URI that was registered on the OAuth client beforehand. Two things about
+that are better known now than discovered at the consent screen.
+
+**Register every origin you serve the app on.** The web callback URI is built
+from the origin of the request that starts the flow, so that `serve --port N`
+works — which makes the port part of the URI Google has to already know.
+Registering the default is enough only while you always use the default: run
+`npx email-agent serve --port 4000` and you also need
+`http://localhost:4000/api/auth/callback`, and reaching the app as `127.0.0.1`
+instead of `localhost` is a different origin needing its own entry. Miss one and
+Google refuses with `redirect_uri_mismatch` before it even asks you to consent.
+The CLI's own flow is fixed at `http://localhost:9876/callback` and is
+unaffected by the port you serve on.
+
+Google Cloud console → APIs & Services → Credentials → your OAuth 2.0 client →
+Authorized redirect URIs:
+
+```
+http://localhost:3847/api/auth/callback   # web UI, default port
+http://localhost:9876/callback            # CLI
+```
+
+**Add one account at a time in a given browser.** The flow is protected against
+login CSRF by a state value in a single cookie, so two add-account flows started
+at once in the same browser share it: the second overwrites the first. Whichever
+callback returns first with a stale state is refused with a 403 — and because a
+refusal also clears the shared cookie, it can take the other flow down with it,
+so both tabs may end up rejected. Nothing is damaged and no account is
+half-added; just start the account again, one at a time.
 
 ### Environment Variables
 
@@ -199,6 +232,21 @@ export default action;
 ```
 
 User actions are auto-discovered and run from either the CLI (`npx email-agent run-action <id>`) or the web `/actions` page alongside built-ins.
+
+**An action file must be pure data, and it is never executed.** Files in
+`~/.email-agent/actions/` are *parsed*, not imported: the loader statically
+evaluates the file and lifts the exported object out of it, so nothing in that
+directory ever runs in the app's process. A file may contain only `import type`,
+type declarations, variables whose values are literals/objects/arrays, and
+`export default`. Anything that computes — a value import, a function call,
+`a.b`, `new`, an arrow function, a spread, a computed key, or `${...}`
+interpolation — is refused, and the refusal is logged with the exact rules
+broken, so an action that does not appear is diagnosable rather than silently
+missing. Prompt text is never read as code, so a prompt that talks about
+importing, fetching or processing email is fine. If you hand-wrote an action
+that builds its prompt at load time, hoist the value into a plain constant
+(`const PROMPT = "..."` then `prompt: PROMPT`) — that works; computing it does
+not.
 
 See [CREATE_ACTION_SKILLS.md](CREATE_ACTION_SKILLS.md) for the full action creation guide with examples, and [EDIT_ACTION_SKILLS.md](EDIT_ACTION_SKILLS.md) for modifying existing actions.
 

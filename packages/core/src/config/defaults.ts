@@ -34,6 +34,13 @@ export const defaultConfig: AppConfig = {
     fetchInterval: 0,
     fetchScope: "unread",
   },
+  retention: {
+    // Deliberately generous: these rows are the audit trail of real Gmail
+    // mutations, and the failure direction of a wrong value here is losing
+    // evidence the user cannot reconstruct. A year keeps the table bounded
+    // without making the trail useless.
+    approvalQueueDays: 365,
+  },
   dataDir: DATA_DIR,
   accounts: [],
 };

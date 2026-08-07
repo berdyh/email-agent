@@ -24,14 +24,50 @@ export function buildPendingOperationFilters(options?: {
   return filters;
 }
 
+/**
+ * `column IN (...)` over string values.
+ *
+ * `column` is a literal from this module, never user input — only the values
+ * are escaped. camelCase columns must be backticked by the caller: LanceDB's
+ * DataFusion parser folds unquoted identifiers to lowercase.
+ */
+export function buildInFilter(column: string, values: string[]): string {
+  // `IN ()` is a parse error in DataFusion, so an empty list must never reach
+  // the query builder — callers short-circuit before this point.
+  if (values.length === 0) {
+    throw new Error(`buildInFilter requires at least one value for ${column}`);
+  }
+  const quoted = values.map((value) => `'${escapeSql(value)}'`);
+  return `${column} IN (${quoted.join(", ")})`;
+}
+
 export function buildIdListFilter(ids: string[]): string {
-  // `id IN ()` is a parse error in DataFusion, so an empty list must never
-  // reach the query builder — callers short-circuit before this point.
   if (ids.length === 0) {
     throw new Error("buildIdListFilter requires at least one id");
   }
-  const quoted = ids.map((id) => `'${escapeSql(id)}'`);
-  return `id IN (${quoted.join(", ")})`;
+  return buildInFilter("id", ids);
+}
+
+/**
+ * Still-pending rows touching any of `emailIds` — the dedupe lookup for a new
+ * enqueue, scoped to the emails in question rather than scanning the whole
+ * queue.
+ */
+export function buildPendingEmailFilter(emailIds: string[]): string {
+  return `status = 'pending' AND ${buildInFilter("`emailId`", emailIds)}`;
+}
+
+export async function getPendingOperationsForEmails(
+  emailIds: string[],
+): Promise<PendingOperationRecord[]> {
+  if (emailIds.length === 0) return [];
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+  const results = await table
+    .query()
+    .where(buildPendingEmailFilter(emailIds))
+    .toArray();
+  return results as unknown as PendingOperationRecord[];
 }
 
 /**
@@ -59,14 +95,19 @@ export async function claimPendingOperations(
   token: string,
   status: Exclude<PendingOperationStatus, "pending">,
   resolvedAt = "",
+  claimedAt = new Date().toISOString(),
 ): Promise<PendingOperationRecord[]> {
   if (ids.length === 0) return [];
   const db = await getDb();
   const table = await db.openTable(pendingOperationsTable);
 
+  // `claimedAt` is stamped for every claim, not just `applying`. It records
+  // when the row left `pending`, which is the only correct age basis for
+  // spotting a row stranded by a crash mid-apply — `createdAt` is when the
+  // change was proposed and can be arbitrarily older.
   await table.update({
     where: buildPendingResolutionFilter(ids),
-    values: { status, claimToken: token, resolvedAt },
+    values: { status, claimToken: token, resolvedAt, claimedAt },
   });
 
   const results = await table
@@ -118,6 +159,74 @@ export async function getPendingOperations(options?: {
   return options?.limit ? records.slice(0, options.limit) : records;
 }
 
+/**
+ * How long a row may sit in `applying` before it is treated as stranded.
+ *
+ * A healthy apply moves a row out of `applying` within one Gmail round trip
+ * (chunked resolution keeps that to a handful of operations), so anything
+ * still claimed after this long means the process died between the Gmail call
+ * and the status write.
+ */
+export const STALE_APPLYING_THRESHOLD_MS = 15 * 60 * 1000;
+
+/**
+ * Rows claimed before `cutoffIso` and never resolved. Pure, so the age rule is
+ * testable without a DB.
+ *
+ * Age is measured from `claimedAt`, falling back to `createdAt` for rows
+ * migrated in from a table that predates the column — those have no recorded
+ * claim time, and `createdAt` is necessarily older, so they surface rather
+ * than hide.
+ */
+export function selectStaleApplyingOperations(
+  rows: readonly PendingOperationRecord[],
+  cutoffIso: string,
+): PendingOperationRecord[] {
+  const cutoff = new Date(cutoffIso).getTime();
+  return rows.filter((row) => {
+    if (row.status !== "applying") return false;
+    const stamp = row.claimedAt || row.createdAt;
+    const claimed = new Date(stamp).getTime();
+    // An unparsable timestamp must surface, not hide: a row we cannot age is
+    // exactly the row a crash left behind.
+    if (Number.isNaN(claimed)) return true;
+    return claimed <= cutoff;
+  });
+}
+
+/**
+ * Rows a crash left stranded mid-apply.
+ *
+ * The claim/lease means such a row is `applying`, not `pending`, so it can
+ * never be silently re-applied — but it is also invisible to every surface,
+ * which all list `status: "pending"`. Its Gmail mutation may or may not have
+ * landed, so this is deliberately a *report*, not an auto-retry: only the user
+ * can decide whether the change went through.
+ *
+ * NOTHING CALLS THIS YET. It is exported from `@email-agent/core` and
+ * `@email-agent/core/db` and has no caller in web or CLI, so stranded rows
+ * remain invisible on every surface — they are neither listed nor actionable.
+ * The capability exists; the recovery does not. Approval surfaces should call
+ * this and offer the rows for review; see TODOS.md under "⚠ THE SURFACES
+ * WAVE", item 2, for the exact files.
+ */
+export async function getStaleApplyingOperations(options?: {
+  olderThanMs?: number;
+  now?: Date;
+  accountId?: string;
+}): Promise<PendingOperationRecord[]> {
+  const olderThanMs = options?.olderThanMs ?? STALE_APPLYING_THRESHOLD_MS;
+  const now = options?.now ?? new Date();
+  const cutoffIso = new Date(now.getTime() - olderThanMs).toISOString();
+  const rows = await getPendingOperations({
+    status: "applying",
+    ...(options?.accountId !== undefined
+      ? { accountId: options.accountId }
+      : {}),
+  });
+  return selectStaleApplyingOperations(rows, cutoffIso);
+}
+
 export async function getPendingOperationsByIds(
   ids: string[],
 ): Promise<PendingOperationRecord[]> {
@@ -126,6 +235,68 @@ export async function getPendingOperationsByIds(
   const table = await db.openTable(pendingOperationsTable);
   const results = await table.query().where(buildIdListFilter(ids)).toArray();
   return results as unknown as PendingOperationRecord[];
+}
+
+/**
+ * Statuses a retention sweep may delete.
+ *
+ * `pending` and `applying` are excluded because they are unresolved: pruning a
+ * pending row silently discards a change the user was never asked about, and
+ * pruning an `applying` row destroys the only evidence that a Gmail mutation
+ * may have landed without being recorded.
+ *
+ * `failed` is excluded too, deliberately. It looks resolved, but it is the
+ * diagnostic record of an attempted mutation whose outcome the user may still
+ * be chasing — and failed rows are rare, so keeping them forever costs nothing
+ * that pruning `applied`/`rejected` does not already recover.
+ */
+export const PRUNABLE_STATUSES = ["applied", "rejected"] as const;
+
+/**
+ * Rows resolved strictly before `olderThanIso`.
+ *
+ * `resolvedAt` holds `Date#toISOString()` output — fixed-width UTC with a
+ * trailing `Z` — which orders lexicographically exactly as it orders
+ * chronologically, so a string comparison is a date comparison here. The
+ * explicit `!= ''` guard matters because "" sorts before every real timestamp
+ * and would otherwise sweep away any unresolved row that slipped into a
+ * prunable status.
+ */
+export function buildPruneFilter(olderThanIso: string): string {
+  const statuses = PRUNABLE_STATUSES.map(
+    (status) => `'${escapeSql(status)}'`,
+  ).join(", ");
+  return [
+    `status IN (${statuses})`,
+    "`resolvedAt` != ''",
+    `\`resolvedAt\` < '${escapeSql(olderThanIso)}'`,
+  ].join(" AND ");
+}
+
+/**
+ * Deletes resolved queue rows older than `olderThanIso`. Without this the table
+ * is append-only for the life of the install and every approvals query scans
+ * the whole history.
+ *
+ * The returned count is ADVISORY. It is the count taken BEFORE the delete, so a
+ * concurrent sweep or a row resolved between the count and the delete makes it
+ * drift from the number of rows this call actually removed. Nothing consumes it
+ * for correctness — it exists for logging and tests. Do not build a check on
+ * it; re-count if you need a true figure.
+ */
+export async function prunePendingOperations(
+  olderThanIso: string,
+): Promise<number> {
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+  const filter = buildPruneFilter(olderThanIso);
+  // Count first: a LanceDB delete rewrites the table, so a no-op sweep should
+  // not pay for one. This runs after every apply/reject, where nothing to
+  // prune is the common case.
+  const doomed = await table.countRows(filter);
+  if (doomed === 0) return 0;
+  await table.delete(filter);
+  return doomed;
 }
 
 export async function countPendingOperations(
@@ -177,46 +348,6 @@ export async function resolveClaimedOperations(
   for (const outcome of individual) {
     await table.update({
       where: `${buildIdListFilter([outcome.id])} AND ${claimScope}`,
-      values: {
-        status: outcome.status,
-        error: outcome.error ?? "",
-        resolvedAt,
-      },
-    });
-  }
-}
-
-export async function resolvePendingOperations(
-  outcomes: PendingOperationOutcome[],
-  resolvedAt: string,
-): Promise<void> {
-  if (outcomes.length === 0) return;
-  const db = await getDb();
-  const table = await db.openTable(pendingOperationsTable);
-
-  // Batch the error-free outcomes per status into one update each; failed
-  // outcomes carry distinct error messages and update row-by-row.
-  const idsByStatus = new Map<string, string[]>();
-  const individual: PendingOperationOutcome[] = [];
-  for (const outcome of outcomes) {
-    if (outcome.error) {
-      individual.push(outcome);
-    } else {
-      const ids = idsByStatus.get(outcome.status) ?? [];
-      ids.push(outcome.id);
-      idsByStatus.set(outcome.status, ids);
-    }
-  }
-
-  for (const [status, ids] of idsByStatus) {
-    await table.update({
-      where: buildPendingResolutionFilter(ids),
-      values: { status, error: "", resolvedAt },
-    });
-  }
-  for (const outcome of individual) {
-    await table.update({
-      where: buildPendingResolutionFilter([outcome.id]),
       values: {
         status: outcome.status,
         error: outcome.error ?? "",

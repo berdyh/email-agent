@@ -5,6 +5,7 @@ import type {
   AgentResult,
   AgentStreamChunk,
 } from "./types.js";
+import { anthropicTotalTokens } from "./tokens.js";
 
 /** Bridge an AbortSignal into the AbortController the SDK expects. */
 function toAbortController(signal?: AbortSignal): AbortController {
@@ -44,9 +45,11 @@ export class SdkExecutor implements AgentExecutor {
       if (message.type === "result") {
         if (message.subtype === "success") {
           text = message.result;
-          tokensUsed =
-            (message.usage.output_tokens ?? 0) +
-            (message.usage.input_tokens ?? 0);
+          // Canonical tokensUsed (see tokens.js): all input + all output. The
+          // SDK reports Anthropic's usage shape, where input_tokens excludes
+          // cached tokens — cache_creation/cache_read are additive, so summing
+          // input+output alone under-reports every cached turn.
+          tokensUsed = anthropicTotalTokens(message.usage);
         } else {
           // Non-success subtypes (max turns, budget, execution error) must not
           // be persisted as an empty successful result — surface them instead.

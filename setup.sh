@@ -35,9 +35,11 @@ if ! command -v node &>/dev/null; then
   fail "Node.js not found. Install v22.18+: https://nodejs.org"
 fi
 
-# v22.18+ required: user actions are saved as .action.ts files and loaded via
-# Node's native ESM loader, which needs unflagged TypeScript type stripping
-# (default on in Node 22.18 / 23.6+). Earlier Nodes can't import them at all.
+# v22.18+ required for unflagged TypeScript type stripping (default on in Node
+# 22.18 / 23.6+): the native ESM loader uses it to import the BUILT-IN
+# .action.ts files when running from source, and process.loadEnvFile needs the
+# same floor. User-created .action.ts files are parsed as data, never imported,
+# so they no longer depend on type stripping at all.
 # Note the gap: 23.0-23.5 are NEWER than 22.18 but still lack unflagged
 # stripping, so a plain ">= 22.18" test would wave them through.
 NODE_MAJOR=$(node -v | sed 's/v//' | cut -d. -f1)
@@ -320,6 +322,9 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     "fetchInterval": 0,
     "fetchScope": "unread"
   },
+  "retention": {
+    "approvalQueueDays": 365
+  },
   "dataDir": "$HOME/.email-agent/data",
   "accounts": []
 }
@@ -353,7 +358,17 @@ else
   echo -e "    4. Add authorized redirect URIs:"
   echo -e "         ${CYAN}http://localhost:3847/api/auth/callback${RESET}  (Web UI)"
   echo -e "         ${CYAN}http://localhost:9876/callback${RESET}            (CLI)"
+  echo -e "       ${DIM}The web URI is built from the origin you open the app on, so EVERY${RESET}"
+  echo -e "       ${DIM}origin you serve on has to be listed. If you run 'serve --port N',${RESET}"
+  echo -e "       ${DIM}add http://localhost:N/api/auth/callback as well, and note that${RESET}"
+  echo -e "       ${DIM}127.0.0.1 is a different origin from localhost. A missing entry${RESET}"
+  echo -e "       ${DIM}fails with redirect_uri_mismatch before the consent screen.${RESET}"
   echo -e "    5. Copy the Client ID and Client Secret"
+  echo ""
+  echo -e "  ${DIM}Add accounts one at a time in a browser: concurrent add-account flows${RESET}"
+  echo -e "  ${DIM}share one CSRF state cookie, so a second one started in parallel makes${RESET}"
+  echo -e "  ${DIM}the first callback fail with 403 (and can fail both). Nothing breaks —${RESET}"
+  echo -e "  ${DIM}just retry that account.${RESET}"
   echo ""
   echo -e "  ${DIM}Press Enter to skip (you can configure later).${RESET}"
   echo ""

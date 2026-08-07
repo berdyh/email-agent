@@ -3,7 +3,9 @@ import { getEmailById, initDb, updateEmailReadStatus } from "@email-agent/core/d
 // Deep path on purpose: the gmail barrel no longer exports write operations
 // (approval-gate bypass hardening). This specifier only resolves here because
 // webpack bundles core source via tsconfig paths; Node's package exports map
-// refuses it, so dynamically imported user actions cannot reach it.
+// refuses it, so no by-name import from outside this bundle can reach the write
+// ops. User action files are not among the callers either way — they are parsed
+// as pure data and never imported, so nothing in `ACTIONS_DIR` executes.
 import { markAsRead, markAsUnread } from "@email-agent/core/gmail/operations";
 import {
   internalErrorResponse,
