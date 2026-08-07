@@ -353,6 +353,42 @@ export function commitFailed(result: ReviewCommitResult): boolean {
 }
 
 /**
+ * An answer reader that survives the input ending. Returns `null` at EOF.
+ *
+ * DO NOT REPLACE THIS WITH `rl.question()`. That is what it used to be, and the
+ * failure was silent and expensive. `readline/promises` settles a pending
+ * `question()` only on a `line` event, and it PAUSES the input between
+ * questions: when stdin reaches EOF with a question outstanding — the user
+ * presses Ctrl-D, or the command is run with piped/redirected input — the
+ * interface emits `close`, the promise NEVER SETTLES, commander's action
+ * promise hangs, nothing keeps the event loop alive, and node exits 0.
+ *
+ * What that did to `approvals review`, reproduced against the BUILT binary:
+ * three queued changes with answers piped in, the first answer read, the second
+ * prompt printed, then exit 0 with all three rows still `pending`. Every
+ * decision the user had already made was discarded and the shell was told the
+ * command succeeded. Racing a `close` listener against the question is not
+ * enough either — it stops the hang but still loses every line still sitting in
+ * the buffer, because `close` wins before they are delivered.
+ *
+ * Draining the interface's async iterator keeps it in flowing mode, so every
+ * buffered line is delivered and `done` arrives only at real EOF. The prompt is
+ * written by hand because that is the one thing `question()` was doing for us.
+ * Verified on both paths: three piped answers all arrive, and an empty stdin
+ * yields `null` on the first ask instead of hanging.
+ */
+function createAnswerReader(
+  rl: ReturnType<typeof createInterface>,
+): (prompt: string) => Promise<string | null> {
+  const lines = rl[Symbol.asyncIterator]();
+  return async (prompt: string) => {
+    process.stdout.write(prompt);
+    const next = await lines.next();
+    return next.done === true ? null : next.value;
+  };
+}
+
+/**
  * Steps through operations one by one; each answer is the user's personal
  * decision for that email. Unanswered operations (skip/quit) stay queued.
  */
@@ -362,6 +398,7 @@ export async function reviewOperations(
   const approved: string[] = [];
   const rejected: string[] = [];
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = createAnswerReader(rl);
 
   try {
     for (const [index, display] of displays.entries()) {
@@ -375,14 +412,14 @@ export async function reviewOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       if (display.snippet) console.log(chalk.dim(`  ${display.snippet}`));
 
-      const answer = (
-        await rl.question(
-          "  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: ",
-        )
-      )
-        .trim()
-        .toLowerCase();
+      const raw = await ask(
+        "  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: ",
+      );
+      // EOF is treated exactly like `q`: stop asking, keep every decision made
+      // so far. Discarding them was the old behaviour and it was silent.
+      if (raw === null) break;
 
+      const answer = raw.trim().toLowerCase();
       if (answer === "y") approved.push(op.id);
       else if (answer === "n") rejected.push(op.id);
       else if (answer === "q") break;
@@ -523,6 +560,7 @@ export async function reviewStrandedOperations(
   const applied: string[] = [];
   const notApplied: string[] = [];
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = createAnswerReader(rl);
 
   try {
     for (const [index, display] of displays.entries()) {
@@ -536,14 +574,14 @@ export async function reviewStrandedOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       console.log(chalk.dim(`  ${describeStrandedAge(op.claimedAt || op.createdAt)}`));
 
-      const answer = (
-        await rl.question(
-          "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
-        )
-      )
-        .trim()
-        .toLowerCase();
+      const raw = await ask(
+        "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
+      );
+      // EOF stops the walk and keeps the answers already given. Every row not
+      // reached stays stuck, which is what skipping already meant.
+      if (raw === null) break;
 
+      const answer = raw.trim().toLowerCase();
       if (answer === "y") applied.push(op.id);
       else if (answer === "n") notApplied.push(op.id);
       // anything else leaves the row stuck, which is the honest default.
@@ -637,10 +675,11 @@ export function registerApprovals(program: Command) {
       printOperationList(await loadOperationDisplays(ops));
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
-        const answer = await rl.question(
+        const answer = await createAnswerReader(rl)(
           `\nApply all ${ops.length} changes to Gmail? [y/N] `,
         );
-        if (answer.trim().toLowerCase() !== "y") {
+        // EOF is not consent. The prompt already defaults to No.
+        if (answer === null || answer.trim().toLowerCase() !== "y") {
           console.log(chalk.dim("Skipped — changes stay pending."));
           return;
         }
