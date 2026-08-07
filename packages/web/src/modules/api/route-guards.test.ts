@@ -6,7 +6,25 @@ import { describe, it } from "node:test";
 
 const API_DIR = fileURLToPath(new URL("../../app/api", import.meta.url));
 
-const HANDLER = /export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\b/g;
+/**
+ * Every shape Next accepts for a route handler export, as far as text can see:
+ * `export async function GET`, `export function GET`, and
+ * `export const|let|var GET = …`.
+ *
+ * KNOW THE LIMIT OF THIS TEST: it is a text scan, not an AST pass. A handler
+ * spelled some way this regex does not anticipate — re-exported from another
+ * module (`export { GET } from "./impl"`), produced by a wrapper the pattern
+ * does not match, or built dynamically — is INVISIBLE to the walk. A file whose
+ * ONLY handler is invisible still fails loudly on the `handlers.length > 0`
+ * floor below; a file where an invisible handler sits alongside a visible one
+ * would pass while the invisible one goes unchecked. No route in this tree is
+ * written that way today, so the guarantee is real for this tree — do not read
+ * it as stronger than that. If a route ever needs one of those shapes, widen
+ * this regex in the same commit, or move the walk onto the TypeScript AST
+ * (`actions/action-source-guard.ts` is the in-repo precedent for doing that).
+ */
+const HANDLER =
+  /export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b|export\s+(?:const|let|var)\s+(GET|POST|PUT|PATCH|DELETE)\s*[:=]/g;
 const GUARD_CALL = /\b(mutationGuardResponse|readGuardResponse)\s*\(/;
 
 /**
@@ -37,7 +55,9 @@ async function routeFiles(dir: string): Promise<string[]> {
 function handlerBodies(source: string): Array<{ method: string; body: string }> {
   const starts: Array<{ method: string; index: number }> = [];
   for (const match of source.matchAll(HANDLER)) {
-    starts.push({ method: match[1] as string, index: match.index });
+    // Group 1 is the `function` form, group 2 the `const|let|var` form;
+    // exactly one of them participates in any given match.
+    starts.push({ method: (match[1] ?? match[2]) as string, index: match.index });
   }
   return starts.map((start, i) => ({
     method: start.method,
