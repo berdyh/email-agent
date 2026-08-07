@@ -654,6 +654,73 @@ describe("web API validation", () => {
   });
 });
 
+describe("approval-queue retention settings", () => {
+  const base: AppConfig = {
+    agentMode: "all-agents",
+    preferredAgent: "claude",
+    gcp: { projectId: "" },
+    prompts: { summary: "", digest: "" },
+    embedding: { provider: "openai", model: "text-embedding-3-small", dimensions: 768 },
+    gmail: { autoApplyActions: false, autoApplyAcknowledged: false },
+    ui: { fetchInterval: 0, fetchScope: "unread" },
+    retention: { approvalQueueDays: 30 },
+    dataDir: "/tmp/email-agent",
+    accounts: [],
+  };
+
+  it("shows the window the sweep actually uses", () => {
+    // Omitted from this response until now, so the Settings page could not show
+    // that resolved audit rows are deleted on a schedule the user never saw.
+    assert.equal(sanitizeSettingsForResponse(base).retention.approvalQueueDays, 30);
+  });
+
+  it("reports the built-in default rather than 0 when the config has no block", () => {
+    // 0 means "never prune". Defaulting to it would promise a user with no
+    // retention block that their rows are kept forever, while core hands the
+    // sweep the 365-day default and deletes them.
+    const { retention } = base;
+    void retention;
+    const withoutBlock = { ...base };
+    delete (withoutBlock as { retention?: unknown }).retention;
+    assert.equal(sanitizeSettingsForResponse(withoutBlock).retention.approvalQueueDays, 365);
+  });
+
+  it("accepts a whole number of days and keeps 0 as 'never prune'", () => {
+    assert.deepEqual(parseSettingsUpdateRequest({ retention: { approvalQueueDays: 0 } }), {
+      retention: { approvalQueueDays: 0 },
+    });
+    assert.equal(
+      mergeSettingsUpdate(base, parseSettingsUpdateRequest({ retention: { approvalQueueDays: 7 } }))
+        .retention?.approvalQueueDays,
+      7,
+    );
+  });
+
+  it("refuses values that would silently turn the window into a no-op", () => {
+    assert.throws(
+      () => parseSettingsUpdateRequest({ retention: { approvalQueueDays: -1 } }),
+      /approvalQueueDays/,
+    );
+    assert.throws(
+      () => parseSettingsUpdateRequest({ retention: { approvalQueueDays: 1.5 } }),
+      /approvalQueueDays/,
+    );
+    assert.throws(
+      () => parseSettingsUpdateRequest({ retention: { approvalQueueDays: 1e9 } }),
+      /approvalQueueDays/,
+    );
+    assert.throws(
+      () => parseSettingsUpdateRequest({ retention: { approvalQueueDays: "30" } }),
+      /approvalQueueDays/,
+    );
+  });
+
+  it("leaves the window alone when the update does not mention it", () => {
+    const merged = mergeSettingsUpdate(base, parseSettingsUpdateRequest({ ui: { fetchInterval: 5 } }));
+    assert.equal(merged.retention?.approvalQueueDays, 30);
+  });
+});
+
 describe("stranded-row adjudication requests", () => {
   it("requires one of the two answers a person can actually give", () => {
     assert.deepEqual(parseStrandedResolutionRequest({ ids: ["a"], decision: "applied" }), {

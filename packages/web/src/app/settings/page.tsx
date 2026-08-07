@@ -140,6 +140,9 @@ export default function SettingsPage() {
     autoApplyActions: false,
     autoApplyAcknowledged: false,
   };
+  // `sanitizeSettingsForResponse` always fills this in, so the fallback only
+  // covers the first render before the query resolves.
+  const approvalQueueDays = local.retention?.approvalQueueDays ?? 365;
 
   return (
     <div className="flex h-screen flex-col">
@@ -451,6 +454,62 @@ export default function SettingsPage() {
                       {gmail.autoApplyActions ? "turn auto-apply on" : "turn auto-apply off"}.
                     </p>
                   )}
+                </CardContent>
+              </Card>
+
+              {/* The retention window used to have no surface at all: it was
+                  omitted from the settings response, so the only way to see or
+                  change it was to hand-edit ~/.email-agent/settings.json while
+                  it quietly deleted rows. */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Approval history retention
+                  </CardTitle>
+                  <CardDescription>
+                    Every change an action applied or you rejected is kept as a
+                    record of what happened to your mailbox. After this many days
+                    those records are deleted permanently, and nothing can
+                    reconstruct them. Changes still awaiting approval, stuck
+                    mid-apply, or failed are never deleted.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <label
+                    className="block text-sm font-medium"
+                    htmlFor="approval-queue-days"
+                  >
+                    Keep resolved approval records for
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="approval-queue-days"
+                      type="number"
+                      min={0}
+                      max={36500}
+                      step={1}
+                      className="w-32"
+                      aria-describedby="approval-queue-days-help"
+                      value={approvalQueueDays}
+                      onChange={(e) =>
+                        editLocal({
+                          ...local,
+                          retention: {
+                            approvalQueueDays: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                    <span className="text-sm text-muted-foreground">days</span>
+                  </div>
+                  <p
+                    id="approval-queue-days-help"
+                    className="text-xs text-muted-foreground"
+                  >
+                    {approvalQueueDays > 0
+                      ? `Records older than ${approvalQueueDays} days are deleted the next time you apply or reject something.`
+                      : "0 disables deletion — every record is kept forever."}
+                  </p>
                 </CardContent>
               </Card>
             </TabsContent>

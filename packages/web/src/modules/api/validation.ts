@@ -10,6 +10,7 @@ const SETTING_KEYS = new Set([
   "embedding",
   "gmail",
   "ui",
+  "retention",
   "dataDir",
   "accounts",
   "oauth",
@@ -72,7 +73,14 @@ export interface EmailIdRequest {
 type SettingsUpdate = Partial<
   Omit<
     AppConfig,
-    "gcp" | "prompts" | "embedding" | "gmail" | "ui" | "accounts" | "oauth"
+    | "gcp"
+    | "prompts"
+    | "embedding"
+    | "gmail"
+    | "ui"
+    | "retention"
+    | "accounts"
+    | "oauth"
   >
 > & {
   gcp?: Partial<AppConfig["gcp"]>;
@@ -80,6 +88,7 @@ type SettingsUpdate = Partial<
   embedding?: Partial<AppConfig["embedding"]>;
   gmail?: Partial<AppConfig["gmail"]>;
   ui?: Partial<AppConfig["ui"]>;
+  retention?: Partial<NonNullable<AppConfig["retention"]>>;
   accounts?: AppConfig["accounts"];
   oauth?: AppConfig["oauth"];
 };
@@ -88,8 +97,15 @@ type SettingsUpdate = Partial<
  * Settings shape returned to clients: the full runtime config minus secrets.
  * Shared with web hooks so consumers get a real type instead of
  * `Record<string, unknown>`.
+ *
+ * `retention` is required here even though it is optional on `AppConfig`:
+ * `sanitizeSettingsForResponse` always fills it in, because a settings page
+ * that cannot see the window silently deletes audit rows on a schedule the user
+ * never chose. It was omitted from this response for exactly that reason once.
  */
-export type SanitizedSettings = Omit<AppConfig, "oauth">;
+export type SanitizedSettings = Omit<AppConfig, "oauth" | "retention"> & {
+  retention: NonNullable<AppConfig["retention"]>;
+};
 
 function asRecord(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -476,6 +492,31 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     settings.ui = update;
   }
 
+  if (body["retention"] !== undefined) {
+    const retention = asRecord(body["retention"]);
+    const update: Partial<NonNullable<AppConfig["retention"]>> = {};
+    if ("approvalQueueDays" in retention) {
+      const days = optionalNumber(
+        retention["approvalQueueDays"],
+        "retention.approvalQueueDays",
+      );
+      if (days === undefined) {
+        throw new RequestValidationError("retention.approvalQueueDays is required");
+      }
+      // Whole days only, and bounded. The upper bound is generous rather than
+      // meaningful; what it actually prevents is a value so large that a
+      // `new Date(now - days * 86400000)` cutoff stops being a valid date and
+      // the sweep silently becomes a no-op the user believes is a window.
+      if (!Number.isInteger(days) || days < 0 || days > 36500) {
+        throw new RequestValidationError(
+          "retention.approvalQueueDays must be a whole number of days between 0 and 36500",
+        );
+      }
+      update.approvalQueueDays = days;
+    }
+    settings.retention = update;
+  }
+
   if (body["accounts"] !== undefined) {
     if (!Array.isArray(body["accounts"])) {
       throw new RequestValidationError("accounts must be an array");
@@ -517,6 +558,7 @@ export function mergeSettingsUpdate(
     },
     gmail: normalizeGmailConfig({ ...current.gmail, ...update.gmail }),
     ui: normalizeUiConfig({ ...current.ui, ...update.ui }),
+    retention: normalizeRetentionConfig({ ...current.retention, ...update.retention }),
     // Accounts are owned by the dedicated /api/accounts endpoints; a settings
     // PUT must never mutate them, or a stale client snapshot resurrects a
     // removed account. Ignore any accounts key in the update.
@@ -752,6 +794,10 @@ export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSetti
     gmail: normalizeGmailConfig(settings.gmail),
     prompts: settings.prompts,
     ui: normalizeUiConfig(settings.ui),
+    // Always present in the response. This used to be omitted, so the Settings
+    // page could not show that resolved approval-queue rows — the audit trail
+    // of real Gmail mutations — are deleted after a window the user never saw.
+    retention: normalizeRetentionConfig(settings.retention),
     dataDir: settings.dataDir,
     accounts: settings.accounts,
   };
@@ -769,6 +815,28 @@ function normalizeGmailConfig(
   return {
     autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
     autoApplyAcknowledged,
+  };
+}
+
+/**
+ * Fills in the retention window so every response carries one.
+ *
+ * Falls back to the built-in default rather than to 0. The two are not
+ * interchangeable and the difference is destructive in the direction that
+ * matters least obviously: 0 means "never prune", so defaulting to it would
+ * quietly promise a user with no `retention` block that their audit rows are
+ * kept forever, while `loadSettings` in core hands the sweep the 365-day
+ * default and deletes them.
+ */
+function normalizeRetentionConfig(
+  retention: Partial<NonNullable<AppConfig["retention"]>> | undefined,
+): NonNullable<AppConfig["retention"]> {
+  const days = retention?.approvalQueueDays;
+  return {
+    approvalQueueDays:
+      typeof days === "number" && Number.isFinite(days)
+        ? days
+        : (defaultConfig.retention?.approvalQueueDays ?? 0),
   };
 }
 
