@@ -10,6 +10,7 @@ import {
   buildPruneFilter,
   PRUNABLE_STATUSES,
   selectStaleApplyingOperations,
+  buildStrandedClaimFilter,
 } from "./pending-operations.js";
 import type { PendingOperationRecord } from "./schema.js";
 
@@ -176,6 +177,27 @@ describe("stranded `applying` rows", () => {
       applyingRow({ id: "f", status: "failed" }),
     ];
     assert.deepEqual(selectStaleApplyingOperations(rows, cutoff), []);
+  });
+});
+
+describe("stranded-row adjudication filter", () => {
+  it("can only ever touch rows still in applying", () => {
+    // The ids come from a surface's stale-list snapshot, and the user may take
+    // minutes to answer. Without the status clause, an apply that was merely
+    // slow could finish and write `applied`/`failed`, and the adjudication
+    // would then overwrite that fact with the user's guess.
+    assert.equal(
+      buildStrandedClaimFilter(["a", "b"]),
+      "id IN ('a', 'b') AND status = 'applying'",
+    );
+  });
+
+  it("escapes the ids it interpolates", () => {
+    assert.ok(buildStrandedClaimFilter(["a'b"]).includes("'a''b'"));
+  });
+
+  it("refuses an empty id list rather than widening to every stranded row", () => {
+    assert.throws(() => buildStrandedClaimFilter([]));
   });
 });
 

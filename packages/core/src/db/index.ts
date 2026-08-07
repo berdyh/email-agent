@@ -41,6 +41,7 @@ export {
   buildPendingEmailFilter,
   buildPendingResolutionFilter,
   buildClaimFilter,
+  buildStrandedClaimFilter,
   type PendingOperationOutcome,
 } from "./pending-operations.js";
 export { saveClusters } from "./clusters.js";

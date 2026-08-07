@@ -203,12 +203,10 @@ export function selectStaleApplyingOperations(
  * landed, so this is deliberately a *report*, not an auto-retry: only the user
  * can decide whether the change went through.
  *
- * NOTHING CALLS THIS YET. It is exported from `@email-agent/core` and
- * `@email-agent/core/db` and has no caller in web or CLI, so stranded rows
- * remain invisible on every surface — they are neither listed nor actionable.
- * The capability exists; the recovery does not. Approval surfaces should call
- * this and offer the rows for review; see TODOS.md under "⚠ THE SURFACES
- * WAVE", item 2, for the exact files.
+ * Callers: `GET /api/approvals/stranded` (rendered by `StrandedOperationsPanel`
+ * on the web Actions page) and `email-agent approvals stranded`. Both LIST the
+ * rows and ask the user to adjudicate them through
+ * `resolveStrandedApplyingOperations`; neither re-applies anything.
  */
 export async function getStaleApplyingOperations(options?: {
   olderThanMs?: number;
@@ -225,6 +223,65 @@ export async function getStaleApplyingOperations(options?: {
       : {}),
   });
   return selectStaleApplyingOperations(rows, cutoffIso);
+}
+
+/**
+ * Rows a stranded-row adjudication may touch: `applying` and nothing else.
+ *
+ * Scoping this to `applying` is what stops an adjudication from reaching a
+ * healthy row. The ids come from a surface's own stale-list snapshot, and by
+ * the time the user answers, an apply that was merely slow may have finished
+ * and written the row `applied` or `failed` — overwriting that with the user's
+ * guess would destroy a fact with an opinion.
+ */
+export function buildStrandedClaimFilter(ids: string[]): string {
+  return `${buildIdListFilter(ids)} AND status = 'applying'`;
+}
+
+/**
+ * Records the user's judgement about rows a crash left mid-apply.
+ *
+ * THIS VERIFIES NOTHING. It contacts neither Gmail nor the mailbox; it writes
+ * down what the person told us they saw. `applied` means "the user reports the
+ * change is in Gmail"; `pending` means "the user reports it is not, put it back
+ * in the approval queue so it can be approved again". Nothing else may be
+ * offered here without a real check, and there is no real check — Gmail message
+ * state is not a reliable witness to whether *this* operation caused it.
+ *
+ * Claim-then-write, so it can only ever rewrite rows it personally won: stamp a
+ * fresh token onto the still-`applying` rows, read back by that token to learn
+ * which they were, then write the final state scoped to the same token. The
+ * returned rows are exactly the ones this call changed.
+ */
+export async function resolveStrandedApplyingOperations(
+  ids: string[],
+  token: string,
+  values: Partial<
+    Pick<PendingOperationRecord, "status" | "error" | "resolvedAt" | "claimedAt">
+  >,
+): Promise<PendingOperationRecord[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  const table = await db.openTable(pendingOperationsTable);
+
+  await table.update({
+    where: buildStrandedClaimFilter(ids),
+    values: { claimToken: token },
+  });
+  const won = (await table
+    .query()
+    .where(buildClaimFilter(token, "applying"))
+    .toArray()) as unknown as PendingOperationRecord[];
+  if (won.length === 0) return [];
+
+  await table.update({
+    where: buildClaimFilter(token, "applying"),
+    // The token is cleared with the same write that resolves the row: a row
+    // that is no longer `applying` has no lease, and leaving one behind would
+    // make a later `buildClaimFilter` read match a row it does not own.
+    values: { ...values, claimToken: "" },
+  });
+  return won;
 }
 
 export async function getPendingOperationsByIds(

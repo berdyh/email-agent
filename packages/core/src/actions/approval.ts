@@ -5,6 +5,7 @@ import {
   getPendingOperationsForEmails,
   prunePendingOperations,
   resolveClaimedOperations,
+  resolveStrandedApplyingOperations,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
 import type { PendingOperationRecord } from "../db/schema.js";
@@ -525,6 +526,62 @@ export async function applyPendingOperationsByIds(
 
   await pruneResolvedOperationsQuietly();
   return result;
+}
+
+/**
+ * What the user can tell us about a row a crash stranded in `applying`.
+ *
+ * Two answers, because there are only two things a person can actually check:
+ * whether the change is visible in Gmail or not. There is deliberately no
+ * "retry" — `applyPendingOperationsByIds` claimed the row before it called
+ * Gmail, so re-applying could be the second trash of an already-trashed
+ * message, and no automated check can distinguish "we did this" from "it was
+ * already like that".
+ */
+export type StrandedDecision = "applied" | "notApplied";
+
+/**
+ * Stamped on a row the user reported as applied, so the audit trail never
+ * implies the app confirmed anything.
+ */
+export const STRANDED_APPLIED_NOTE =
+  "Recorded as applied by the user after a crash left it mid-apply. Email Agent did not verify this with Gmail.";
+
+/**
+ * Writes down the user's judgement about stranded rows and returns how many
+ * rows it actually changed.
+ *
+ * `applied` retires the row into the audit trail with a note saying who decided
+ * it. `notApplied` puts it back to `pending`, where it is an ordinary proposal
+ * again — approvable, rejectable and visible in every list — with `claimedAt`
+ * and `resolvedAt` cleared so a future staleness check ages it from its next
+ * claim rather than the one that died.
+ *
+ * The count can be lower than `ids.length`, and that is information, not an
+ * error: the ids came from a stale-list snapshot, and any row an in-flight
+ * apply resolved in the meantime is no longer `applying` and is left alone.
+ */
+export async function adjudicateStrandedOperations(
+  ids: string[],
+  decision: StrandedDecision,
+): Promise<number> {
+  if (ids.length === 0) return 0;
+
+  const resolved =
+    decision === "applied"
+      ? await resolveStrandedApplyingOperations(ids, randomUUID(), {
+          status: "applied",
+          error: STRANDED_APPLIED_NOTE,
+          resolvedAt: new Date().toISOString(),
+        })
+      : await resolveStrandedApplyingOperations(ids, randomUUID(), {
+          status: "pending",
+          error: "",
+          resolvedAt: "",
+          claimedAt: "",
+        });
+
+  return resolved.length;
 }
 
 /**
