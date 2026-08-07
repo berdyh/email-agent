@@ -216,9 +216,12 @@ yet — see the CLI entry below.
 
 ## Core actions / approval queue
 
-### THE SURFACES WAVE — adopted, except the test that goes through a surface
+### THE SURFACES WAVE — adopted
 **Completed (items 1, 2 and 4):** feature/todos-w7-surface-adoption (2026-08-07)
-**Priority:** P2 for what remains (item 3 below).
+**Completed (item 3):** feature/todos-w3-tests (2026-08-07)
+**Priority:** CLOSED. Kept here rather than moved wholesale because items 1, 2
+and 4 describe behaviour that is still current; item 3's closure has its own
+Completed entry.
 
 Wave 1 (feature/todos-w1-queue) added core data and core capabilities and
 changed **nothing** about what the web UI or the CLI shows. This wave wired it
@@ -254,21 +257,19 @@ the toast says the outcome was recorded "on your word", and an `applied` row
 carries `STRANDED_APPLIED_NOTE` saying Email Agent did not check. Skipping is a
 first-class answer. Do not describe any of this as recovery.
 
-**3. A test must go through a surface. NOT DONE — still P2.**
-Every wording above is pinned by pure-function tests
-(`action-run-contract.test.ts`, `run-action.test.ts`, `approvals-contract.test.ts`,
-`approvals.test.ts`). That is strictly better than `runner.test.ts` asserting two
-string builders, but it has the same ceiling: nothing fails if
-`app/actions/page.tsx` stops calling `describeActionRunOutcome`, if the panel
-stops rendering, or if the route stops returning the field. There is still no
-harness that drives a run through a surface and reads what the user is told; it
-needs the work tracked under "Integration harness for the approval gate".
-Live-exercised by hand instead (seeded LanceDB, real CLI binary, real dev
-server): CLI `approvals list` / `stranded` / `stranded --review` for both
-answers and skip, exit codes, and the web routes end to end including guards,
-validation, the stale-snapshot `resolved: 0` case and the settings round trip.
-The React components themselves were only type-checked and server-rendered; no
-browser was available.
+**3. A test must go through a surface. DONE** (feature/todos-w3-tests) — see
+"THE SURFACES WAVE item 3" in Completed for what the CLI and web tests cover.
+The pure-function tests named here still exist and still pin the wording; what
+has changed is that the WIRING is now checked too, so a page or command that
+stopped calling its formatter, or a route that stopped returning the field,
+fails a test.
+
+**What that closure does NOT include, stated because it is easy to lose:** React
+component rendering (there is no component testing library in this repo, so
+`ApprovalPanel` and `StrandedOperationsPanel` are still only type-checked), and
+a successful Gmail mutation (no linked account, so every apply path in the tests
+ends in a per-operation failure). The `app/actions/page.tsx` server component
+itself is also not rendered by a test — the route it calls is.
 
 **4. The retention window has a surface. DONE** — see its own entry below.
 
@@ -408,29 +409,6 @@ and see the result of, instead of a side effect of the next apply or reject.
 Not built here.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
 
-### Queue helpers with real-table behaviour are unit-tested only
-**Priority:** P2
-Most of what wave 1 added is covered at the pure-helper level only — filters,
-the dedupe key, the age rule, the retention cutoff. What no test touches is
-the LanceDB behaviour they depend on: that `table.delete(filter)` removes
-exactly the rows `buildPruneFilter` selects, and that
-`getPendingOperationsForEmails` returns the pending rows a dedupe check needs.
-Belongs to the integration harness below.
-
-Two of the original items here are now genuinely covered and should not be
-re-listed: every table's migration runs against a real temp-directory LanceDB
-in `db/schema-migration.test.ts` (legacy `pending_operations`, `action_results`
-and `emails` shapes, rows in `applied`/`rejected`/`failed`/`applying`, both
-halves of a concurrent-init race, and a refusal that leaves rows intact), and
-the chunked apply's claim/apply/resolve ordering — including the per-call
-scope of the stranded-chunk bound — is pinned in `actions/approval.test.ts`
-through injected dependencies. A third is covered now as well:
-`db/stranded-adjudication.race.test.ts` drives the claim, the adjudication and
-the apply's write-back against a real temp-directory LanceDB under a throwaway
-`$HOME`, including two adjudications racing over one row.
-Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); narrowed after the
-PR #8 review pass, 2026-08-07.
-
 ### Tighten the two fields declared optional for the surfaces' benefit
 **Priority:** P4
 `PendingOperationRecord.claimedAt` and `AppConfig.retention` are both
@@ -441,37 +419,6 @@ changed on its own branch. Neither is optional in reality: the Arrow column
 is non-nullable and `normalizeSettings` always populates `retention`. Add the
 fields to those fixtures and make both required.
 Found by: wave 1 (feature/todos-w1-queue, 2026-08-07).
-
-### Cross-process claim atomicity is unconfirmed
-**Priority:** P2
-The claim/lease design is correct **if** two concurrent `table.update()` calls
-on the same rows (a CLI run and a `serve` process) cannot both commit — i.e. if
-LanceDB either errors on commit conflict or re-evaluates the predicate for the
-loser. That behaviour is still not confirmed against the local-filesystem
-backend, so the guarantee the whole gate rests on is currently assumed.
-
-Adjacent evidence exists now and must NOT be mistaken for an answer. Two
-processes calling `Table.addColumns()` on the same table were tested against
-the installed 0.15.0 (five forked runs): one commits, the loser fails with
-"Column already exists in the dataset", and no row is lost in any
-interleaving. That shows Lance commits are conflict-checked for a *schema*
-operation. It says nothing about whether two `update()` commits with
-overlapping predicates can both land, which is a different conflict class.
-Confirm the `update()` case specifically — a two-PROCESS test over one row, or
-the Rust commit-conflict path — and write down the answer.
-
-**Narrowed again, 2026-08-07, and still not the answer.** Two `update()` calls
-on ONE row through two handles of one connection WERE tested on a real
-temp-directory table against 0.15.0: the second throws
-`Commit conflict for version N` (`lance::io::commit`), so two overlapping
-`update()` commits cannot both land silently in that configuration — which is
-the half the gate needs. Two caveats keep this open. The conflict arises from
-the handle's pinned READ VERSION, so a handle refreshed with `checkoutLatest()`
-immediately before its write can commit against the newer version and the
-predicate is what decides the outcome (this is why
-`updateAtLatestVersion` retries a conflict rather than failing); and the probe
-was in-process, not two OS processes over the same directory, which is the
-scenario the entry is actually about. Do not close it on this evidence.
 
 ### The batched email lookup is duplicated in two surfaces
 **Priority:** P3
@@ -484,8 +431,12 @@ in `core/src/db/emails.ts` as `getEmailsByIds(refs: {accountId, id}[])` next to
 `buildEmailFilters`, exported from `db/index.ts`, with both surfaces deleting
 their copy. Two copies of a LanceDB predicate builder is exactly the shape that
 drifts — the backticked `accountId`, the never-chain-`.where()` rule and the
-absence of a `.limit()` (see below) have to stay right in both, and the review of
-PR #10 already caught the same `.limit()` defect in both copies at once.
+`.limit()` have to stay right in both, and it has now gone wrong in both at once
+TWICE: the review of PR #10 caught `limit(refs.length)` in both copies, and
+feature/todos-w3-tests found that the replacement (no limit at all, justified by
+a comment asserting LanceDB's default limit applies to vector searches only)
+capped the lookup at ten emails in both copies. Both now pass
+`UNLIMITED_QUERY_ROWS` from the core barrel.
 
 Core-side follow-ups this carries with it, deferred because `packages/core` was
 owned by another branch:
@@ -493,7 +444,8 @@ owned by another branch:
     only one.
   - The duplicate-row case the `.limit()` fix now tolerates would be better
     prevented: nothing enforces one row per `(accountId, id)` in the `emails`
-    table. `upsertEmails` merges on that pair, so a duplicate can only arrive by
+    table. `upsertEmails` deletes that pair before appending it (it no longer
+    merges — see the fetch entry in Completed), so a duplicate can only arrive by
     another path, but the invariant is unwritten and unenforced. Either state it
     where the schema is defined or make the lookup pick deterministically
     (newest `date` wins) rather than "last row scanned wins".
@@ -678,16 +630,17 @@ existing `GET/POST /api/actions/user/snapshots`, and it must surface an
 already does) rather than as a generic failure toast.
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
 
-### The OAuth state/CSRF guard has no test and no live run
-**Priority:** P2
-The login-CSRF fix (random state in an httpOnly SameSite=Lax cookie,
-timing-safe compare, 403 before `addAccount` on mismatch) is the security
-control on the account-linking flow, and nothing exercises it: there are no
-route-level tests for the callback or accounts handlers, and the cookie
-round-trip was never run against a live Google consent flow this session. It is
-verified by reading only. Add handler tests with a fabricated request/cookie
-pair, then walk one real add-account flow.
-Found by: audit wave 1 (own concern) + Codex review, 2026-08-06.
+### The OAuth state/CSRF guard has never been run against Google
+**Priority:** P4
+**Narrowed:** feature/todos-w3-tests (2026-08-07)
+The handler-level half is done — thirteen route-level cases, including the
+403-before-`addAccount` ordering; see the Testing section for exactly what they
+establish and how. What remains is the part no test on this machine can do: the
+cookie round trip has never run against a live Google consent flow, because
+there are no OAuth credentials and no linked account here. The consent screen,
+Google's own `state` echo, the browser's cookie handling across the redirect and
+`exchangeCode` itself are verified by reading only. Do not call this control
+end-to-end verified until someone links a real account.
 
 ### OAuth redirect URI is now origin-derived
 **Priority:** P3
@@ -837,42 +790,321 @@ report the mismatch after the row has already been claimed).
 
 ## Testing
 
-### Integration harness for the approval gate
-**Priority:** P2
-31 of 32 coverage gaps are structurally untestable today: no test DB, no mocking
-layer, no React testing library, no HTTP harness. The queue persistence, API
-routes, runner gate, CLI prompts, and panel interactions all need one. Until
-then, only pure helpers are covered. Wave 1 added more of them — prune,
-dedupe, chunked resolution and the drop/recreate migration all have pure
-cores under test and untested LanceDB halves; see "Queue helpers with real-
-table behaviour are unit-tested only" above for the specific cases.
+### The integration harness exists; React rendering is what it does not cover
+**Priority:** P3 for what remains
+**Mostly completed:** feature/todos-w3-tests (2026-08-07)
+The old claim — "31 of 32 coverage gaps are structurally untestable: no test DB,
+no mocking layer, no React testing library, no HTTP harness" — was wrong about
+three of those four, and this wave found out by building it.
 
-### No browser-level verification of the web surfaces
+**What exists now.** `packages/core/src/testing/lancedb-fixture.ts` is the one
+temp-`$HOME` LanceDB fixture: `useTempHome()` redirects `$HOME`, re-reads
+`LANCEDB_DIR` and THROWS if it is not inside the temp directory, so a test whose
+core import is hoisted above the swap fails on its first line instead of
+operating on the developer's real `~/.email-agent`. Seeding goes through the
+product's own write paths (`savePendingOperations`, `upsertEmails`,
+`saveActionResult`). `packages/web/src/modules/api/testing/route-harness.ts`
+drives real Next route handlers against it, and
+`packages/cli/src/testing/cli-harness.ts` runs the BUILT `email-agent` binary
+against it (`npm test` now builds the CLI for that reason).
+
+**"No HTTP harness" was never the obstacle.** A route handler is a plain
+exported async function taking a `NextRequest`; the only blocker was that tsx
+does not resolve the `@/*` and `@email-agent/core/*` tsconfig `paths` (there is
+no `tsconfig.json` at the repo root), so importing a route died on
+`Cannot find package '@/modules'`. A ~60-line `module.register()` resolve hook
+mirroring those two alias entries opened the whole surface. No mocking layer was
+needed either: the temp `$HOME` holds no Gmail tokens, so `createGmailClient`
+throws locally with no network call and the queue rows resolve `failed`, which
+is a real terminal path.
+
+**Ported onto it, so there is one way to do this:** the queue-helper,
+chained-`.where()`, query-limit, email-storage and cross-process-claim tests all
+use the core fixture; the web route tests and the CLI e2e tests use the two
+surface harnesses over the same fixture. `db/stranded-adjudication.race.test.ts`
+and `db/schema-migration.test.ts` were left on their own setup deliberately —
+the first predates the fixture and its hand-rolled `$HOME` swap is the pattern
+the fixture was derived from, and the second needs a bare `connect(dir)` rather
+than `initDb()` because it constructs LEGACY table shapes before migrating them,
+which the fixture cannot express. Both are noted here so nobody reads them as
+missed.
+
+**WHAT IS STILL NOT COVERED, and must not be described as covered:**
+  - **React component rendering.** There is no component testing library in this
+    repo and this wave did not add one. `ApprovalPanel`, `StrandedOperationsPanel`,
+    the settings page and the action chat are never rendered by any test. What
+    was extracted out of them (`groupOperationsByBatch`) is tested; the
+    components themselves are not.
+  - **Next itself.** The harness drives handlers, not the framework: routing,
+    middleware, streaming responses and server-component rendering are outside
+    it.
+  - **A successful Gmail mutation.** Every apply path in the new tests ends in a
+    per-operation failure, because there is no linked account. The claim, the
+    resolution, the reporting and the exit codes are covered; "the trash really
+    reached Gmail" is not, and cannot be from here.
+  - **The action runner's agent half.** Nothing drives a real model, so a run
+    still cannot be exercised end to end from prompt to queued operations.
+  - **`fetch`.** `syncEmails` needs the Gmail API; only its storage half
+    (`upsertEmails`) is now covered.
+
+### Browser verification: 5 pages clean, two panels never seen populated
 **Priority:** P3
-Everything shipped in the audit waves was verified by type-check, unit tests,
-module-boundary checks, and live CLI smoke runs of the executors. Nothing was
-opened in a browser. The flows whose fixes are therefore unobserved in a real
-UI: streaming chat generation and its abort-on-close behaviour, the approval
-panel, the settings dirty-guard (unsaved edits surviving a refetch), and the
-per-card action Run/Delete pending state under concurrency. This overlaps the
-integration-harness entry above but is cheaper: one manual pass would cover it.
+**Partly completed:** feature/todos-w3-tests (2026-08-07)
+A headless-browser pass was run. What it established: all 5 pages return 200
+with **zero console errors**; `/actions` renders and runs its three built-in
+actions, which also proves the parse-don't-execute change did not break built-in
+loading in a real browser; the auto-apply consent card keeps its toggle locked
+until the acknowledgement is given; the retention field shows 365 and flips
+correctly to "0 disables deletion — every record is kept forever"; the settings
+dirty-guard holds an unsaved edit across a focus refetch;
+`/api/approvals/stranded` answers 200 same-origin, 403 for a rebound `Host`, 403
+for a bare POST and 400 for a bad body; and there is no horizontal document
+overflow at 375, 640, 800 or 1024 px.
 
-### The chained-`.where()` fix has no regression test
-**Priority:** P2
-Chained `.where()` calls were silently dropping every filter but the last (see
-the Completed entry below); the fix joins predicates with `" AND "` at all three
-call sites. Nothing prevents the next person from reintroducing the chain — the
-bug is invisible to the type checker, and the existing tests only cover the pure
-filter *builders*, which were always correct. A single temp-directory LanceDB
-test asserting that a two-filter query returns the intersection would pin it,
-and would be the first brick of the integration harness above.
+**Still NOT covered, exactly:**
+  - **The approval panel and the stranded panel were never seen POPULATED.**
+    There is no Gmail account on that machine and the queue was empty, so both
+    rendered their empty state. Every checkbox, the review dialog, the
+    destructive-change confirmation, the toasts and the stranded adjudication
+    buttons are unobserved in a browser.
+  - **No automated React test exists**, so nothing prevents a regression in any
+    of the above — the pass was manual and is not repeatable by CI.
+  - Streaming chat generation and its abort-on-close behaviour, and the per-card
+    action Run/Delete pending state under concurrency, were not exercised.
 
 ### Extract remaining inline pure logic for unit tests
-**Priority:** P3
-The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
-classification, are pure but inlined where tests cannot reach them.
+**Priority:** CLOSED (2026-08-07)
+**Completed:** feature/todos-w3-tests
+`groupOperationsByBatch` (`modules/api/approvals-contract.ts`) is the
+`ApprovalPanel` `useMemo`, and `classifyReviewAnswer` / `classifyStrandedAnswer`
+/ `confirmedYes` (`cli/src/commands/approvals.ts`) are the review loops'
+answer handling. Both have tests; the components/loops only call them. The
+grouping's tests are about ORDER (a Map preserves insertion order; an object
+literal reorders numeric-looking ids and a key sort discards the server's
+ordering), and the classification's are about the DEFAULT (anything
+unrecognised, including `"yes"`, keeps the change queued).
+
+### `validationResponse` does not recognise a malformed JSON body
+**Priority:** P4
+`await request.json()` throws a `SyntaxError` that `validationResponse` does not
+match, so every mutating route answers **500** — with a stack trace logged — for
+a body that is simply not JSON. A well-formed body with a bad shape is correctly
+a 400. Found while writing the route tests; pinned as-is in
+`approvals.route.test.ts` with a comment saying it is a wart rather than a
+contract, so the behaviour cannot drift unnoticed. When it becomes a 400, change
+that assertion in the same commit.
 
 ## Completed
+
+### The chained-`.where()` fix has no regression test
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Was P2. `db/chained-where.test.ts` runs the product's own read functions
+(`getEmails`, `countEmails`, `getPendingOperations`, `getActionResults`) against
+a real temp-directory table seeded so the trailing filter alone matches strictly
+more rows than the intersection — which is what makes a chain observable. All
+three fixed call sites were mutation-checked by reintroducing a chain.
+
+`db/no-chained-where.test.ts` is a structural tripwire, and its header states
+its limits before anything else. It is a TypeScript AST pass (not a text scan)
+reporting three shapes: direct chaining, `q = q.where(f)` inside a loop — the
+natural rewrite of the fix, and the shape the mutation check used — and repeated
+self-reassignment in one function. It has tests for each shape it claims to
+catch, and two EXECUTABLE records of chains it cannot see (dataflow through a
+helper; a receiver held on an object), so a green run is never read as "no chain
+exists". A fourth case sweeps all three packages for files that open a LanceDB
+query and fails unless the set outside `db/` matches a written allowlist, so a
+new query surface cannot appear unguarded. The behavioural test is what
+actually guards the semantics; this only makes the common regression fail where
+it is typed.
+
+### Cross-process claim atomicity is unconfirmed
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Was P2, and it is now confirmed rather than assumed.
+`db/cross-process-claim.race.test.ts` forks two real `node` processes over one
+LanceDB directory and races them for the same three rows, six rounds, through a
+two-phase barrier (both open a fresh handle, only then is either told to write).
+
+**The result, and it is checked, not described:** exactly one owner every round,
+all three rows to that owner, zero rows claimed twice — read off the table, not
+off the workers' reports. The loser of a RAW `table.update()` is refused with
+`Commit conflict for version N`, matched on the text `isCommitConflict()`
+actually keys off. The winner alternates across rounds (`ABBBAA` / `BAABAA` on
+the first run), so it is a resolved race and not one process always arriving
+first; that is REPORTED and not asserted, because over six sample runs one
+produced `AAAAAA` and asserting alternation would be a flake.
+
+Determinism does not come from timing: a LanceDB handle is pinned to the version
+it was opened at, so whichever process commits second is committing against a
+version that has moved, whatever the interleaving.
+
+**THE CONSEQUENCE, which callers must handle: the loser gets an ERROR, not a
+silent no-op.** `claimPendingOperations` converts it into the zero-rows-won the
+claim protocol assumes, via `updateAtLatestVersion`'s refresh + bounded retry —
+asserted across the same two processes. Audited: every `table.update()` in
+`db/pending-operations.ts` is inside that wrapper (an AST case fails if one is
+added outside), and the modules that still take the raw error — `db/emails.ts`
+and `db/clusters.ts` — are named in the test with what a conflict means there
+(a cached mailbox flag or an explicit clustering pass, both single-write paths
+where an error surfaces to a caller that can repeat the action, not a queue
+write that is supposed to lose quietly). That residual is tracked under "The
+adjudication count can undercount, and other queue helpers still hold stale
+handles".
+
+### Queue helpers with real-table behaviour are unit-tested only
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Was P2. `db/queue-helpers.realtable.test.ts` runs prune, the dedupe lookup, the
+enqueue dedupe and the chunked claim/resolve against a real temp-directory
+table: `table.delete(buildPruneFilter(...))` removes exactly the rows the filter
+selects and none of the adjacent ones (the `failed` exclusion and the
+`resolvedAt != ''` guard both have their own row), `getPendingOperationsForEmails`
+returns pending rows only, an enqueue drops a proposal identical to one already
+pending while keeping a different change to the same mail, and a re-proposal
+after a rejection is NOT suppressed. The chunk test reads the TABLE from inside
+the injected Gmail call, so the per-call bound is checked against what is stored:
+at each round trip exactly this chunk's rows are `applying`, earlier ids are
+resolved and later ids are still `pending`. Ordering (newest-first with a total
+order inside one millisecond) is covered off the real table too.
+
+### The OAuth state/CSRF guard has no test and no live run
+**Partly completed:** feature/todos-w3-tests (2026-08-07)
+**Priority:** P4 for what remains — see the last paragraph.
+Thirteen cases in `web/src/modules/api/oauth-csrf.route.test.ts` drive both real
+route handlers against a real temp `$HOME`: matching state, mismatched state,
+absent cookie, absent query parameter, two empty strings (which a naive compare
+would match), a state that is a PREFIX of the cookie (`timingSafeEqual` throws
+on unequal lengths, so a missing length check would 500 rather than 403), cookie
+clearing on refusal, the cookie's httpOnly / SameSite=Lax /
+`path=/api/auth/callback` / not-`Secure` attributes, a fresh unguessable value
+per issue, the auth URL's `state` matching the cookie, a full issue-then-callback
+round trip, and the fact that the route which ISSUES the state is still behind
+the shared guard even though the callback is exempt from it.
+
+**How the 403-before-`addAccount` ordering is established without a mocking
+layer**, because the obvious approach needs one: the callback's four steps each
+have a distinct observable in a temp home — 403 state, 400 missing code, 500
+credentials not configured, then exchange + `addAccount` — so the status says
+how far execution got. It is corroborated by the real side effect: `addAccount`
+writes `settings.json` through `saveSettings`, and after every rejected callback
+that file is asserted still absent.
+
+**NOT DONE, and this entry stays open for it: no live Google consent flow was
+walked.** There are no OAuth credentials and no linked account on this machine,
+so the consent screen, Google's own `state` echo, the browser's cookie handling
+across the redirect, and `exchangeCode` itself remain verified by reading only.
+Do not describe this control as end-to-end verified until someone links a real
+account.
+
+### THE SURFACES WAVE item 3 — a test that goes through a surface
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Was P2. Both surfaces are now driven end to end.
+
+**CLI:** `commands/approvals.e2e.test.ts` and `commands/approvals-stranded.e2e.test.ts`
+run the BUILT `packages/cli/dist/index.js` as a child process against a seeded
+temp database — `npm test` builds the CLI for exactly this reason, because
+running `src/index.ts` under tsx would not cover the tsc emit and the emit is
+what a user runs. Covered: `approvals list` (empty, populated, and as the
+default subcommand), `reject` including the ambiguous-batch-prefix refusal,
+`apply` on both confirmations, `review` with y/n/s in one run, and the whole
+stranded flow — list, `--review` for both answers and skip, and the "nothing
+stuck" state. Every case asserts stdout, the exit code AND the rows left behind.
+
+**Web:** `modules/api/approvals.route.test.ts` drives the real handlers for
+list, count, apply, reject and stranded (GET and POST) over a real
+temp-directory LanceDB, including the guards, the deliberate 200-with-failures
+versus 409-claimed-nothing distinction, and the stale-snapshot `resolved: 0`
+case.
+
+**Found by doing it:** `approvals review` with piped input, or with Ctrl-D
+pressed mid-review, discarded every decision and exited 0 — see the entry below.
+That is what a surface test is for.
+
+**Still not covered:** React component rendering (no testing library in this
+repo) and a successful Gmail mutation (no linked account). Both are stated in
+the test files themselves and in the harness entry above.
+
+### `email-agent fetch` could not store a single email
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Found by the first use of the new temp-DB fixture; it was never in the backlog
+because no test had ever written an email row to a real table. `upsertEmails` —
+the only write path for fetched mail (`gmail/sync.ts`) — threw on EVERY call
+against a table created by the current `initDb()`. Two independent defects,
+both reproduced against `@lancedb/lancedb` 0.15.0:
+
+1. **Nullability.** `createEmptyTable(name, schema)` builds non-nullable columns
+   (apache-arrow's `Field` defaults to `nullable = false`) while LanceDB infers
+   `nullable = true` from the plain JS objects handed to `execute()`.
+   `mergeInsert` refuses the mismatch — `` `id` should have nullable=false but
+   nullable=true ``, once per column. `table.add()` coerces, which is why every
+   other writer in the package worked.
+2. **The join key.** `mergeInsert` composes the probe column as
+   `target_accountId` and parses it as an UNQUOTED SQL identifier, so DataFusion
+   folds it to `target_accountid`: `No field named target_accountid`. Same
+   camelCase rule `db/MODULE.md` already stated for `.where()`, in a place with
+   no escape hatch — backticking the key yields `` target_`accountId` `` and
+   fails differently.
+
+Replaced with delete-then-append over a predicate grouped BY ACCOUNT.
+`accountId IN (a, b) AND id IN (p, q)` is the obvious one-liner and is a cross
+product: on a two-account fetch it matches the pairs (a, q) and (b, p) the batch
+never named and deletes that mail. There is a behavioural test for exactly that.
+The cost is two commits instead of one, so a crash between them loses rows —
+bounded to rows the call already holds fresher copies of in memory, and stated
+at the function.
+
+### LanceDB caps an unlimited query at 10 rows
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Also found by the fixture — the first test to put more than ten rows in a real
+table. `@lancedb/lancedb` 0.15.0 applies a DEFAULT LIMIT OF 10 to a plain
+FILTERED query, not only to a vector search: a 25-row table answers
+`countRows()` with 25 and `query().where("status = 'pending'").toArray()` with
+ten. `limit(0)` is not "no limit"; it is zero rows.
+
+Every unbounded scan in the repo used `table.query()` with no limit, so:
+  - the approval queue LISTED AT MOST 10 QUEUED GMAIL CHANGES however many were
+    queued, and `approvals apply` / the web Apply acted on those ten and
+    reported the rest as "not claimed by this run";
+  - `claimPendingOperations` reads its rows back by token to learn what it won —
+    capped at 10, so an apply could mutate Gmail for rows it never learned it
+    owned and never write their outcome down. A chunk is 10 today, exactly at
+    the boundary;
+  - `getStaleApplyingOperations` could omit stranded rows, the one surface an
+    unaccounted-for mutation appears on;
+  - `getEmails` returned 10 whatever `limit`/`offset` was asked for (paging is
+    done in JS over the match set), `getActionResults` returned 10, and the
+    batched email lookup resolved 10 emails and rendered the rest as "not in
+    local DB".
+
+`email-lookup.ts` carried a comment asserting the opposite as fact — "a default
+of 10 applies to VECTOR searches only, so leaving it off is both correct and
+bounded by the predicate". It had never been checked. Both copies now carry the
+measurement instead. Fix: `UNLIMITED_QUERY_ROWS` in `db/utils.ts`, exported from
+the db barrel so the CLI (barrel-only) uses the same constant rather than a
+fourth hand-copied value.
+
+### `approvals review` discarded every decision when its input ended
+**Completed:** feature/todos-w3-tests (2026-08-07)
+Found by running the built binary end to end. Three queued changes with answers
+piped in: the first answer was read, the second prompt printed, and the process
+exited **0** with all three rows still `pending`. Nothing applied, nothing
+rejected, and the shell told the command had succeeded. The same happens when a
+user presses Ctrl-D partway through a real interactive review.
+
+`readline/promises` settles a pending `question()` only on a `line` event, and
+it PAUSES input between questions. At EOF with a question outstanding the
+interface emits `close`, the promise never settles, commander's action promise
+hangs, nothing keeps the event loop alive and node exits 0 — with the collected
+decisions sitting in local arrays `commitReviewDecisions` never receives.
+
+Racing a `close` listener against the question was tried first and is NOT the
+fix: it stops the hang but `close` still wins ahead of lines already in the
+buffer, so answers two and three are lost just as silently. Draining the
+interface's async iterator keeps it in flowing mode — every buffered line is
+delivered and `done` arrives only at real EOF. Verified on three paths: three
+piped answers all arrive, an empty stdin yields EOF on the first ask instead of
+hanging, and a real pty still echoes and records normally. All three prompts now
+treat EOF as a value: `stop` for a review (keep what was decided, exactly as `q`
+already did), `skip` for a stranded row, and No for the `[y/N]` confirmation.
+
 
 ### The mutation guard trusts the Host header
 **Completed:** feature/todos-w2-surfaces (2026-08-07)
