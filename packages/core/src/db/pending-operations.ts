@@ -363,6 +363,24 @@ export function buildStrandedClaimFilter(
   ].join(" AND ");
 }
 
+/** The final state a stranded-row adjudication writes. `status` is required. */
+export interface StrandedResolutionValues {
+  status: PendingOperationStatus;
+  error?: string;
+  resolvedAt?: string;
+  claimedAt?: string;
+}
+
+/**
+ * Test-only seams. Injected rather than faked, because the interleavings these
+ * expose are exactly what the return contract below depends on, and a mock of
+ * LanceDB would prove nothing about them.
+ */
+export interface StrandedResolutionHooks {
+  /** Runs after this call has stamped its token and read back what it won. */
+  afterClaim?: () => Promise<void>;
+}
+
 /**
  * Records the user's judgement about rows a crash left mid-apply.
  *
@@ -374,8 +392,20 @@ export function buildStrandedClaimFilter(
  * state is not a reliable witness to whether *this* operation caused it.
  *
  * CLAIM-THEN-WRITE, over rows that are `applying` AND past the staleness
- * cutoff: stamp a fresh token onto them, read back by that token to learn which
- * they were, then write the final state scoped to the same token.
+ * cutoff: stamp a fresh token, read back by that token to learn what was won,
+ * write the final state scoped to the same token, read back again to count what
+ * that write actually reached, then release the token.
+ *
+ * WHAT THE RETURNED ROWS MEAN. They are the rows still carrying this call's
+ * token in the state this call asked for, read AFTER the write. That is a true
+ * count of what this call changed in every ordinary case, and it is what an
+ * earlier revision got wrong: it returned the post-claim read, so a second
+ * adjudication that stole the token in between made the first report rows the
+ * second had actually decided. The one way it can still be wrong is by
+ * UNDERCOUNTING — a `notApplied` row this call wrote back to `pending` can be
+ * claimed by a fresh apply before the count read, which re-stamps the token and
+ * hides the row from it. Undercounting understates what we did; overcounting
+ * claims credit for someone else's decision. The direction is deliberate.
  *
  * WHAT IT STILL CANNOT PROTECT: an apply that is in flight AT claim time. The
  * age clause narrows that to an apply hung past `STALE_APPLYING_THRESHOLD_MS`,
@@ -393,9 +423,8 @@ export async function resolveStrandedApplyingOperations(
   ids: string[],
   token: string,
   cutoffIso: string,
-  values: Partial<
-    Pick<PendingOperationRecord, "status" | "error" | "resolvedAt" | "claimedAt">
-  >,
+  values: StrandedResolutionValues,
+  hooks?: StrandedResolutionHooks,
 ): Promise<PendingOperationRecord[]> {
   if (ids.length === 0) return [];
   const db = await getDb();
@@ -415,14 +444,33 @@ export async function resolveStrandedApplyingOperations(
   );
   if (won.length === 0) return [];
 
+  if (hooks?.afterClaim) await hooks.afterClaim();
+
+  // The token is deliberately KEPT by this write. It is the only handle that
+  // identifies the rows this write reached — LanceDB's update() reports no row
+  // count, and a concurrent adjudication may have stolen some of them since the
+  // read above.
   await updateAtLatestVersion(table, {
     where: buildClaimFilter(token, "applying"),
-    // The token is cleared with the same write that resolves the row: a row
-    // that is no longer `applying` has no lease, and leaving one behind would
-    // make a later `buildClaimFilter` read match a row it does not own.
-    values: { ...values, claimToken: "" },
+    values: { ...values, claimToken: token },
   });
-  return won;
+
+  const changed = await queryAtLatestVersion(
+    table,
+    buildClaimFilter(token, values.status),
+  );
+  if (changed.length === 0) return [];
+
+  // Release the lease. A row that is no longer `applying` holds no claim, and a
+  // token left behind would make a later `buildClaimFilter` read match a row it
+  // does not own. If the process dies between the two writes the row keeps a
+  // spent token, which is inert — every reader scopes by a freshly minted UUID
+  // — and the next `claimPendingOperations` overwrites it.
+  await updateAtLatestVersion(table, {
+    where: buildClaimFilter(token, values.status),
+    values: { claimToken: "" },
+  });
+  return changed;
 }
 
 export async function getPendingOperationsByIds(

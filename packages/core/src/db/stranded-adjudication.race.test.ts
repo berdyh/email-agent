@@ -30,6 +30,7 @@ const {
   describeLostClaimedOutcomes,
   getPendingOperationsByIds,
   resolveClaimedOperations,
+  resolveStrandedApplyingOperations,
   savePendingOperations,
   STALE_APPLYING_THRESHOLD_MS,
 } = await import("./pending-operations.js");
@@ -178,5 +179,73 @@ describe("adjudicating a row an apply is still working on", () => {
     // The lease is released, or a later claim-scoped read would match a row it
     // does not own.
     assert.equal(row.claimToken, "");
+  });
+});
+
+describe("two adjudications racing over one stranded row", () => {
+  it("only the call whose write landed reports the row", async () => {
+    // THE COUNT CONTRACT. B steals the token between A's post-claim read and
+    // A's final write. A's write no-ops. Before this was fixed A still returned
+    // the row it had read, so the surface told the user "Recorded 1 change as
+    // applied" for a row B had put back in the queue.
+    const id = "op-race";
+    await seedPending(id);
+    await claimPendingOperations([id], "token-A", "applying");
+    await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+    const cutoffIso = new Date(
+      Date.now() - STALE_APPLYING_THRESHOLD_MS,
+    ).toISOString();
+
+    let bWon = -1;
+    const aWon = await resolveStrandedApplyingOperations(
+      [id],
+      "adjudicate-A",
+      cutoffIso,
+      {
+        status: "applied",
+        error: STRANDED_APPLIED_NOTE,
+        resolvedAt: new Date().toISOString(),
+      },
+      {
+        afterClaim: async () => {
+          const rows = await resolveStrandedApplyingOperations(
+            [id],
+            "adjudicate-B",
+            cutoffIso,
+            { status: "pending", error: "", resolvedAt: "", claimedAt: "" },
+          );
+          bWon = rows.length;
+        },
+      },
+    );
+
+    assert.equal(bWon, 1, "B's write is the one that landed");
+    assert.equal(aWon.length, 0, "A must not claim credit for B's decision");
+
+    const row = await readRow(id);
+    assert.equal(row.status, "pending", "B's answer is what survives");
+    assert.equal(row.claimToken, "");
+  });
+
+  it("reports the row when no one steals it", async () => {
+    // The other half of the contract: the count is not simply pessimistic.
+    const id = "op-uncontested";
+    await seedPending(id);
+    await claimPendingOperations([id], "token-A", "applying");
+    await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+    const cutoffIso = new Date(
+      Date.now() - STALE_APPLYING_THRESHOLD_MS,
+    ).toISOString();
+    const won = await resolveStrandedApplyingOperations(
+      [id],
+      "adjudicate-solo",
+      cutoffIso,
+      { status: "pending", error: "", resolvedAt: "", claimedAt: "" },
+    );
+    assert.equal(won.length, 1);
+    assert.equal(won[0]?.id, id);
+    assert.equal((await readRow(id)).status, "pending");
   });
 });
