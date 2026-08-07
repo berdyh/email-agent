@@ -39,6 +39,39 @@ gcloud auth application-default login \
 npx email-agent setup --project <your-gcp-project-id>
 ```
 
+### Adding Gmail accounts: authorized redirect URIs
+
+Adding an account runs a Google OAuth consent flow, and Google only returns to a
+redirect URI that was registered on the OAuth client beforehand. Two things about
+that are better known now than discovered at the consent screen.
+
+**Register every origin you serve the app on.** The web callback URI is built
+from the origin of the request that starts the flow, so that `serve --port N`
+works — which makes the port part of the URI Google has to already know.
+Registering the default is enough only while you always use the default: run
+`npx email-agent serve --port 4000` and you also need
+`http://localhost:4000/api/auth/callback`, and reaching the app as `127.0.0.1`
+instead of `localhost` is a different origin needing its own entry. Miss one and
+Google refuses with `redirect_uri_mismatch` before it even asks you to consent.
+The CLI's own flow is fixed at `http://localhost:9876/callback` and is
+unaffected by the port you serve on.
+
+Google Cloud console → APIs & Services → Credentials → your OAuth 2.0 client →
+Authorized redirect URIs:
+
+```
+http://localhost:3847/api/auth/callback   # web UI, default port
+http://localhost:9876/callback            # CLI
+```
+
+**Add one account at a time in a given browser.** The flow is protected against
+login CSRF by a state value in a single cookie, so two add-account flows started
+at once in the same browser share it: the second overwrites the first. Whichever
+callback returns first with a stale state is refused with a 403 — and because a
+refusal also clears the shared cookie, it can take the other flow down with it,
+so both tabs may end up rejected. Nothing is damaged and no account is
+half-added; just start the account again, one at a time.
+
 ### Environment Variables
 
 Copy `.env.example` and fill in your values:
