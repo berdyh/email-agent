@@ -286,8 +286,8 @@ export class ActionRunner {
             //
             // NOTE: no surface reads `applyError` yet, so the user still sees
             // the wrong message here. Separating the field is a prerequisite
-            // for the fix, not the fix. See TODOS.md "Surfaces still read only
-            // `queueError`" for the files that must change.
+            // for the fix, not the fix. See TODOS.md under "⚠ THE SURFACES
+            // WAVE", item 1, for the files that must change.
             result.applyError = describeAutoApplyFailure(message);
           }
         }
