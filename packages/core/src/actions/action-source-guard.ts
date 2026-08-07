@@ -51,9 +51,11 @@ import type { EmailAction } from "./types.js";
  *  - Where the runtime would refuse, the evaluator refuses too. A module is
  *    strict code, and strict code has early errors that plain parsing does not
  *    report — a duplicate lexical declaration, a binding called `eval`, a
- *    duplicate export. `ts.createSourceFile().parseDiagnostics` covers syntax
- *    only, so those classes are detected explicitly (`FORBIDDEN_BINDING_NAMES`,
- *    `duplicate-declaration`, `duplicate-export`). Accepting a file Node would
+ *    duplicate export, an uninitialized `const`.
+ *    `ts.createSourceFile().parseDiagnostics` covers syntax only (TypeScript
+ *    checks these in a later grammar pass), so those classes are detected
+ *    explicitly (`FORBIDDEN_BINDING_NAMES`, `duplicate-declaration`,
+ *    `duplicate-export`, `uninitialized-const`). Accepting a file Node would
  *    reject with `SyntaxError` means loading an action that could not exist.
  *
  * And the module semantics themselves are modelled, not assumed: a named export
@@ -120,6 +122,10 @@ type BindingKind = "lexical" | "var";
 function bindingKindOf(declarationList: ts.VariableDeclarationList): BindingKind {
   const flags = declarationList.flags;
   return (flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0 ? "lexical" : "var";
+}
+
+function isConstDeclaration(declarationList: ts.VariableDeclarationList): boolean {
+  return (declarationList.flags & ts.NodeFlags.Const) !== 0;
 }
 
 /**
@@ -542,9 +548,31 @@ function analyzeActionSource(source: string, filename: string): ActionSourceAnal
           });
           continue;
         }
-        // `var x;` after `var x = <data>` does NOT reset the binding, so an
-        // initializer-less declaration must leave `safeNames` alone.
-        if (decl.initializer === undefined) continue;
+        if (decl.initializer === undefined) {
+          // A missing initializer means two different things, and conflating
+          // them was a bypass. For `var`/`let` it is legal and simply leaves
+          // the binding `undefined` — and `var x;` after `var x = <data>` does
+          // NOT reset the binding, so `safeNames` must be left alone. For
+          // `const` it is an EARLY ERROR: Node refuses the module outright with
+          // `SyntaxError: 'const' declarations must be initialized`, so a file
+          // containing one describes a module that cannot exist.
+          //
+          // `ts.createSourceFile().parseDiagnostics` does not report it — like
+          // the other early errors above, TypeScript checks it in a later
+          // grammar pass, not in the parser — so it is detected explicitly.
+          //
+          // The rest of the "no initializer" family is already covered: `using`
+          // and `await using` also require an initializer, and both are refused
+          // wholesale further up for their disposal hook.
+          if (isConstDeclaration(statement.declarationList)) {
+            violations.push({
+              rule: "uninitialized-const",
+              detail:
+                `\`${decl.name.text}\` is declared \`const\` with no value, and Node throws SyntaxError before the file loads (${describe(decl, sourceFile)})`,
+            });
+          }
+          continue;
+        }
         const evaluated = evaluatePureData(decl.initializer, ctx);
         if (evaluated.ok) {
           safeNames.set(decl.name.text, evaluated.value);

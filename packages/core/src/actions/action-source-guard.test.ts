@@ -375,6 +375,58 @@ describe("action source guard — early errors a module would throw on", () => {
     // Two distinct exported names are fine.
     accepts(`export var action = { id: "a", name: "A", prompt: "p" };\nexport var other = 1;\n`);
   });
+
+  it("refuses a `const` with no initializer, wherever it sits", () => {
+    // Node: `SyntaxError: 'const' declarations must be initialized`. The walk
+    // used to `continue` on any declaration without an initializer — correct
+    // for READING a value (`var x;` after `var x = 1` must not reset the
+    // binding) and wrong for DETECTING an early error, so a file the runtime
+    // refuses outright was accepted and its action returned.
+    const uninitialized = [
+      `const unused;`,
+      `const unused: string;`,
+      `export const unused;`,
+      `export const action;`,
+      `const a = "x", b;`,
+      `const b, a = "x";`,
+    ];
+    for (const head of uninitialized) {
+      const rules = rulesFor(`${head}\nexport default { id: "a", name: "A", prompt: "p" };\n`);
+      assert.ok(
+        rules.includes("uninitialized-const"),
+        `should be refused: ${head} — got ${rules.join(",") || "nothing"}`,
+      );
+      assert.throws(
+        () => extractActionData(`${head}\nexport default { id: "a", name: "A", prompt: "p" };\n`, "x.action.ts"),
+        UnsafeActionSourceError,
+        `extraction must refuse too: ${head}`,
+      );
+    }
+
+    // ...and a `.action.js` file is no different — the rule is ECMAScript's,
+    // not TypeScript's.
+    assert.ok(
+      findActionSourceViolations(
+        `const unused;\nexport default { id: "a", name: "A", prompt: "p" };\n`,
+        "x.action.js",
+      )
+        .map((v) => v.rule)
+        .includes("uninitialized-const"),
+    );
+
+    // `var` and `let` without an initializer stay legal: the binding is
+    // `undefined`, which is what the runtime does, and a bare `var x;` after
+    // `var x = <data>` must NOT reset the recorded value.
+    accepts(`let ok;\nexport default { id: "a", name: "A", prompt: "p" };\n`);
+    accepts(`var ok;\nexport default { id: "a", name: "A", prompt: "p" };\n`);
+    assert.equal(
+      extractActionData(
+        `var X = "kept";\nvar X;\nexport default { id: "a", name: "A", prompt: X };\n`,
+        "x.action.ts",
+      )?.prompt,
+      "kept",
+    );
+  });
 });
 
 describe("action source extraction — ESM export semantics", () => {
