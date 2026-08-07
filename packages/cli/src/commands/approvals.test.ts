@@ -10,6 +10,9 @@ import {
   describeOperation,
   describeRejectOutcome,
   describeReviewCommit,
+  describeStrandedAge,
+  describeStrandedHeader,
+  describeStrandedResolution,
   type ApplyOutcome,
   type RejectOutcome,
 } from "./approvals.js";
@@ -459,5 +462,72 @@ describe("committing review decisions", () => {
       commitFailed({ approvedIds: [], rejectedIds: ["b"], rejectError: new Error("x") }),
       true,
     );
+  });
+});
+
+describe("stranded rows (`approvals stranded`)", () => {
+  const NOW = new Date("2026-08-07T12:00:00.000Z");
+
+  it("states the uncertainty, and that the CLI has not and cannot check", () => {
+    const [headline, explanation, footnote] = describeStrandedHeader(2);
+    assert.ok(headline?.includes("we do not know whether they reached Gmail"));
+    assert.ok(explanation?.includes("has not checked and it cannot"));
+    assert.ok(/open gmail, look/i.test(explanation ?? ""));
+    // These rows are `applying`; every other approvals command lists `pending`.
+    assert.ok(footnote?.includes("`approvals list`, `apply` and `reject` do not see them"));
+  });
+
+  it("agrees with the singular", () => {
+    const [headline] = describeStrandedHeader(1);
+    assert.ok(headline?.includes("1 Gmail change is stuck mid-apply"));
+    assert.ok(headline?.includes("whether it reached Gmail"));
+  });
+
+  it("ages a row down to the minute and survives an unparsable stamp", () => {
+    assert.equal(describeStrandedAge("2026-08-07T11:00:00.000Z", NOW), "stuck for 1 hour");
+    assert.equal(describeStrandedAge("2026-08-06T11:59:00.000Z", NOW), "stuck for 1 day");
+    assert.equal(describeStrandedAge("", NOW), "stuck for an unknown length of time");
+  });
+
+  it("records the user's word, never a verification", () => {
+    const applied = describeStrandedResolution("applied", 1, 1);
+    assert.ok(applied.includes("on your word"));
+    assert.ok(applied.includes("did not check Gmail"));
+
+    const requeued = describeStrandedResolution("notApplied", 2, 2);
+    assert.ok(requeued.includes("back in the approval queue"));
+    assert.ok(requeued.includes("on your word"));
+  });
+
+  it("keeps whatever was already recorded when the answer arrives too late", () => {
+    // The ids came from a snapshot; the row may have moved on since.
+    assert.ok(
+      describeStrandedResolution("applied", 1, 0).includes(
+        "whatever was already recorded stayed",
+      ),
+    );
+    assert.ok(
+      describeStrandedResolution("applied", 3, 2).includes("1 row was not written"),
+    );
+  });
+
+  it("never states a cause for a skipped row as fact", () => {
+    // The regression: the wording said an apply that was still running had
+    // finished the row "and the outcome it recorded was kept". A row can
+    // equally have been answered by another adjudication — in which case what
+    // was kept is another person's unverified assertion, not a real apply's
+    // record — or have been requeued and re-claimed, which makes it too new to
+    // adjudicate at all. Same rule `describeApplyOutcome` already follows.
+    for (const message of [
+      describeStrandedResolution("applied", 1, 0),
+      describeStrandedResolution("notApplied", 2, 1),
+    ]) {
+      assert.ok(message.includes("may have finished"), message);
+      assert.ok(message.includes("another answer"), message);
+      assert.ok(message.includes("requeued"), message);
+      assert.equal(message.includes("has since finished"), false, message);
+      assert.equal(message.includes("the outcome it recorded was kept"), false, message);
+      assert.equal(message.includes("real outcome was kept"), false, message);
+    }
   });
 });

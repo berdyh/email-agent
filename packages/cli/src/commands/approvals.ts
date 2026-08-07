@@ -5,12 +5,19 @@ import ora, { type Ora } from "ora";
 import {
   initDb,
   getPendingOperations,
+  getStaleApplyingOperations,
+  adjudicateStrandedOperations,
   applyPendingOperationsByIds,
   rejectPendingOperationsByIds,
   describeGmailOperation,
   parseLabelIds,
+  STALE_APPLYING_THRESHOLD_MS,
 } from "@email-agent/core";
-import type { ActionApplyResult, PendingOperationRecord } from "@email-agent/core";
+import type {
+  ActionApplyResult,
+  PendingOperationRecord,
+  StrandedDecision,
+} from "@email-agent/core";
 import { emailRefKey, getEmailsByRefs } from "../email-lookup.js";
 
 export function describeOperation(op: PendingOperationRecord): string {
@@ -388,6 +395,166 @@ export async function reviewOperations(
   return { approved, rejected };
 }
 
+/**
+ * How long a row has been stuck, in words. Rounded DOWN and floored at "about a
+ * minute", because the number is the user's cue for where in their mailbox to
+ * look; an unparsable stamp says so rather than printing NaN — core surfaces
+ * such a row precisely because it cannot be aged.
+ */
+export function describeStrandedAge(
+  claimedAt: string,
+  now: Date = new Date(),
+): string {
+  const claimed = new Date(claimedAt).getTime();
+  if (Number.isNaN(claimed)) return "stuck for an unknown length of time";
+
+  const minutes = Math.floor((now.getTime() - claimed) / 60_000);
+  if (minutes < 1) return "stuck for about a minute";
+  if (minutes < 60) return `stuck for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `stuck for ${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `stuck for ${days} day${days === 1 ? "" : "s"}`;
+}
+
+/**
+ * The header a user reads before adjudicating stranded rows.
+ *
+ * Every claim in it is one we can actually support: the process died mid-apply,
+ * we never recorded the outcome, and we have not checked. It must never suggest
+ * the CLI can find out, because it cannot.
+ */
+export function describeStrandedHeader(count: number): string[] {
+  const one = count === 1;
+  const minutes = Math.round(STALE_APPLYING_THRESHOLD_MS / 60_000);
+  return [
+    `${count} Gmail ${one ? "change is" : "changes are"} stuck mid-apply — ` +
+      `we do not know whether ${one ? "it" : "they"} reached Gmail.`,
+    `A run was interrupted after ${one ? "this change was" : "these changes were"} sent to ` +
+      `Gmail, or just before; Email Agent could not record which. It has not checked and it ` +
+      `cannot. Open Gmail, look, then tell it what you found.`,
+    `(Listed after ${minutes} minutes with no recorded result. They are not pending, so ` +
+      `\`approvals list\`, \`apply\` and \`reject\` do not see them.)`,
+  ];
+}
+
+/**
+ * Why a row this command listed as stuck was not written.
+ *
+ * Mirrors the web wording (`approvals-contract.ts`) and follows the precedent
+ * `describeApplyOutcome` above already sets: state what is certain, offer the
+ * rest as possibilities. The earlier version asserted one cause as fact — that
+ * a still-running apply had finished the row and its outcome was kept — when
+ * the row could equally have been answered by another adjudication, whose
+ * "outcome" is another unverified assertion by a person, or requeued and
+ * re-claimed by a fresh apply, which makes it too new to adjudicate at all.
+ */
+function strandedSkipReasons(one: boolean): string {
+  return (
+    `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
+    `outcome; another answer (the web UI, or another shell) may already have been recorded; or ` +
+    `${one ? "it" : "they"} may have been requeued and picked up by a fresh apply, which makes ` +
+    `${one ? "it" : "them"} too new to adjudicate. Run \`email-agent approvals stranded\` again to ` +
+    `see where ${one ? "it stands" : "they stand"}.`
+  );
+}
+
+/** Wording for a finished adjudication. Pure for the same reason as the rest. */
+export function describeStrandedResolution(
+  decision: StrandedDecision,
+  requested: number,
+  resolved: number,
+): string {
+  if (resolved === 0) {
+    const requestedOne = requested === 1;
+    return (
+      `Nothing was recorded — ${requestedOne ? "that row is" : "those rows are"} no longer stuck ` +
+      `mid-apply, so your answer was not written and whatever was already recorded stayed. ` +
+      strandedSkipReasons(requestedOne)
+    );
+  }
+
+  const one = resolved === 1;
+  const skipped = requested - resolved;
+  const skippedNote =
+    skipped > 0
+      ? ` ${skipped} ${skipped === 1 ? "row was" : "rows were"} not written — ` +
+        `${skipped === 1 ? "it was" : "they were"} no longer stuck mid-apply, so whatever ` +
+        `${skipped === 1 ? "was" : "were"} already recorded stayed. ` +
+        strandedSkipReasons(skipped === 1)
+      : "";
+
+  return decision === "applied"
+    ? `Recorded ${resolved} ${one ? "change" : "changes"} as applied, on your word — ` +
+        `Email Agent did not check Gmail.${skippedNote}`
+    : `Put ${resolved} ${one ? "change" : "changes"} back in the approval queue, on your word ` +
+        `that ${one ? "it" : "they"} never reached Gmail.${skippedNote}`;
+}
+
+function printStrandedList(displays: OperationDisplay[]): void {
+  for (const [index, display] of displays.entries()) {
+    const { op } = display;
+    const account = op.accountId ? chalk.dim(` [${op.accountId}]`) : "";
+    console.log(
+      `  ${chalk.dim(String(index + 1).padStart(3))}. ` +
+        `${chalk.red(describeOperation(op))} — ${display.subject}` +
+        (display.from ? chalk.dim(` (${display.from})`) : "") +
+        account,
+    );
+    console.log(
+      chalk.dim(
+        `       ${describeStrandedAge(op.claimedAt || op.createdAt)} · ${op.actionName}`,
+      ),
+    );
+  }
+}
+
+/**
+ * Steps through stranded rows one at a time.
+ *
+ * Only two answers, and neither is a retry: core claimed the row before it
+ * mutated, so re-applying could be a second trash of an already-trashed
+ * message. "Skip" leaves the row exactly as it is, which is the right default
+ * for a user who has not looked yet — so it is what anything unrecognised does.
+ */
+export async function reviewStrandedOperations(
+  displays: OperationDisplay[],
+): Promise<{ applied: string[]; notApplied: string[] }> {
+  const applied: string[] = [];
+  const notApplied: string[] = [];
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  try {
+    for (const [index, display] of displays.entries()) {
+      const { op } = display;
+      console.log(
+        `\n${chalk.dim(`[${index + 1}/${displays.length}]`)} ` +
+          `${chalk.red(describeOperation(op))} ${chalk.dim(`(${op.actionName})`)}`,
+      );
+      console.log(`  ${chalk.bold(display.subject)}`);
+      if (display.from) console.log(chalk.dim(`  From: ${display.from}`));
+      if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
+      console.log(chalk.dim(`  ${describeStrandedAge(op.claimedAt || op.createdAt)}`));
+
+      const answer = (
+        await rl.question(
+          "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
+        )
+      )
+        .trim()
+        .toLowerCase();
+
+      if (answer === "y") applied.push(op.id);
+      else if (answer === "n") notApplied.push(op.id);
+      // anything else leaves the row stuck, which is the honest default.
+    }
+  } finally {
+    rl.close();
+  }
+
+  return { applied, notApplied };
+}
+
 async function loadPending(batchId?: string): Promise<PendingOperationRecord[]> {
   await initDb();
   return getPendingOperations({ status: "pending", batchId });
@@ -403,16 +570,32 @@ export function registerApprovals(program: Command) {
     .description("List Gmail changes awaiting approval")
     .action(async () => {
       const ops = await loadPending();
-      if (ops.length === 0) {
+      if (ops.length > 0) {
+        printOperationList(await loadOperationDisplays(ops));
+        console.log(
+          chalk.dim(
+            "\nRun `email-agent approvals review` to decide per email, or `email-agent approvals apply` for all.",
+          ),
+        );
+      } else {
         console.log(chalk.dim("No Gmail changes awaiting approval."));
-        return;
       }
-      printOperationList(await loadOperationDisplays(ops));
-      console.log(
-        chalk.dim(
-          "\nRun `email-agent approvals review` to decide per email, or `email-agent approvals apply` for all.",
-        ),
-      );
+
+      // Stranded rows are `applying`, not `pending`, so they are absent from
+      // everything above. Saying "no changes awaiting approval" and stopping
+      // there, while a change with an unknown effect on the mailbox sits in the
+      // table, is the silence this command family existed inside until now.
+      const stranded = await getStaleApplyingOperations();
+      if (stranded.length > 0) {
+        console.log(
+          chalk.red(`\n${describeStrandedHeader(stranded.length)[0]}`),
+        );
+        console.log(
+          chalk.dim(
+            "Run `email-agent approvals stranded` to see them.",
+          ),
+        );
+      }
     });
 
   approvals
@@ -476,6 +659,59 @@ export function registerApprovals(program: Command) {
         for (const line of describeApplyFailure(ops.map((op) => op.id), err)) {
           console.error(chalk.red(line));
         }
+        process.exitCode = 1;
+      }
+    });
+
+  approvals
+    .command("stranded")
+    .description(
+      "List Gmail changes stuck mid-apply, whose outcome was never recorded",
+    )
+    .option("-r, --review", "Decide each one after checking Gmail yourself")
+    .action(async (options: { review?: boolean }) => {
+      await initDb();
+      const ops = await getStaleApplyingOperations();
+      if (ops.length === 0) {
+        console.log(chalk.dim("No Gmail changes are stuck mid-apply."));
+        return;
+      }
+
+      const [headline, ...rest] = describeStrandedHeader(ops.length);
+      console.log(chalk.red(`\n${headline}`));
+      for (const line of rest) console.log(chalk.dim(line));
+      console.log("");
+
+      const displays = await loadOperationDisplays(ops);
+      printStrandedList(displays);
+
+      if (!options.review) {
+        console.log(
+          chalk.dim(
+            "\nRun `email-agent approvals stranded --review` to record what you find in Gmail.",
+          ),
+        );
+        // Unresolved changes to the user's mailbox are a non-zero condition:
+        // shell automation that runs this should notice, not scroll past it.
+        process.exitCode = 1;
+        return;
+      }
+
+      const decisions = await reviewStrandedOperations(displays);
+      for (const [decision, ids] of [
+        ["applied", decisions.applied],
+        ["notApplied", decisions.notApplied],
+      ] as const) {
+        if (ids.length === 0) continue;
+        const resolved = await adjudicateStrandedOperations(ids, decision);
+        console.log(
+          chalk.dim(describeStrandedResolution(decision, ids.length, resolved)),
+        );
+      }
+
+      const left = ops.length - decisions.applied.length - decisions.notApplied.length;
+      if (left > 0) {
+        console.log(chalk.yellow(`${left} left stuck — nothing was changed for them.`));
         process.exitCode = 1;
       }
     });

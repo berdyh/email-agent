@@ -37,6 +37,134 @@ export interface ApprovalsResponse {
   pendingCount: number;
 }
 
+/**
+ * A queue row a crash left claimed: `applying`, older than the staleness
+ * threshold, never resolved. It is NOT pending — it does not appear in the
+ * approval list and cannot be approved or rejected — and its Gmail mutation may
+ * or may not have landed.
+ */
+export interface StrandedOperation extends ApprovalOperation {
+  /** When the row left `pending` and the Gmail call was about to be made. */
+  claimedAt: string;
+}
+
+export interface StrandedApprovalsResponse {
+  operations: StrandedOperation[];
+  /** How long a row must sit in `applying` before it is listed here. */
+  thresholdMinutes: number;
+}
+
+/**
+ * How long a row has been stuck, in words.
+ *
+ * Rounded DOWN and never below "about a minute": the number is the user's cue
+ * for how long ago the Gmail call might have happened, so overstating it would
+ * push them to look in the wrong part of their mailbox. An unparsable stamp
+ * says so rather than rendering "NaN minutes" — core surfaces such a row
+ * precisely because it cannot be aged.
+ */
+export function describeStrandedAge(claimedAt: string, now: Date = new Date()): string {
+  const claimed = new Date(claimedAt).getTime();
+  if (Number.isNaN(claimed)) return "stuck for an unknown length of time";
+
+  const minutes = Math.floor((now.getTime() - claimed) / 60_000);
+  if (minutes < 1) return "stuck for about a minute";
+  if (minutes < 60) return `stuck for ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `stuck for ${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.floor(hours / 24);
+  return `stuck for ${days} day${days === 1 ? "" : "s"}`;
+}
+
+/**
+ * The user's answer about a stranded row. Duplicated from core's
+ * `StrandedDecision` rather than imported, because this module stays free of
+ * core (see the header) — the two must be kept in step by hand, and the route
+ * that bridges them is the one place that sees both.
+ */
+export type StrandedDecision = "applied" | "notApplied";
+
+export interface ResolveStrandedResult {
+  decision: StrandedDecision;
+  /** How many ids the client submitted. */
+  requested: number;
+  /** How many rows this call actually wrote. */
+  resolved: number;
+  /**
+   * `requested - resolved`: rows this call did not write.
+   *
+   * READ THIS AS "not written by this call", NOT "an apply finished them". Core
+   * writes a row only while it is `applying` AND older than the staleness
+   * threshold, so a shortfall means any of: an apply resolved it, another
+   * adjudication answered it, or it was requeued and re-claimed and is no
+   * longer stale. See `strandedSkipReasons`.
+   */
+  skipped: number;
+}
+
+/**
+ * Why a row a surface listed as stuck was not written by this call.
+ *
+ * STATES WHAT IS CERTAIN, OFFERS THE REST AS POSSIBILITIES — the precedent set
+ * by `unclaimedApplyMessage` below. The earlier wording asserted one cause as
+ * fact ("an apply that was still running has since finished it, and the outcome
+ * it recorded was kept"), and there are three, only one of which involves a real
+ * apply. A row can equally have been answered by another adjudication, in which
+ * case what was "kept" is another unverified assertion by a person; or it can
+ * have been requeued and re-claimed, in which case it is not stale and no answer
+ * about it is meaningful yet.
+ */
+function strandedSkipReasons(one: boolean): string {
+  return (
+    `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
+    `outcome; another answer (another tab, or the CLI) may already have been recorded; or ` +
+    `${one ? "it may have been" : "they may have been"} requeued and picked up by a fresh apply, ` +
+    `which makes ${one ? "it" : "them"} too new to adjudicate. Reload to see where ` +
+    `${one ? "it stands" : "they stand"}.`
+  );
+}
+
+/**
+ * Wording for the toast after adjudicating stranded rows.
+ *
+ * Every sentence here has to keep one line straight: the app recorded what the
+ * USER said, and checked nothing itself. "Marked as applied" is a claim about
+ * our records, never about the mailbox.
+ */
+export function describeStrandedResolution(result: ResolveStrandedResult): {
+  tone: ToastTone;
+  message: string;
+} {
+  const one = result.resolved === 1;
+  const skippedNote =
+    result.skipped > 0
+      ? ` ${result.skipped} ${result.skipped === 1 ? "row was" : "rows were"} not written — ` +
+        `${result.skipped === 1 ? "it was" : "they were"} no longer stuck mid-apply, so whatever ` +
+        `${result.skipped === 1 ? "was" : "were"} already recorded stayed. ` +
+        strandedSkipReasons(result.skipped === 1)
+      : "";
+
+  if (result.resolved === 0) {
+    const requestedOne = result.requested === 1;
+    return {
+      tone: "warning",
+      message:
+        `Nothing was recorded — ${requestedOne ? "that row is" : "those rows are"} no longer stuck ` +
+        `mid-apply, so your answer was not written and whatever was already recorded stayed. ` +
+        strandedSkipReasons(requestedOne),
+    };
+  }
+
+  const message =
+    result.decision === "applied"
+      ? `Recorded ${result.resolved} ${one ? "change" : "changes"} as applied, on your word — ` +
+        `Email Agent did not check Gmail.${skippedNote}`
+      : `Put ${result.resolved} ${one ? "change" : "changes"} back in the approval queue, on your ` +
+        `word that ${one ? "it" : "they"} never reached Gmail.${skippedNote}`;
+
+  return { tone: result.skipped > 0 ? "warning" : "success", message };
+}
+
 export interface ApprovalOperationOutcome {
   emailId: string;
   type: string;

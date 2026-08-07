@@ -41,7 +41,11 @@ export {
   buildPendingEmailFilter,
   buildPendingResolutionFilter,
   buildClaimFilter,
+  buildStrandedClaimFilter,
+  buildStrandedAgeClause,
+  describeLostClaimedOutcomes,
   type PendingOperationOutcome,
+  type ClaimedResolutionResult,
 } from "./pending-operations.js";
 export { saveClusters } from "./clusters.js";
 export { generateEmbedding, generateEmbeddings } from "./embeddings.js";

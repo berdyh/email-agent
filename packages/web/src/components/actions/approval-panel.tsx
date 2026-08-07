@@ -1,18 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Loader2, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, Check, HelpCircle, Loader2, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   useApprovals,
   useApproveOperations,
   useRejectOperations,
+  useResolveStranded,
+  useStrandedApprovals,
   type ApprovalOperation,
+  type StrandedDecision,
+  type StrandedOperation,
 } from "@/hooks/use-approvals";
 import { useEmailDetail } from "@/hooks/use-email-detail";
 import {
   describeApplyOutcome,
   describeRejectOutcome,
+  describeStrandedAge,
+  describeStrandedResolution,
 } from "@/modules/api/approvals-contract";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -103,6 +109,157 @@ function EmailReviewDialog({
         </div>
       )}
     </Dialog>
+  );
+}
+
+/**
+ * Queue rows a crash left claimed mid-apply.
+ *
+ * These are NOT pending. They sit in `applying`, which means Email Agent had
+ * already called Gmail — or was about to — when the process died, and the
+ * write-back that would have recorded the answer never happened. So the panel's
+ * one job is to say that plainly and hand the question to the person who can
+ * actually answer it, without ever implying the app checked.
+ *
+ * DELIBERATELY NOT OFFERED: a retry. Core claims a row before it mutates, so
+ * re-applying could be a second trash of an already-trashed message, and no
+ * check we can run tells "we did this" apart from "it was already like that".
+ * The two buttons record what the USER saw; nothing here verifies it.
+ */
+export function StrandedOperationsPanel() {
+  const { data, isError, error } = useStrandedApprovals();
+  const resolve = useResolveStranded();
+  const [reviewing, setReviewing] = useState<StrandedOperation | null>(null);
+  const closeReview = useCallback(() => setReviewing(null), []);
+
+  const operations = useMemo(() => data?.operations ?? [], [data]);
+
+  // Never fail silent, for the same reason as the pending panel — and more so
+  // here: these rows are invisible everywhere else in the app, so a swallowed
+  // error means the user is never told a Gmail change is unaccounted for.
+  if (isError) {
+    return (
+      <Card className="mb-4 border-destructive/50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">
+            Couldn’t check for Gmail changes stuck mid-apply
+          </CardTitle>
+          <CardDescription>
+            If a run was interrupted, some changes may be unaccounted for and this
+            list would be where they show up. Reload to try again.
+            {error?.message ? ` (${error.message})` : ""}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (operations.length === 0) return null;
+
+  function handleResolve(operation: StrandedOperation, decision: StrandedDecision) {
+    const confirmation =
+      decision === "applied"
+        ? `Record “${operation.label}” as already done in Gmail?\n\n` +
+          `Email Agent cannot check this. Only say yes if you have looked in Gmail ` +
+          `and seen it. The change will be filed as applied and removed from this list.`
+        : `Put “${operation.label}” back in the approval queue?\n\n` +
+          `Only say yes if you have looked in Gmail and the change is NOT there. ` +
+          `If it actually was applied, approving it again will send it to Gmail a second time.`;
+    if (!window.confirm(confirmation)) return;
+
+    resolve.mutate(
+      { ids: [operation.id], decision },
+      {
+        onSuccess: (result) => {
+          const { tone, message } = describeStrandedResolution(result);
+          toast[tone](message);
+        },
+        onError: (err) => toast.error(err.message),
+      },
+    );
+  }
+
+  return (
+    <Card className="mb-4 border-destructive/50">
+      <CardHeader className="pb-2">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-destructive-text" />
+          <CardTitle className="text-base">
+            {operations.length} Gmail{" "}
+            {operations.length === 1 ? "change" : "changes"} stuck mid-apply — we
+            don’t know if {operations.length === 1 ? "it" : "they"} reached Gmail
+          </CardTitle>
+        </div>
+        <CardDescription>
+          A run was interrupted after these changes were sent to Gmail, or just
+          before — Email Agent could not record which. It has not checked, and it
+          cannot: <span className="font-medium">open Gmail and look</span>, then
+          tell it what you found. Nothing below will be applied or undone for you.
+          {data ? ` Listed after ${data.thresholdMinutes} minutes with no result.` : ""}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <ul className="divide-y rounded-md border">
+          {operations.map((op) => (
+            <li key={op.id} className="space-y-2 px-3 py-2">
+              <div className="flex items-center gap-3">
+                <Badge
+                  variant={operationBadgeVariant(op)}
+                  className="max-w-[12rem] shrink-0 truncate"
+                  title={op.label}
+                >
+                  {op.label}
+                </Badge>
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => setReviewing(op)}
+                >
+                  <span className="block truncate text-sm">
+                    {op.email?.subject ?? `(not in local DB: ${op.emailId})`}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {op.email?.from}
+                    {op.accountId && ` — ${op.accountId}`}
+                  </span>
+                </button>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {describeStrandedAge(op.claimedAt)} · {op.actionName}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  disabled={resolve.isPending}
+                  onClick={() => handleResolve(op, "applied")}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  I checked Gmail — it happened
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  disabled={resolve.isPending}
+                  onClick={() => handleResolve(op, "notApplied")}
+                >
+                  <X className="h-3.5 w-3.5" />
+                  I checked Gmail — it didn’t
+                </Button>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <HelpCircle className="h-3 w-3 shrink-0" />
+                  Not sure? Leave it — nothing will happen to it.
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+
+      <EmailReviewDialog operation={reviewing} onClose={closeReview} />
+    </Card>
   );
 }
 

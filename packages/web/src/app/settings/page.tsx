@@ -14,6 +14,10 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useEmailStore } from "@/store/email-store";
+import {
+  describeRetentionWindow,
+  parseRetentionDraft,
+} from "@/modules/api/retention-contract";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +36,10 @@ export default function SettingsPage() {
   // ["settings"] query, so unconditionally copying every refetch into local
   // state would wipe in-progress edits. Only sync remote → local while pristine.
   const [dirty, setDirty] = useState(false);
+  // The retention field keeps its RAW string, because "" is a state a number
+  // cannot represent and 0 already means something else here. See
+  // `retention-contract.ts`.
+  const [retentionDraft, setRetentionDraft] = useState("");
 
   const editLocal = (next: Partial<SanitizedSettings>) => {
     setDirty(true);
@@ -39,7 +47,13 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    if (settings && !dirty) setLocal(settings);
+    if (settings && !dirty) {
+      setLocal(settings);
+      // Seeded from the response, which `sanitizeSettingsForResponse` already
+      // fills from core's `defaultConfig` — so there is no second copy of the
+      // default window in the client free to drift from it.
+      setRetentionDraft(String(settings.retention.approvalQueueDays));
+    }
   }, [settings, dirty]);
 
   const save = () => {
@@ -140,6 +154,7 @@ export default function SettingsPage() {
     autoApplyActions: false,
     autoApplyAcknowledged: false,
   };
+  const retentionDays = parseRetentionDraft(retentionDraft);
 
   return (
     <div className="flex h-screen flex-col">
@@ -451,6 +466,73 @@ export default function SettingsPage() {
                       {gmail.autoApplyActions ? "turn auto-apply on" : "turn auto-apply off"}.
                     </p>
                   )}
+                </CardContent>
+              </Card>
+
+              {/* The retention window used to have no surface at all: it was
+                  omitted from the settings response, so the only way to see or
+                  change it was to hand-edit ~/.email-agent/settings.json while
+                  it quietly deleted rows. */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Approval history retention
+                  </CardTitle>
+                  <CardDescription>
+                    Every change an action applied or you rejected is kept as a
+                    record of what happened to your mailbox. After this many days
+                    those records are deleted permanently, and nothing can
+                    reconstruct them. Changes still awaiting approval, stuck
+                    mid-apply, or failed are never deleted.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <label
+                    className="block text-sm font-medium"
+                    htmlFor="approval-queue-days"
+                  >
+                    Keep resolved approval records for
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="approval-queue-days"
+                      type="number"
+                      min={0}
+                      max={36500}
+                      step={1}
+                      className="w-32"
+                      aria-describedby="approval-queue-days-help"
+                      aria-invalid={retentionDays === null}
+                      value={retentionDraft}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setRetentionDraft(raw);
+                        const days = parseRetentionDraft(raw);
+                        // A cleared or unreadable field is not a value. Leave
+                        // `local.retention` untouched so Save cannot write 0
+                        // for someone who is halfway through retyping.
+                        if (days === null) {
+                          setDirty(true);
+                          return;
+                        }
+                        editLocal({
+                          ...local,
+                          retention: { approvalQueueDays: days },
+                        });
+                      }}
+                    />
+                    <span className="text-sm text-muted-foreground">days</span>
+                  </div>
+                  <p
+                    id="approval-queue-days-help"
+                    className={
+                      retentionDays === null
+                        ? "text-xs text-destructive-text"
+                        : "text-xs text-muted-foreground"
+                    }
+                  >
+                    {describeRetentionWindow(retentionDays)}
+                  </p>
                 </CardContent>
               </Card>
             </TabsContent>

@@ -77,27 +77,16 @@ describe("deriveResultAccountId", () => {
 
 describe("failure-message builders (strings only — NOT the message users see)", () => {
   // SCOPE, stated plainly so nobody reads more into these than they check.
-  // These assert the text these two builders return. They do NOT reach any
-  // surface, and therefore do NOT pin what a user is told when an auto-apply
-  // fails.
+  // These assert the text these two builders return, and nothing else.
   //
-  // `describeAutoApplyFailure` is assigned to `ActionRunResult.applyError`,
-  // which nothing reads: the web result type omits the field. What the
-  // surfaces do instead is NOT "print the `queueError` copy" — on an auto-apply
-  // failure `queueError` is unset, because the rows queued fine.
-  // `packages/web/src/app/actions/page.tsx` falls through to its success branch
-  // and reports "N changes await your approval" for rows that are now
-  // `applying`; `packages/cli/src/commands/run-action.ts` prompts on whatever
-  // is still `status: "pending"` for the batch, printing "nothing was applied"
-  // only when nothing is left pending, and otherwise offering to apply the
-  // later ids without mentioning the chunk that may already have hit Gmail.
-  // Either way the user is not told that mail may really have been trashed.
-  // Only the adoption pass tracked in TODOS.md ("⚠ THE SURFACES WAVE", item 1)
-  // can make this string reach anyone, and only a test that goes through a
-  // surface can pin it.
-  //
-  // `describeUnrecordedBatchFailure` is the exception: it is assigned to
-  // `queueError`, which the surfaces do read, so its text does reach the user.
+  // Both strings DO now reach the user: `describeAutoApplyFailure` through
+  // `applyError` and `describeUnrecordedBatchFailure` through `queueError`,
+  // printed verbatim by `describeActionRunOutcome` (web) and
+  // `describeRunOutcome` (CLI), each of which has its own tests. But no test
+  // anywhere goes THROUGH a surface, so nothing here fails if the page stops
+  // calling its formatter, if the command stops printing, or if a route drops
+  // the field. That gap is tracked in TODOS.md under "THE SURFACES WAVE",
+  // item 3, and needs the integration harness.
 
   it("builds an auto-apply message that never says nothing was applied", () => {
     // `applyPendingOperationsByIds` claims rows BEFORE any Gmail call, so it
