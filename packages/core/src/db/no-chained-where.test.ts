@@ -214,6 +214,10 @@ const QUERY_BUILDERS_OUTSIDE_DB = new Map<string, string>([
     "the test fixture reads rows back; it is not product code but it is a real query and is scanned like one",
   ],
   [
+    "core/src/testing/claim-race-worker.ts",
+    "the forked claim-race worker reads back what it won; same reasoning as the fixture",
+  ],
+  [
     "web/src/modules/api/email-lookup.ts",
     "hand-copied batched email lookup — belongs in core/src/db/emails.ts (TODOS.md)",
   ],
