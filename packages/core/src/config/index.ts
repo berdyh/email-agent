@@ -2,7 +2,7 @@ export {
   type AppConfig,
   type AgentMode,
   type AgentId,
-  type GmailSyncConfig,
+  type GmailAutoApplyConfig,
   type RetentionConfig,
   type AccountConfig,
 } from "./types.js";
@@ -11,5 +11,15 @@ export {
   loadSettings,
   saveSettings,
   normalizeSettings,
+  // The single implementation of "autoApplyActions requires
+  // autoApplyAcknowledged". Exported so the web API boundary can enforce the
+  // same rule rather than its own copy of it.
+  normalizeAutoApplyConsent,
   clearSettingsCache,
 } from "./settings.js";
+export {
+  UNSAFE_PATH_SEGMENTS,
+  UnsafeConfigPathError,
+  getNestedConfigValue,
+  setNestedConfigValue,
+} from "./dotted-path.js";

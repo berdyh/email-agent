@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
-import type { AccountConfig, AppConfig, OAuthConfig } from "./types.js";
+import type {
+  AccountConfig,
+  AppConfig,
+  GmailAutoApplyConfig,
+  OAuthConfig,
+} from "./types.js";
 
 /**
  * A cached parse of one settings file, tagged with a hash of the exact bytes
@@ -21,6 +26,49 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+/**
+ * THE consent invariant: **`autoApplyActions` requires `autoApplyAcknowledged`.**
+ *
+ * Auto-apply performs irreversible-feeling Gmail writes (trash, spam) with no
+ * further prompt, so the toggle is forced off unless the acknowledgement of its
+ * warnings is recorded alongside it. Revoking the acknowledgement disables the
+ * toggle again by the same expression. Both flags are coerced with `=== true`,
+ * so a truthy non-boolean out of a hand-edited settings.json or a JSON request
+ * body (`"true"`, `1`) does not arm anything.
+ *
+ * ONE IMPLEMENTATION, TWO CALL SITES — deliberately. The rule is enforced both
+ * here (every load and save goes through `normalizeSettings`) and again at the
+ * web API boundary, which is defense in depth worth keeping: a settings PUT that
+ * bypassed core normalization must still not be able to flip the toggle alone.
+ * What must NOT happen is the two drifting, which is why this is a shared export
+ * rather than a copy.
+ *
+ * INTENDED ADOPTION, not yet done (`packages/web` belongs to a concurrent
+ * branch; tracked in TODOS.md): `normalizeGmailConfig` in
+ * `packages/web/src/modules/api/validation.ts` is currently a hand-written
+ * duplicate of this function's body with the same signature, called from
+ * `mergeSettingsUpdate` and `sanitizeSettingsForResponse`. It should become a
+ * call to this function, imported from `@email-agent/core/config` (the same
+ * specifier that file already uses for `defaultConfig`/`AppConfig`).
+ *
+ * The scope of what this invariant can promise is "consent RECORDED", not
+ * "warnings SEEN": it checks only that the flag is set, never where it came
+ * from. `config set` refuses both keys and the Settings → Gmail card shows the
+ * cautions before writing the acknowledgement, but a hand-edited settings.json
+ * with both booleans is honoured. See TODOS.md.
+ *
+ * Pure — safe to call from a request handler or a test without touching the fs.
+ */
+export function normalizeAutoApplyConsent(
+  gmail: Partial<GmailAutoApplyConfig> | undefined,
+): GmailAutoApplyConfig {
+  const autoApplyAcknowledged = gmail?.autoApplyAcknowledged === true;
+  return {
+    autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
+    autoApplyAcknowledged,
+  };
 }
 
 /**
@@ -82,14 +130,15 @@ export function normalizeSettings(
           ? (embedding["dimensions"] as number)
           : defaults.embedding.dimensions,
     },
-    gmail: {
-      // Auto-apply performs irreversible-feeling Gmail writes (trash, spam)
-      // with no further prompt, so the acknowledgement gates the toggle here —
-      // the one chokepoint every writer (web PUT, CLI config set, hand-edited
-      // settings.json) passes through via saveSettings/loadSettings.
-      autoApplyActions: autoApplyAcknowledged === true && autoApplyRequested === true,
-      autoApplyAcknowledged: autoApplyAcknowledged === true,
-    },
+    // The acknowledgement gates the toggle here — the one chokepoint every
+    // writer (web PUT, CLI config set, hand-edited settings.json) passes
+    // through via saveSettings/loadSettings. The rule itself lives in
+    // `normalizeAutoApplyConsent` so the web API boundary can enforce the same
+    // one instead of a copy.
+    gmail: normalizeAutoApplyConsent({
+      autoApplyActions: autoApplyRequested,
+      autoApplyAcknowledged,
+    }),
     ui: {
       fetchInterval:
         "fetchInterval" in ui ? (ui["fetchInterval"] as number) : defaults.ui.fetchInterval,
@@ -120,6 +169,66 @@ export function normalizeSettings(
 
   return normalized;
 }
+
+/**
+ * The removed key this build still recognises well enough to explain.
+ *
+ * `gmail.syncActions` was the old "apply AI-proposed Gmail changes as they are
+ * produced" preference. `normalizeSettings` drops every unknown key, so an
+ * upgraded install loses it silently — in the fail-safe direction (auto-apply
+ * lands off and the changes are queued for approval), but silently.
+ */
+const LEGACY_SYNC_ACTIONS_KEY = "syncActions";
+
+/**
+ * True when the parsed settings still carry `gmail.syncActions`.
+ *
+ * Own-property check, deliberately: `in` would consult the prototype chain and
+ * report a key the file does not contain. Pure, so the detection rule is
+ * testable without a filesystem or a console.
+ */
+export function hasLegacySyncActionsKey(parsed: unknown): boolean {
+  const gmail = asRecord(asRecord(parsed)["gmail"]);
+  return Object.prototype.hasOwnProperty.call(gmail, LEGACY_SYNC_ACTIONS_KEY);
+}
+
+/** The notice text, exported so a test can assert what the user is told. */
+export function legacySyncActionsNotice(path: string): string {
+  return (
+    `Settings at ${path} still contain the removed "gmail.syncActions" key. ` +
+    "It no longer does anything and its value has been dropped: AI-proposed " +
+    "Gmail changes are now queued for your approval instead of being applied " +
+    "automatically. To apply them automatically again, turn on auto-apply in " +
+    "the web UI under Settings → Gmail, which shows what it means before " +
+    "arming it. To silence this notice, delete the key — any settings save " +
+    "(the Settings page, or `email-agent config set`) also rewrites the file " +
+    "without it."
+  );
+}
+
+/**
+ * Paths this process has already warned about.
+ *
+ * WHY THIS EXISTS AND NOT A BARE `console.warn`. `loadSettings()` re-reads the
+ * file on EVERY call — that is deliberate and load-bearing, because
+ * `gmail.autoApplyActions` is a kill switch that must not go stale — so
+ * anything hung off the read fires on every read. A `serve` process calls
+ * `loadSettings()` per request; an unconditional warn would print this notice
+ * hundreds of times and train the user to ignore the log.
+ *
+ * Two guards, both needed. The parse only happens on a cache MISS, so an
+ * unchanged file is not re-inspected; and this set makes it once per path even
+ * when the bytes DO change (an edit that leaves the legacy key in place, or a
+ * file whose contents flip back and forth) or when `clearSettingsCache()` has
+ * dropped the parse.
+ *
+ * Per module instance, not per process: Next.js does not guarantee one instance
+ * of this module per process (see the note on `loadSettingsFromPath`), so a
+ * bundle that carries a second copy warns once from that copy too. Acceptable —
+ * it is a log line, not an action — and stating it beats implying a stronger
+ * guarantee than the mechanism gives.
+ */
+const legacyNoticeShownFor = new Set<string>();
 
 /**
  * Content hash of the exact bytes a settings parse came from.
@@ -243,6 +352,14 @@ export async function loadSettingsFromPath(path: string): Promise<AppConfig> {
         `Settings at ${path} exist but are not valid JSON (${message}). Refusing to fall back to default settings — the defaults differ from a configured file in ways that delete data (retention.approvalQueueDays defaults to 365 days, while 0 means never prune). Repair the file, or move it aside to start from defaults.`,
       );
     }
+    // Removed keys are dropped by normalizeSettings without a word. Say so for
+    // the one whose loss changes behaviour the user will notice. Reached only
+    // on a cache miss, and at most once per path — see `legacyNoticeShownFor`.
+    if (hasLegacySyncActionsKey(parsed) && !legacyNoticeShownFor.has(path)) {
+      legacyNoticeShownFor.add(path);
+      console.warn(legacySyncActionsNotice(path));
+    }
+
     config = normalizeSettings(parsed);
   }
 
@@ -261,9 +378,19 @@ export function loadSettings(): Promise<AppConfig> {
  * Since the cache is keyed on content, every real edit already invalidates it;
  * this is now only a test affordance (a guaranteed cold parse) and a belt for
  * callers that want to drop the retained `AppConfig` object.
+ *
+ * Also forgets which paths have shown the legacy-key notice, so a test can
+ * assert the notice itself. That coupling is only safe while this stays a test
+ * affordance. As of 2026-08-07 it has no production caller — the callers are
+ * `config/settings.test.ts`, plus the re-export on the `config` barrel — so the
+ * notice does stay once per path in a real process. It IS a public export,
+ * though, so that is a current fact and not an invariant: a production caller
+ * added later would also reset the notice, and the two should be decoupled
+ * then.
  */
 export function clearSettingsCache(): void {
   cacheEntry = null;
+  legacyNoticeShownFor.clear();
 }
 
 export async function saveSettings(config: AppConfig): Promise<void> {

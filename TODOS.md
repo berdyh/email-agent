@@ -150,7 +150,7 @@ Found by: codex (gpt-5.6-sol xhigh) adversarial pass, round 2 (2026-08-07).
 
 ### Record which surface approved an operation
 **Priority:** P3
-**Blocked on:** "The claimToken migration drops the audit trail" (below).
+**No longer blocked** (2026-08-07).
 Add an `approvedVia` column to `pending_operations` — `web` | `cli` |
 `auto-apply` — written when a row is claimed. This is **attribution only, zero
 prevention**: as the residual above explains, the value is set by whichever
@@ -158,10 +158,16 @@ in-process caller performs the apply and proves nothing about who asked for it.
 It is worth having anyway, because "was this batch applied by a person or by
 the auto-apply setting?" is currently unanswerable from the table, which is the
 one question an audit trail exists to answer.
-Blocked because LanceDB has no ALTER TABLE, so adding a column means
-drop+recreate, and the migration that would do it currently discards resolved
-rows — doing this first would destroy the very audit rows it exists to enrich.
-Fix that entry first, then add the column through the preserving path.
+The block is gone, and the sentence that created it was false: it read "LanceDB
+has no ALTER TABLE, so adding a column means drop+recreate, and the migration
+that would do it currently discards resolved rows". `@lancedb/lancedb` 0.15.0 has
+`Table.addColumns`, no migration drops anything any more, and `ensureTableColumns`
+adds a column in place with a per-table sentinel. Adding `approvedVia` is now a
+field in `pendingOperationSchema` plus an entry in
+`pendingOperationColumnDefaults` — see "The `pending_operations`/`action_results`
+/`emails` migrations…" in Completed, whose closing lesson is exactly this: a
+capability claim about a dependency is a fact with a version attached, and this
+entry inherited the wrong one.
 
 ### If `EmailAction` ever gains an executable field, extraction stops being enough
 **Priority:** P3 (conditional — no work until the trigger)
@@ -186,10 +192,27 @@ cautions before recording it, but hand-editing `~/.email-agent/settings.json`
 to set both booleans arms unattended mutation with no warning displayed. That
 is arguably fine (the local user owns the file), but it should be stated as the
 threat model rather than implied away. Docs now say "consent recorded", not
-"UI only". Separately, `setNestedValue` should reject `__proto__`/`constructor`
-/`prototype` path segments as hygiene — the prototype-pollution route was
-probed and does not currently work, because `saveSettings` always writes both
-keys as own properties.
+"UI only".
+
+`normalizeSettings` no longer spells the rule out itself: it calls
+`normalizeAutoApplyConsent`, the single shared implementation
+(`feature/todos-w4b-config`, 2026-08-07). What it checks is unchanged.
+
+The prototype-pollution half of this entry is **done in core, unadopted in the
+CLI** (same branch). `config/dotted-path.ts` provides
+`setNestedConfigValue`/`getNestedConfigValue`, which refuse `__proto__`,
+`constructor` and `prototype` in any position — including the terminal one,
+where `__proto__` sets a prototype rather than binding a property — and refuse
+before touching the target object. It is hygiene, NOT a fix for a live hole: the
+route was probed and does not work today, because `normalizeSettings`
+materializes both consent flags as OWN properties on every load and save and an
+own property shadows the polluted prototype (verified by running exactly that —
+`"autoApplyAcknowledged" in gmail` is true either way, but the value read is the
+own `false`). The reason to add the guard anyway is that the safety belongs to a
+different function, holds only while that function materializes every key, and
+was written down nowhere. **`packages/cli/src/commands/config.ts` still uses its
+own private `getNestedValue`/`setNestedValue`**, so the guard protects no caller
+yet — see the CLI entry below.
 
 ### The mutation guard trusts the Host header
 **Priority:** P2
@@ -375,14 +398,39 @@ Found by: Fable pre-merge review, 2026-08-06 (listed as unverifiable from a
 read-only review); narrowed 2026-08-07 after the addColumns concurrency probe.
 
 ### action_results `accountId: ""` carries two meanings
-**Priority:** P3
+**Priority:** P4 (decision recorded 2026-08-07 — do not re-open without the
+trigger below)
 `""` means either "legacy/unscoped ADC row" or "an all-accounts run whose emails
-spanned more than one account" — a single-account batch now resolves to that
-account via `deriveResultAccountId`, but a mixed batch falls back to the same
-sentinel as legacy rows. Account-filtered history therefore cannot represent a
-genuine multi-account run. An explicit representation (a `mixed` marker, or
-per-account result rows) was deferred. Same theme as "Ambiguous account identity
-for queued unscoped rows" below, different table.
+spanned more than one account" — a single-account batch resolves to that account
+via `deriveResultAccountId`, but a mixed batch falls back to the same sentinel as
+legacy rows. Account-filtered history therefore cannot represent a genuine
+multi-account run.
+
+**Deliberately not fixed, and the argument is the point of this entry.** The
+ambiguity is currently unobservable: `getActionResults` has exactly one reader in
+the whole repo (`packages/web/src/app/api/actions/[id]/results/route.ts`), and it
+filters by `actionId` only — the `accountId` option has **no caller at all**
+(checked 2026-08-07). Both candidate fixes would therefore ship a stored
+representation nothing reads, which is the failure mode three other entries in
+this file are already about.
+
+Neither candidate is cheap, either:
+- A `mixed` marker separates legacy from mixed, but a scalar column still cannot
+  make a multi-account run visible under *either* account's filter — the
+  user-facing half of the problem — and it adds a third sentinel every future
+  reader has to learn, which must also be a value no email address can take.
+- Per-account result rows break `batchId = action_results row id`, the key every
+  `pending_operations` row is stamped with. One run would produce N history rows
+  and a queue batch can only point at one, so the audit-trail join would have to
+  be redesigned and both surfaces changed with it.
+
+**Trigger for revisiting:** the first caller that passes `accountId` to
+`getActionResults`. The shape to reach for then is an `accountIds` JSON-array
+column (`"[]"` for legacy rows, added in place with `ensureTableColumns` — the
+migration is cheap now) filtered in JS, which `getActionResults` already does for
+sorting, rather than another scalar sentinel. Recorded at the declaration in
+`db/schema.ts` and in the db module card. Same theme as "Ambiguous account
+identity for queued unscoped rows" below, different table.
 
 ## Core agents / executors
 
@@ -390,24 +438,6 @@ Opened by the codebase audit and its Codex (gpt-5.6-sol) review passes,
 2026-08-06. The executor layer was the weakest area of the audit: it had been
 swallowing failed runs, dropping system prompts, and parsing obsolete CLI
 output shapes. Those are fixed; what follows is what the fixes did not reach.
-
-### Document the `tokensUsed` definition at the schema field
-**Priority:** P4
-Follow-up left open by `feature/todos-w4-executors` (2026-08-07), which unified
-the definition across every executor but could not touch the schema because
-`db/**` and `actions/**` belonged to a concurrent wave. The canonical meaning —
-**total tokens processed = all input (cached at full weight) + all output; `0`
-means "not reported", never "free"** — is now stated in
-`packages/core/src/agents/tokens.ts`, the agents `MODULE.md`, and
-`CLAUDE.md`/`AGENTS.md`, but not where a reader of the column would look first.
-Add a comment at all three declarations: `db/connection.ts:65`
-(`new Field("tokensUsed", new Int32())`), `db/schema.ts:34`, and
-`actions/types.ts:59`. Pure documentation — no behaviour change.
-
-Worth a glance while in there: `Int32` is a real ceiling, not a formality. A
-single codex request already costs ~21k tokens (see below), so anything that
-sums this column will reach 2^31 far sooner than the old output-only numbers
-suggested.
 
 ### Gemini token counts are source-verified, never live-verified
 **Priority:** P3
@@ -483,22 +513,23 @@ spend.
 
 ## Core config
 
-### Notify when a legacy gmail.syncActions key is dropped
+### The consent invariant is shared but not yet adopted by web
 **Priority:** P3
-Upgrading users silently lose the old preference (fail-safe direction — it lands
-off), but nothing tells them their auto-sync setting was reset.
+**Half done** by `feature/todos-w4b-config` (2026-08-07). Core now has ONE
+implementation of "autoApplyActions requires autoApplyAcknowledged" —
+`normalizeAutoApplyConsent` in `config/settings.ts`, called by
+`normalizeSettings`, exported from `@email-agent/core/config`, with the truth
+table and the truthy-non-boolean refusals under test.
 
-### Share one consent-invariant implementation
-**Priority:** P3
-The rule "autoApplyActions requires autoApplyAcknowledged" is implemented twice:
-`normalizeSettings` (core) and `normalizeGmailConfig` (web validation). The
-duplication is deliberate defense-in-depth at the API boundary, but the two must
-not drift — export the core normalizer and have the web layer call it.
-
-### Rename GmailSyncConfig
-**Priority:** P4
-The interface no longer has a "sync" field; it now holds the auto-apply flags,
-and the name points readers at the unrelated `gmail/sync.ts` pipeline.
+What is NOT done, because `packages/web` belonged to a concurrent branch: the
+web copy still exists. `normalizeGmailConfig` in
+`packages/web/src/modules/api/validation.ts` is a hand-written duplicate of the
+same body with the same signature, called from `mergeSettingsUpdate` and
+`sanitizeSettingsForResponse`. It should become a call to the core export,
+imported from `@email-agent/core/config` — the specifier that file already uses
+for `defaultConfig` and `AppConfig`. Keep the second enforcement point; it is
+deliberate defense in depth at the API boundary. Only the second *implementation*
+goes away.
 
 ## Web
 
@@ -519,17 +550,6 @@ round-trip was never run against a live Google consent flow this session. It is
 verified by reading only. Add handler tests with a fabricated request/cookie
 pair, then walk one real add-account flow.
 Found by: audit wave 1 (own concern) + Codex review, 2026-08-06.
-
-### OAuth redirect URI is now origin-derived
-**Priority:** P3
-`getOAuthRedirectUri(request)` builds the callback from
-`request.nextUrl.origin` so `serve --port N` works, which means **every origin
-the app is served on must be registered as an authorized redirect URI in the
-Google Cloud console** — previously only `localhost:3847` had to be. Also: two
-add-account flows started concurrently in one browser share the single state
-cookie, so the second overwrites the first and the first callback 403s. Both are
-acceptable today; document them in the setup guide rather than let a user
-discover them at the consent screen.
 
 ### Snapshot restore has no surface
 **Priority:** P3
@@ -560,6 +580,25 @@ compiles on the other.
 
 ## CLI
 
+### Adopt the shared dotted-path config helpers
+**Priority:** P3
+`packages/cli/src/commands/config.ts` still declares its own `getNestedValue` and
+`setNestedValue`. Replace both with `getNestedConfigValue`/`setNestedConfigValue`
+from `@email-agent/core` (`config/dotted-path.ts`, added on
+`feature/todos-w4b-config`, 2026-08-07), which refuse `__proto__`, `constructor`
+and `prototype` in any path position and also fix a latent bug the CLI copy has:
+`typeof null === "object"`, so a null intermediate is walked into rather than
+replaced.
+
+Until this lands the guard has no caller, so `config set __proto__.x true` still
+writes to `Object.prototype` in the CLI process. That is not currently
+exploitable — see "The consent flag records consent…" above for why, and for why
+the guard exists regardless — but "not currently exploitable" is the whole reason
+this is P3 rather than higher, not a reason to skip it.
+
+`UnsafeConfigPathError` carries `path` and `segment`, so the command can print a
+specific message instead of a stack trace.
+
 ### `approvals review` drops rejections when the apply throws
 **Priority:** P3
 `packages/cli/src/commands/approvals.ts:169-170` runs `applyOperationIds`
@@ -572,18 +611,107 @@ Found by: Fable pre-merge review, 2026-08-06.
 
 ## Core Gmail
 
-### Concurrency / batchModify for applying operations
-**Priority:** P3
+### Concurrency for applying operations (batchModify is rejected)
+**Priority:** P4 (deferred with preconditions, 2026-08-07)
 `applyOperations` awaits one Gmail round trip per operation, so approving a large
-batch serializes N network calls with the panel blocked. A bounded pool, or
-`messages.batchModify` for the label/read operations, would cut this. Any change
-must keep outcome ordering aligned with the input array.
+batch serializes N network calls with the panel blocked. Both faster shapes were
+examined on `feature/todos-w4b-config`; the reasoning is now at the function.
+
+**`messages.batchModify` is REJECTED, not deferred. Do not re-propose it.**
+Both grounds were read off the REST reference on 2026-08-07:
+- "If successful, the response body is empty" — **no per-message result**, so N
+  queue rows would collapse onto one all-or-nothing status. On a partial failure
+  we would either retire rows as applied without evidence, or mark rows failed
+  that were really mutated — precisely the ambiguity `toOperationOutcomes` fails
+  closed on today. (`messages.modify`, used today, returns the modified
+  `Message` per call.)
+- One request is one `ids[]` list against one `addLabelIds`/`removeLabelIds`
+  pair under one `userId`, so only operations sharing an identical (account,
+  addLabelIds, removeLabelIds) tuple can share a call. A typical junk batch
+  (trash + spam + archive interleaved) is three distinct tuples, so it fragments
+  into single-operation calls anyway.
+
+**Correction (2026-08-07):** an earlier revision of this entry listed a third
+ground — that `batchModify` "cannot express `trash`" and that `batchDelete` was
+the only batch route. That was false and had never been checked. Gmail's labels
+guide lists `TRASH` as manually appliable (unlike `SENT`/`DRAFT`), and
+`batchModify` documents no restriction on `addLabelIds` beyond the 1000-id cap,
+so `addLabelIds: ["TRASH"]` is the batched equivalent of `messages.trash()` —
+the same relationship `markAsSpam()` already relies on with `modify` +
+`["SPAM"]`. `messages.batchDelete` is the analogue of `messages.delete`
+(PERMANENT) and must never be substituted for trash, but it is not a reason to
+reject `batchModify`. The rejection stands on the two verified grounds above.
+
+**A bounded pool is deferred**, and what it needs is known:
+1. **Partition by (account, message), serial inside a partition.** The queue can
+   hold several pending operations for one message — dedupe only collapses
+   identical ones — and serial execution applies them in the order the user
+   reviewed. A flat pool would race `addLabels X` against `removeLabels X` and
+   leave a nondeterministic final state.
+2. **Retry/backoff must exist first.** There is none today: an error becomes a
+   `failed` row, which is not `pending` and can never be approved again, so the
+   user must re-run the action to re-propose the change. Concurrency raises the
+   rate of transient rate-limit and 5xx responses, so without backoff it trades
+   latency for a higher chance of permanently dropping a change the user
+   explicitly approved. Wrong direction for the approval gate.
+3. **A test seam and a measurement.** `applyOperations` imports the write
+   operations directly, so a pool cannot be tested without injecting them; and no
+   live Gmail timing has ever been taken here — the ~100-300ms per round trip
+   quoted at `APPLY_RESOLUTION_CHUNK_SIZE` is an estimate.
+
+**Interaction with the chunked apply, since it is the easiest part to get
+wrong:** a pool must live strictly INSIDE one chunk. Chunk rows are claimed,
+applied and resolved as a unit, and `applyOperations` returns an outcome per
+operation instead of throwing, so parallelism within a chunk leaves that unit
+intact — a mid-chunk failure still resolves the whole chunk and strands nothing
+extra. A pool spanning chunks would put more than one chunk in flight and
+reinstate the "claimed set larger than the in-flight set" problem that moving the
+claim into the loop was introduced to fix.
+
+Ordering is not negotiable either way: `outcomes` is paired positionally with the
+claimed rows by `toOperationOutcomes`, so mispairing writes one message's result
+onto another message's row. Pinned by a regression test in `approval.test.ts`.
 
 ### Ambiguous account identity for queued unscoped rows
-**Priority:** P3
-`accountEmail: ""` (the gcloud/ADC sentinel) is replayed at approval time, which
-may resolve to a different identity than when the message was read if accounts
-changed in between. Named-account rows are unaffected.
+**Priority:** P3 (documented residual, 2026-08-07 — the behaviour is unchanged;
+this records what it is)
+`accountEmail: ""` (the gcloud/ADC sentinel) is replayed at approval time and may
+resolve to a different identity than when the message was read, if ADC was
+re-pointed in between. Documented precisely at `recordToGmailOperation`
+(`actions/approval.ts`), in the gmail and actions module cards, and here.
+
+Where a `""` comes from: `scopeOperationsToAccounts` fills an operation's
+`accountEmail` from the run's explicit account or from the per-message lookup
+built out of the `emails` rows' own `accountId`, so a `""` on a queue row is
+inherited from an email row that was itself stored under `""` — fetched through
+the ADC path, or before the `accountId` column existed.
+
+What it resolves to: `createGmailClient("")` means gcloud ADC and nothing else —
+an explicit empty string never falls through to a configured default account
+(`gmail/client.ts`), so adding named accounts later does not silently retarget an
+old queue row.
+
+**What a user would observe** if ADC has moved to a different Google account
+between queueing and approval: Gmail message ids are per-mailbox, so the id is
+looked up in a mailbox that does not have it, the API answers 404,
+`applyOperations` catches it per operation, and the row resolves `failed` with
+the Gmail error text. The approval surface shows the change as failed and no mail
+is touched in either mailbox — but a `failed` row is TERMINAL (not `pending`), so
+the approved change is dropped and only a re-run re-proposes it. If ADC has been
+revoked or `gcloud` is gone, the token fetch throws and every unscoped row in the
+batch fails the same way.
+
+**Not claimed:** that mutating the wrong mailbox is impossible. Nothing checks
+that the resolved identity matches the one that produced the row; the 404 is a
+property of Gmail's id space, not a guard we implement. Named-account rows are
+unaffected — `createGmailClient("me@example.com")` loads that account's stored
+tokens and throws rather than falling back to ADC.
+
+Two fixes were considered and not done: resolving the identity with
+`users.getProfile` at enqueue time (a live API call added to a path that is
+currently DB-only, and whose failure means the proposal is never recorded at
+all), and re-resolving at apply time to compare (same cost, and it can only
+report the mismatch after the row has already been claimed).
 
 ## Testing
 
@@ -623,6 +751,84 @@ The batch-grouping `useMemo` in `ApprovalPanel`, and the CLI's review-answer
 classification, are pure but inlined where tests cannot reach them.
 
 ## Completed
+
+### Config hygiene: shared consent rule, a legacy-key notice, a prototype guard, and a name that lied
+**Completed:** feature/todos-w4b-config (2026-08-07)
+Four core-config entries, plus the two doc follow-ups other waves left behind.
+Two of them are only half closed and say so in their own sections above; do not
+read this entry as covering the web and CLI adoptions.
+
+- **One consent-invariant implementation** (was P3), HALF DONE. The rule
+  "`autoApplyActions` requires `autoApplyAcknowledged`" is now
+  `normalizeAutoApplyConsent` in `config/settings.ts`, called by
+  `normalizeSettings` and exported from `@email-agent/core/config` with the exact
+  signature web's copy already has. Behaviour is unchanged, including the
+  `=== true` coercion that stops a truthy non-boolean from arming anything.
+  Tests pin the full truth table, the missing-section and missing-key cases, the
+  truthy-non-boolean refusals, the exact key set, and that `normalizeSettings`
+  agrees with the shared function for every combination — so a second copy
+  *inside core* fails rather than drifting. **`normalizeGmailConfig` in
+  `packages/web` is still a duplicate**; the adoption is written down at the
+  function and tracked under "The consent invariant is shared but not yet adopted
+  by web".
+- **Reject prototype-chain segments in dotted config paths** (was part of "The
+  consent flag records consent…"), HALF DONE. `config/dotted-path.ts` refuses
+  `__proto__`/`constructor`/`prototype` in any position, including the terminal
+  one, and refuses before touching the target so a rejected write leaves the
+  object untouched; reads are guarded identically. Stated honestly in the code:
+  this is hygiene, not a fix for a live vulnerability. The route was probed and
+  does not work today because `normalizeSettings` materializes both consent flags
+  as OWN properties and an own property shadows the polluted prototype — a
+  property of a DIFFERENT function, which is the whole argument for guarding
+  here. Also fixes a latent `typeof null === "object"` bug carried from the CLI
+  original. **The CLI still uses its private copies**, so the guard has no caller
+  yet; tracked under "Adopt the shared dotted-path config helpers".
+- **Notify when a legacy `gmail.syncActions` key is dropped** (was P3). Done.
+  `loadSettingsFromPath` warns once per settings path per process, saying what
+  the key did, that its value is dropped, that changes are queued for approval
+  now, where to re-enable auto-apply, and how to silence it. The difficulty was
+  entirely in "once", given that `loadSettings()` re-reads the file on every call
+  — a `serve` calls it per request, so a notice hung off the read would print
+  hundreds of times and train the user to ignore the log. Two guards, both
+  needed: detection sits on the parse, which only runs on a cache miss, and a
+  warned-paths set covers the case the first guard misses, since an edit that
+  changes the bytes while leaving the legacy key in place IS a genuine cache
+  miss. The regression test walks exactly that sequence and asserts one line
+  total. Scoped per module instance rather than per process, and the comment says
+  so: Next.js does not guarantee one instance of this module per process, so a
+  second bundled copy warns once too. `hasLegacySyncActionsKey` is an
+  own-property check (a polluted prototype cannot fabricate the key) and is
+  value-independent, because `syncActions: false` was also a preference.
+- **Rename `GmailSyncConfig`** (was P4). Now `GmailAutoApplyConfig`. No
+  deprecated alias: neither `packages/web` nor `packages/cli` names the type
+  anywhere — both reach it structurally through `AppConfig["gmail"]` — which the
+  type-checks confirm.
+- **Document the `tokensUsed` definition at the schema field** (was P4, deferred
+  by `feature/todos-w4-executors`). All three declarations now carry it:
+  the Arrow field in `db/connection.ts`, `ActionResultRecord.tokensUsed`, and
+  `ActionRunResult.tokensUsed`. Each also records the consequence that outlives
+  the fix — rows written before 2026-08-07 hold the old per-executor
+  measurements and cannot be aggregated with newer ones, with `createdAt` the
+  only discriminator — and the Arrow field notes that `Int32` is a real ceiling
+  for anything summing the column.
+- **OAuth redirect URI is origin-derived** (was P3, Web). Documented in README
+  (a new "Adding Gmail accounts: authorized redirect URIs" section) and in
+  `setup.sh`'s output at the step where the user is pasting URIs into the Google
+  console: every origin the app is served on must be a registered authorized
+  redirect URI, since `serve --port N` makes the port part of the callback, and
+  `127.0.0.1` is a different origin from `localhost`. The concurrent-flow note is
+  stated more precisely than the original entry had it: the second flow
+  overwrites the shared state cookie, and because a 403 refusal ALSO clears that
+  cookie, the first callback returning stale can take the second flow down with
+  it — so both tabs may be rejected, not just the first. The route is web-owned
+  and untouched.
+
+Two entries in this wave were closed by DECISION rather than by code, and both
+argue their case in their own sections rather than here: `action_results`
+`accountId: ""` stays overloaded (its `accountId` filter has no caller, and both
+candidate representations cost more than the ambiguity does), and applying
+operations stays serial (`batchModify` rejected outright for having no
+per-message result; a bounded pool deferred behind three named preconditions).
 
 ### User action files are parsed as pure data instead of being imported
 **Completed:** feature/todos-w5-static-extraction (2026-08-07)
@@ -1004,9 +1210,10 @@ portable instruction.
 Unit tests pin each provider's arithmetic against its recorded shape and guard
 explicitly against both historical miscounts (output-only; double-counted
 cached input). Documented in `agents/tokens.ts`, the agents `MODULE.md`, and
-`CLAUDE.md`/`AGENTS.md`. One piece is deliberately left open — the comment at
-the schema field declarations, which live in another wave's territory; see
-"Document the `tokensUsed` definition at the schema field" above.
+`CLAUDE.md`/`AGENTS.md`. One piece was left open at the time — the comment at the
+schema field declarations, which lived in another wave's territory — and landed
+on `feature/todos-w4b-config` (2026-08-07); see the config-hygiene entry at the
+top of this section.
 
 ### Codex token counts are inferred, not verified
 **Completed:** feature/todos-w4-executors (2026-08-07)

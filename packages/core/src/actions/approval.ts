@@ -33,8 +33,16 @@ export function toPendingOperationRecords(
     batchId: input.batchId,
     actionId: input.actionId,
     actionName: input.actionName,
-    // "" is the unscoped/gcloud sentinel; both an explicit "" and a missing
-    // accountEmail resolve to the ADC fallback when the row is applied later.
+    // "" is the unscoped/gcloud-ADC sentinel. See `recordToGmailOperation` for
+    // what replaying it later actually resolves to, and what a user sees when
+    // that is no longer the mailbox the message was read from.
+    //
+    // Where it comes from: `scopeOperationsToAccounts` fills `op.accountEmail`
+    // from the run's explicit account, or from the per-message lookup built out
+    // of the `emails` rows' own `accountId`. So a "" here is inherited from an
+    // email row that was itself stored under "" — fetched through the gcloud
+    // ADC path, or before the `accountId` column existed. Pinning it harder at
+    // enqueue time would mean a live `users.getProfile` call per batch.
     accountId: op.accountEmail ?? "",
     emailId: op.emailId,
     type: op.type,
@@ -99,6 +107,47 @@ export function parseLabelIds(raw: string): string[] {
   }
 }
 
+/**
+ * Rebuilds the Gmail operation a queue row describes, for replay at approval
+ * time.
+ *
+ * WHAT AN UNSCOPED ROW REPLAYS AGAINST. `accountId` is carried through as
+ * `accountEmail`, so a row queued under the "" sentinel reaches
+ * `createGmailClient("")`, which is documented to mean gcloud ADC and nothing
+ * else: an explicit empty string never falls through to a configured default
+ * account (`gmail/client.ts`). The row is therefore applied against whatever
+ * identity `gcloud auth application-default print-access-token` resolves to
+ * **at approval time**, which is not necessarily the identity the message was
+ * read under — approval can be hours or days later, and ADC is re-pointed by a
+ * plain `gcloud auth application-default login`.
+ *
+ * Named-account rows are unaffected. `createGmailClient("me@example.com")`
+ * loads that account's stored tokens and throws if they are missing rather than
+ * falling back to ADC, so it cannot silently address a different mailbox.
+ *
+ * WHAT A USER WOULD OBSERVE if ADC has moved to a different Google account
+ * between queueing and approval. Gmail message ids are per-mailbox, so the id
+ * on the row is looked up in a mailbox that does not have it: the API answers
+ * 404, `applyOperations` catches it per operation, and the row is resolved
+ * `failed` with the Gmail error text. The approval surface shows the change as
+ * failed; no mail is trashed or labelled in either mailbox. A `failed` row is
+ * terminal — it is not `pending`, so it cannot be approved again, and
+ * re-proposing the change means re-running the action. If ADC has instead been
+ * revoked (or `gcloud` is gone), the token fetch throws and every unscoped row
+ * in the batch fails the same way.
+ *
+ * NOT claimed: that mutating the wrong mailbox is impossible. Nothing here
+ * checks that the resolved identity matches the one that produced the row; the
+ * 404 is a property of Gmail's id space, not a guard we implement. If the id
+ * did exist in the other mailbox, that message would be mutated.
+ *
+ * Two additions were considered and are recorded in TODOS.md rather than done:
+ * resolving the identity with `users.getProfile` at enqueue time — a live API
+ * call added to a path that is currently DB-only, and whose failure means the
+ * proposal is never recorded at all — and re-resolving it at apply time to
+ * compare, which costs the same call and can only report the mismatch after
+ * the row has already been claimed.
+ */
 export function recordToGmailOperation(
   record: PendingOperationRecord,
 ): GmailOperation {

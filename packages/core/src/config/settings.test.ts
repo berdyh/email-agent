@@ -5,12 +5,15 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
   clearSettingsCache,
+  hasLegacySyncActionsKey,
   hashSettingsContent,
   isSettingsCacheFresh,
   loadSettingsFromPath,
+  normalizeAutoApplyConsent,
   normalizeSettings,
 } from "./settings.js";
 import { defaultConfig } from "./defaults.js";
+import type { AppConfig } from "./types.js";
 
 describe("config settings normalization", () => {
   it("strips legacy top-level and nested keys not in AppConfig", () => {
@@ -110,6 +113,92 @@ describe("config settings normalization", () => {
   it("drops oauth when its fields are malformed", () => {
     const normalized = normalizeSettings({ oauth: { clientId: 123 } });
     assert.equal("oauth" in normalized, false);
+  });
+});
+
+describe("the auto-apply consent invariant", () => {
+  // This is the rule that keeps unattended Gmail mutation opt-in. It is
+  // enforced twice on purpose — here, and again at the web API boundary — so
+  // the point of these tests is the SHARED implementation both are meant to
+  // call. `normalizeGmailConfig` in packages/web still has its own copy; when
+  // it adopts this function, these become the tests for both.
+  it("forces autoApplyActions off unless the acknowledgement is recorded", () => {
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: true, autoApplyAcknowledged: true }),
+      { autoApplyActions: true, autoApplyAcknowledged: true },
+    );
+    // The dangerous half alone: what a hand-edited settings.json produces.
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: true, autoApplyAcknowledged: false }),
+      { autoApplyActions: false, autoApplyAcknowledged: false },
+    );
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: false, autoApplyAcknowledged: true }),
+      { autoApplyActions: false, autoApplyAcknowledged: true },
+    );
+    assert.deepEqual(
+      normalizeAutoApplyConsent({ autoApplyActions: false, autoApplyAcknowledged: false }),
+      { autoApplyActions: false, autoApplyAcknowledged: false },
+    );
+  });
+
+  it("treats a missing section, and missing keys, as no consent", () => {
+    assert.deepEqual(normalizeAutoApplyConsent(undefined), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+    assert.deepEqual(normalizeAutoApplyConsent({}), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+    assert.deepEqual(normalizeAutoApplyConsent({ autoApplyActions: true }), {
+      autoApplyActions: false,
+      autoApplyAcknowledged: false,
+    });
+  });
+
+  it("does not accept a truthy non-boolean as consent", () => {
+    // A JSON request body or a hand-edited settings.json can carry anything;
+    // both flags are compared with === true for exactly this reason.
+    const truthy: unknown[] = [1, "true", "yes", {}, []];
+    for (const value of truthy) {
+      const gmail = {
+        autoApplyActions: value,
+        autoApplyAcknowledged: value,
+      } as unknown as Partial<AppConfig["gmail"]>;
+      assert.deepEqual(
+        normalizeAutoApplyConsent(gmail),
+        { autoApplyActions: false, autoApplyAcknowledged: false },
+        `truthy value ${JSON.stringify(value)} must not arm auto-apply`,
+      );
+    }
+  });
+
+  it("returns exactly the two keys, so no other gmail.* field can ride along", () => {
+    const extra = {
+      autoApplyActions: true,
+      autoApplyAcknowledged: true,
+      syncActions: true,
+    } as unknown as Partial<AppConfig["gmail"]>;
+    assert.deepEqual(Object.keys(normalizeAutoApplyConsent(extra)), [
+      "autoApplyActions",
+      "autoApplyAcknowledged",
+    ]);
+  });
+
+  it("is the implementation normalizeSettings uses, for every combination", () => {
+    // Pins the delegation: if normalizeSettings ever grows a second copy of
+    // the rule, this fails rather than drifting quietly.
+    for (const autoApplyActions of [true, false]) {
+      for (const autoApplyAcknowledged of [true, false]) {
+        const gmail = { autoApplyActions, autoApplyAcknowledged };
+        assert.deepEqual(
+          normalizeSettings({ gmail }).gmail,
+          normalizeAutoApplyConsent(gmail),
+          `normalizeSettings disagreed for ${JSON.stringify(gmail)}`,
+        );
+      }
+    }
   });
 });
 
@@ -259,6 +348,105 @@ describe("loadSettings re-reads a changed settings file", () => {
       false,
       "kill switch must follow the file, not its mtime+size",
     );
+  });
+});
+
+describe("a dropped legacy gmail.syncActions key is announced once", () => {
+  let dir = "";
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), "email-agent-legacy-"));
+  });
+
+  after(async () => {
+    clearSettingsCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function captureWarnings(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    return { lines, restore: () => { console.warn = original; } };
+  }
+
+  it("detects the key only when the file actually carries it", () => {
+    assert.equal(hasLegacySyncActionsKey({ gmail: { syncActions: true } }), true);
+    // Value-independent: `false` was still a preference the user expressed.
+    assert.equal(hasLegacySyncActionsKey({ gmail: { syncActions: false } }), true);
+    assert.equal(hasLegacySyncActionsKey({ gmail: { autoApplyActions: true } }), false);
+    assert.equal(hasLegacySyncActionsKey({}), false);
+    assert.equal(hasLegacySyncActionsKey(null), false);
+    // An own-property check, so a polluted prototype cannot fabricate it.
+    assert.equal(hasLegacySyncActionsKey({ gmail: Object.create({ syncActions: true }) }), false);
+  });
+
+  it("warns on the load that drops it, and says what happens now", async () => {
+    clearSettingsCache();
+    const path = join(dir, "legacy.json");
+    await writeFile(path, JSON.stringify({ gmail: { syncActions: true } }));
+
+    const { lines, restore } = captureWarnings();
+    try {
+      const config = await loadSettingsFromPath(path);
+      // Fail-safe direction: the preference is gone and auto-apply is off.
+      assert.equal("syncActions" in config.gmail, false);
+      assert.equal(config.gmail.autoApplyActions, false);
+    } finally {
+      restore();
+    }
+
+    assert.equal(lines.length, 1);
+    assert.match(lines[0] ?? "", /gmail\.syncActions/);
+    assert.match(lines[0] ?? "", /queued for your approval/);
+    assert.match(lines[0] ?? "", new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  it("does not warn again on every read, even when the file changes", async () => {
+    // The hazard: `loadSettings()` re-reads the file on EVERY call, so a notice
+    // hung off the read would print once per request in a `serve` process. The
+    // cache-miss guard alone is not enough either — an edit that leaves the
+    // legacy key in place is a new hash and a fresh parse.
+    clearSettingsCache();
+    const path = join(dir, "chatty.json");
+    await writeFile(path, JSON.stringify({ gmail: { syncActions: true } }));
+
+    const { lines, restore } = captureWarnings();
+    try {
+      await loadSettingsFromPath(path);
+      // Same bytes: served from the parse cache, no re-inspection.
+      await loadSettingsFromPath(path);
+      await loadSettingsFromPath(path);
+      // Different bytes, legacy key still present: a real cache miss.
+      await writeFile(
+        path,
+        JSON.stringify({ gmail: { syncActions: true }, ui: { fetchInterval: 30 } }),
+      );
+      await loadSettingsFromPath(path);
+      // And again with the key removed, which must not warn either.
+      await writeFile(path, JSON.stringify({ ui: { fetchInterval: 45 } }));
+      await loadSettingsFromPath(path);
+    } finally {
+      restore();
+    }
+
+    assert.equal(lines.length, 1, `expected exactly one notice, got:\n${lines.join("\n")}`);
+  });
+
+  it("says nothing for a settings file without the legacy key", async () => {
+    clearSettingsCache();
+    const path = join(dir, "clean.json");
+    await writeFile(path, JSON.stringify({ gmail: { autoApplyActions: false } }));
+
+    const { lines, restore } = captureWarnings();
+    try {
+      await loadSettingsFromPath(path);
+    } finally {
+      restore();
+    }
+    assert.deepEqual(lines, []);
   });
 });
 
