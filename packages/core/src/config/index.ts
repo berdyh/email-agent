@@ -17,3 +17,9 @@ export {
   normalizeAutoApplyConsent,
   clearSettingsCache,
 } from "./settings.js";
+export {
+  UNSAFE_PATH_SEGMENTS,
+  UnsafeConfigPathError,
+  getNestedConfigValue,
+  setNestedConfigValue,
+} from "./dotted-path.js";
