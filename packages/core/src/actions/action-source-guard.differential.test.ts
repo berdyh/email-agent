@@ -32,15 +32,24 @@ const run = promisify(execFile);
  *
  *  - `HAND_CASES` are shapes someone thought of — the regressions from past
  *    review rounds, kept as pins.
- *  - `generatedCases()` is a mechanical CROSS-PRODUCT of the dimensions
- *    `analyzeActionSource()` branches on. This half exists because the hand
- *    corpus is bounded by imagination: a hundred hand-written cases missed
+ *  - `generatedCases()` and `generatedValueCases()` are mechanical enumerations
+ *    of the dimensions the evaluator branches on. This half exists because the
+ *    hand corpus is bounded by imagination: a hundred hand-written cases missed
  *    `const unused;` (an uninitialized `const` is an early error, so Node
  *    refuses the module while the evaluator happily returned its action),
  *    and the generated half found it, plus eighteen siblings, on its first run.
  *
- * When adding a branch to the evaluator, add its DIMENSION to the generator —
- * not an example to the hand list.
+ * The generated half covers two independent things, and both need a generator:
+ * `generatedCases()` enumerates how a value is DECLARED (declaration kind,
+ * export form, annotation, initializer presence, binding name), and
+ * `generatedValueCases()` enumerates what the value IS (literal forms, key
+ * spellings and ordering, nesting, shared references) across the placements
+ * that reach the evaluator differently. The declaration half shipped first with
+ * every initializer fixed to `"v"`, which left `evaluatePureData()` — the half
+ * where value correctness actually lives — covered by hand cases only.
+ *
+ * When adding a branch to the evaluator, add it to whichever DIMENSION it
+ * belongs to — not an example to the hand list.
  */
 
 interface Case {
@@ -152,6 +161,213 @@ function generatedCases(): Case[] {
           source: `${kind} a${first.text}, b${second.text};\nexport default { id: "a", name: "A", prompt: "p" };\n`,
         });
       }
+    }
+  }
+  return out;
+}
+
+/** One initializer shape, as source text that can stand anywhere a value can. */
+interface ValueCase {
+  label: string;
+  text: string;
+}
+
+/** `{ a0: { a1: … "leaf" } }`, `depth` levels down. */
+function deepObject(depth: number): string {
+  let text = `"leaf"`;
+  for (let i = depth - 1; i >= 0; i -= 1) text = `{ a${i}: ${text} }`;
+  return text;
+}
+
+/**
+ * The VALUE dimension: every literal form `evaluatePureData()` branches on, or
+ * deliberately refuses.
+ *
+ * The declaration cross-product above fixes every initializer to `"v"`, so it
+ * proves nothing about the value-computation half of the evaluator — number
+ * normalisation, property-key normalisation and ordering, string escapes,
+ * shared references, refusals. That half used to be covered only by
+ * `HAND_CASES`, which is exactly the imagination-bounded corpus the generated
+ * half exists to replace.
+ *
+ * Entries that the evaluator REFUSES belong here too (`__proto__`, computed
+ * keys, array holes, BigInt). A refusal is only fail-closed if the runtime
+ * would in fact have loaded the file, and that is what the differential run
+ * checks — asserting the refusal in a unit test asserts only its author's
+ * belief about Node.
+ */
+const VALUES: ValueCase[] = [
+  // Strings: escape forms, and the code points that survive a round trip only
+  // if the evaluator takes the scanner's cooked text rather than re-parsing.
+  { label: "str-empty", text: `""` },
+  { label: "str-plain", text: `"plain"` },
+  { label: "str-c-escapes", text: String.raw`"a\nb\tc\rd\ve\ff\bg"` },
+  { label: "str-nul", text: String.raw`"\0"` },
+  { label: "str-hex-and-unicode-escape", text: String.raw`"\x41\u0042"` },
+  { label: "str-codepoint-escape", text: String.raw`"\u{1f600}"` },
+  { label: "str-surrogate-pair", text: String.raw`"😀"` },
+  { label: "str-lone-high-surrogate", text: String.raw`"\ud800"` },
+  { label: "str-lone-low-surrogate", text: String.raw`"\udfff"` },
+  { label: "str-line-separators", text: String.raw`"  "` },
+  { label: "str-identity-escape", text: String.raw`"\a\/"` },
+  { label: "str-backslash", text: String.raw`"\\"` },
+  { label: "str-quote-escape", text: String.raw`'it\'s "quoted"'` },
+  { label: "str-max-codepoint", text: String.raw`"\u{10ffff}"` },
+  { label: "str-nfc", text: String.raw`"é"` },
+  { label: "str-nfd", text: String.raw`"é"` },
+  // A backslash before a real newline continues the line; the value has no
+  // newline in it.
+  { label: "str-line-continuation", text: `"a\\\nb"` },
+  { label: "tpl-plain", text: "`tpl`" },
+  { label: "tpl-escapes", text: "`a\\nb\\u0041`" },
+  // A real newline inside a template IS part of the value.
+  { label: "tpl-multiline", text: "`line1\nline2`" },
+
+  // Numbers: every literal form, plus the values where the scanner's
+  // normalisation and `Number()` could disagree with the runtime.
+  { label: "num-zero", text: "0" },
+  { label: "num-negative-zero", text: "-0" },
+  { label: "num-positive-zero", text: "+0" },
+  { label: "num-int", text: "42" },
+  { label: "num-negative-int", text: "-42" },
+  { label: "num-fraction", text: "0.1" },
+  { label: "num-float", text: "1.5" },
+  { label: "num-leading-dot", text: ".5" },
+  { label: "num-trailing-dot", text: "1." },
+  { label: "num-hex", text: "0x1f" },
+  { label: "num-octal", text: "0o17" },
+  { label: "num-binary", text: "0b1011" },
+  { label: "num-exponent", text: "1e2" },
+  { label: "num-exponent-upper", text: "1E3" },
+  { label: "num-exponent-signed", text: "1e+21" },
+  { label: "num-1e21", text: "1e21" },
+  { label: "num-1e-7", text: "1e-7" },
+  { label: "num-separators", text: "1_000_000" },
+  { label: "num-hex-separators", text: "0x1_f" },
+  { label: "num-past-max-safe-integer", text: "9007199254740993" },
+  { label: "num-huge-integer", text: "12345678901234567890" },
+  { label: "num-max-double", text: "1e308" },
+  { label: "num-overflows-to-infinity", text: "1e309" },
+  { label: "num-overflows-to-negative-infinity", text: "-1e309" },
+  { label: "num-denormal-min", text: "5e-324" },
+  { label: "num-underflows-to-zero", text: "1e-400" },
+  { label: "num-underflows-to-negative-zero", text: "-1e-400" },
+  // Not a NumericLiteral, and the evaluator has no BigInt path — must refuse.
+  { label: "num-bigint", text: "1n" },
+
+  { label: "bool-true", text: "true" },
+  { label: "bool-false", text: "false" },
+  { label: "null", text: "null" },
+
+  // Expression forms that read like literals but are not: the evaluator has
+  // no constant folder, so each must be refused rather than approximated.
+  { label: "num-double-negation", text: "- -1" },
+  { label: "num-parenthesized-negative-zero", text: "(-0)" },
+  { label: "num-bitwise-not", text: "~0" },
+  { label: "str-concatenation", text: `"a" + "b"` },
+  { label: "tpl-substitution", text: "`a${1}b`" },
+
+  // Objects: key normalisation, key ORDER (integer-index keys come first,
+  // ascending, whatever the source order), duplicates, and the two key
+  // spellings that must be refused rather than approximated.
+  { label: "obj-empty", text: "{}" },
+  { label: "obj-nested", text: `{ a: { b: { c: [1, { d: 2 }] } } }` },
+  { label: "obj-duplicate-keys", text: `{ k: "first", k: "second" }` },
+  { label: "obj-numeric-key-forms", text: `{ 1: "a", 1.0: "b", 0x1: "c" }` },
+  { label: "obj-numeric-vs-string-key", text: `{ "1": "s", 1: "n" }` },
+  { label: "obj-exponent-key", text: `{ "1e+21": "s", 1e21: "n" }` },
+  { label: "obj-huge-numeric-key", text: `{ 12345678901234567890: "a", 1e21: "b" }` },
+  { label: "obj-integer-vs-string-key-order", text: `{ 2: "two", b: "bee", 1: "one", a: "ay" }` },
+  { label: "obj-negative-zero-string-key", text: `{ "-0": "s", 0: "n" }` },
+  { label: "obj-unicode-nfc-nfd-keys", text: String.raw`{ "é": "nfc", "é": "nfd" }` },
+  { label: "obj-quoted-vs-bare-keys", text: `{ a: 1, "a b": 2, "c": 3 }` },
+  { label: "obj-empty-key", text: `{ "": "x" }` },
+  { label: "obj-escaped-keys", text: String.raw`{ "\n": "x", "\u0041": "y" }` },
+  // An escape in an IDENTIFIER key: `\u0061` binds `a`, so this is a duplicate.
+  { label: "obj-escaped-identifier-key", text: String.raw`{ \u0061: 1, a: 2 }` },
+  { label: "obj-deep", text: deepObject(20) },
+  { label: "obj-proto-key", text: `{ __proto__: null }` },
+  { label: "obj-quoted-proto-key", text: `{ "__proto__": null }` },
+  // 2^32-2 is the largest array index, so 2^32-1 orders as a STRING key
+  // while its neighbour orders as an integer one.
+  { label: "obj-array-index-boundary-keys", text: `{ 4294967295: "a", 4294967294: "b", z: "s", 0: "zero" }` },
+  { label: "obj-keyword-keys", text: `{ default: 1, class: 2, if: 3, new: 4 }` },
+  { label: "obj-prototype-name-keys", text: `{ constructor: 1, toString: 2, hasOwnProperty: 3 }` },
+  { label: "obj-computed-key", text: `{ ["a"]: 1 }` },
+
+  // Arrays: a trailing comma adds no element, a HOLE does — and the hole must
+  // be refused, since the evaluator has no way to build a sparse array.
+  { label: "arr-empty", text: "[]" },
+  { label: "arr-flat", text: `[1, "two", true, null]` },
+  { label: "arr-nested", text: `[[1, [2, [3]]]]` },
+  { label: "arr-trailing-comma", text: `[1, 2,]` },
+  { label: "arr-hole", text: `[1, , 2]` },
+  { label: "arr-of-objects", text: `[{ a: [] }, {}]` },
+];
+
+/**
+ * Where a value is put. Each placement is a distinct path THROUGH the evaluator
+ * to the compared result, and `shared` is the one that can only be tested here:
+ * one binding read twice is one object at runtime, so it must be one object in
+ * the extracted value too, not two equal copies. `encodeLocal`/`PROBE` encode
+ * that as a `$ref`, so a copy shows up as a mismatch rather than passing.
+ */
+const VALUE_PLACEMENTS: { label: string; wrap: (value: string) => string }[] = [
+  { label: "in-default", wrap: (v) => `export default { id: "a", name: "A", prompt: "p", v: ${v} };\n` },
+  {
+    label: "shared-binding",
+    wrap: (v) =>
+      `const shared = ${v};\nexport default { id: "a", name: "A", prompt: "p", x: shared, y: shared };\n`,
+  },
+  { label: "named-export", wrap: (v) => `export var action = { id: "a", name: "A", prompt: "p", v: ${v} };\n` },
+  { label: "as-const", wrap: (v) => `export default { id: "a", name: "A", prompt: "p", v: ${v} as const };\n` },
+  {
+    label: "satisfies",
+    wrap: (v) => `export default { id: "a", name: "A", prompt: "p", v: ${v} satisfies unknown };\n`,
+  },
+  // The value IS the module's default export, so a non-action value has to
+  // resolve to no action on both sides rather than to a different one.
+  { label: "sole-default", wrap: (v) => `export default ${v};\n` },
+];
+
+/**
+ * COVERAGE STRATEGY, stated because it is a deliberate incompleteness.
+ *
+ * The value dimension is composed PAIRWISE with placement (|VALUES| x
+ * |PLACEMENTS|), not crossed with `generatedCases()`. Substituting every value
+ * for the fixed `"v"` initializer there would add |VALUES| x 108 ≈ 9,000 more
+ * modules; at the ~0.35 ms per module this corpus costs, that is seconds of
+ * subprocess time on a run that has to stay well under one.
+ *
+ * Pairwise is sound here because the two halves are independent by
+ * construction: the statement walk reaches an initializer only by calling
+ * `evaluatePureData()` and never inspects its shape, and `evaluatePureData()`
+ * never inspects the declaration it came from. So a bug needing `let` AND a hex
+ * literal together would have to live in that seam — and the placements above
+ * are chosen to walk it: declaration initializer, default-export operand,
+ * named-export operand, and a binding read twice.
+ *
+ * What this corpus still does NOT cover, so nobody reads it as completeness:
+ *  - Value shapes crossed with declaration kind, annotation and export form
+ *    (pairwise, per above).
+ *  - Nesting beyond 20 levels, and objects wider than a handful of keys.
+ *  - Unicode beyond representative points (NFC/NFD, both lone surrogates, an
+ *    astral pair, U+2028/U+2029, U+10FFFF) — not the code point space.
+ *  - Values no literal can spell (a Symbol, a function, a null-prototype
+ *    object). Those reach a value only through a construct the allowlist
+ *    already refuses, so the corpus checks the refusal, not the value.
+ *  - `.action.js` files: every case here is `.ts`, since the probe imports what
+ *    Node's type stripper produces. The JS-only rules (`typescript-in-js`) are
+ *    covered by the unit tests next door, not differentially.
+ */
+function generatedValueCases(): Case[] {
+  const out: Case[] = [];
+  for (const value of VALUES) {
+    for (const placement of VALUE_PLACEMENTS) {
+      out.push({
+        name: `gen value ${value.label}/${placement.label}`,
+        source: placement.wrap(value.text),
+      });
     }
   }
   return out;
@@ -295,7 +511,7 @@ describe("action source extraction — differential against real Node", () => {
       return;
     }
 
-    const cases = [...HAND_CASES, ...generatedCases()];
+    const cases = [...HAND_CASES, ...generatedCases(), ...generatedValueCases()];
     // One subprocess for the whole corpus: per-case spawning turned a
     // two-second test into a two-minute one.
     const files: string[] = [];

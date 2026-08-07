@@ -75,10 +75,20 @@ import type { EmailAction } from "./types.js";
  * the spec and hoping: `action-source-guard.differential.test.ts` runs every
  * case through real Node and through this evaluator and compares the outcomes.
  * `uninitialized-const` survived a corpus of a hundred hand-written cases and
- * fell out on the first run of a MECHANICALLY GENERATED corpus — a
- * cross-product of the dimensions this walk branches on. Hand-picked cases only
- * ever cover the bugs someone already imagined; when adding a branch here, add
- * its dimension to the generator rather than an example to the list.
+ * fell out on the first run of a MECHANICALLY GENERATED corpus.
+ *
+ * That corpus enumerates TWO dimensions, because this file has two halves that
+ * can each be wrong on their own. `generatedCases()` covers how a value is
+ * DECLARED — the knobs the statement walk below branches on (declaration kind,
+ * export form, annotation, initializer presence, binding name). The initializer
+ * is fixed there, so `generatedValueCases()` covers what the value IS — the
+ * knobs `evaluatePureData()` branches on (literal forms, property-key spellings
+ * and ordering, nesting, a binding read twice, and the shapes that must be
+ * refused rather than approximated).
+ *
+ * Hand-picked cases only ever cover the bugs someone already imagined. When
+ * adding a branch here, extend whichever of those two dimensions it belongs to
+ * rather than adding an example to the hand list.
  *
  * And the module semantics themselves are modelled, not assumed: a named export
  * is a LIVE binding read at the end of evaluation, while `export default`
