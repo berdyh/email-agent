@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  extractActionIdFromSource,
   normalizeUserActionFilename,
   resolveUserActionFilePath,
 } from "./user-action-paths.js";
@@ -22,12 +21,5 @@ describe("user action path helpers", () => {
     const resolved = resolveUserActionFilePath("/tmp/actions", "triage.action.ts");
 
     assert.equal(resolved, "/tmp/actions/triage.action.ts");
-  });
-
-  it("extracts a stable action id from source text", () => {
-    assert.equal(
-      extractActionIdFromSource('const action = { id: "triage", name: "Triage" };'),
-      "triage",
-    );
   });
 });
