@@ -69,6 +69,27 @@ const actionResultSchema = new Schema([
   new Field("emailIds", new Utf8()),
   new Field("resultData", new Utf8()),
   new Field("agentUsed", new Utf8()),
+  // tokensUsed = TOTAL TOKENS PROCESSED for the request: all input (cached
+  // input counted at FULL weight) + all output. It measures work, not money —
+  // per-provider cache discounts are deliberately not modelled, because each
+  // provider prices them differently and none reports a normalized figure. `0`
+  // means "not reported", never "free". `agents/tokens.ts` owns this definition
+  // and the per-provider arithmetic; call one of its helpers rather than
+  // summing usage fields by hand.
+  //
+  // ROWS ARE NOT COMPARABLE ACROSS THE STANDARDISATION. Before
+  // feature/todos-w4-executors (2026-08-07) each executor wrote a different
+  // measurement into this one column — output-only from the Claude CLI,
+  // input+output from codex and the SDK, provider totals from
+  // openai-compatible, and a flat 0 from gemini, which was reading a field the
+  // CLI does not emit. Rows written before that date cannot be aggregated with
+  // rows written after it, and nothing in the row says which side it is on;
+  // `createdAt` is the only discriminator.
+  //
+  // Int32 is a real ceiling, not a formality: one codex request costs ~21k
+  // tokens because it ships its own system prompt and tool definitions every
+  // time, so a SUM over this column reaches 2^31 far sooner than the old
+  // output-only numbers suggested.
   new Field("tokensUsed", new Int32()),
   new Field("durationMs", new Int32()),
   new Field("createdAt", new Utf8()),

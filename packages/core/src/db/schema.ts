@@ -31,6 +31,20 @@ export interface ActionResultRecord {
   emailIds: string; // JSON array
   resultData: string; // JSON string
   agentUsed: string;
+  /**
+   * Total tokens processed for the request: all input (cached input counted at
+   * FULL weight) + all output. A measure of work, not of money — per-provider
+   * cache discounts are deliberately not modelled, because each provider prices
+   * them differently and none reports a normalized figure. `0` means "not
+   * reported", never "free". `agents/tokens.ts` owns the definition and the
+   * per-provider arithmetic; call one of its helpers rather than summing usage
+   * fields by hand.
+   *
+   * Rows written before feature/todos-w4-executors (2026-08-07) are NOT
+   * comparable with rows written after it: each executor recorded a different
+   * measurement into this one column then, and nothing in the row says which
+   * side of the change it is on except `createdAt`.
+   */
   tokensUsed: number;
   durationMs: number;
   createdAt: string;
