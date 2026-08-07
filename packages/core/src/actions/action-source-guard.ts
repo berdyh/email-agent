@@ -36,9 +36,22 @@ import type { EmailAction } from "./types.js";
  * cannot work, because the language has unbounded ways to name a value.
  *
  * So instead of asking "does this contain something bad?", the guard asks
- * "is this exactly the small shape a data file is allowed to have?" A file
- * with no call expression, no member access, and no `new` anywhere in its tree
- * cannot execute anything at import time, whatever it is spelled like.
+ * "is this exactly the small shape a data file is allowed to have?" Only
+ * `import type`, type declarations, variable statements whose initializers are
+ * static data, and `export default` are admitted, and a file built from nothing
+ * but those contains no construct that can run at import time.
+ *
+ * Note what that framing deliberately does NOT say. It would be false to claim
+ * that the absence of calls, member access and `new` is sufficient for
+ * inertness: the rules below have to refuse four constructs in which none of
+ * those three node kinds appears anywhere in the tree — a bare value import of
+ * a `data:` URL and the live re-export `export { default as type } from
+ * "data:…"` (both fetch and run another module), `using` (whose disposal hook
+ * runs later), and a `__proto__` object key (which sets the object's prototype
+ * instead of binding a property of that name, so the value extracted here would
+ * not be the value the runtime produces). Sufficiency comes from the allowlist
+ * admitting only known-inert shapes. It never comes from any list of forbidden
+ * ones, however that list is phrased.
  *
  * Not executing the file is only half the job. The other half is that the value
  * this returns must be the value the runtime WOULD have produced — otherwise
