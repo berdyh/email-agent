@@ -58,10 +58,12 @@ describe("public barrel surface (approval-gate enforcement)", () => {
   });
 
   it("dist barrels served by the exports map export no Gmail-mutating surface", async () => {
-    // User actions resolve through package.json `exports` to dist, not src.
-    // `npm test` builds core first, so this asserts against the artifact a
-    // dynamically imported action would actually receive — a stale dist that
-    // still exports the write ops fails here even when the source is clean.
+    // Anything resolving this package by name gets dist through the
+    // package.json `exports` map, not src. `npm test` builds core first, so this
+    // asserts against the artifact such a caller actually receives — a stale
+    // dist that still exports the write ops fails here even when the source is
+    // clean. (User action files are not such a caller any more: they are parsed
+    // as data and never imported. In-tree and web callers are.)
     const distRoot = (await import("@email-agent/core")) as object;
     const distGmail = (await import("@email-agent/core/gmail")) as object;
     const distActions = (await import("@email-agent/core/actions")) as object;
