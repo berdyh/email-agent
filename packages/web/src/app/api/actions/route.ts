@@ -66,6 +66,27 @@ export async function POST(request: NextRequest) {
     }
 
     if (!action) {
+      // TWO DIFFERENT SITUATIONS REACH HERE, and they used to give the same
+      // flat 404: no file answers to this id at all, and a file answers to it
+      // and could not be loaded (a numeric `id`, a value import, some construct
+      // the source evaluator refuses). The second is diagnosed loudly in the
+      // SERVER LOG by `loadUserAction` and reached the browser as "not found" —
+      // which is exactly how a tightened validation rule goes silent: the user
+      // is looking at the action on the page and is told it does not exist.
+      //
+      // `listUserActions()` carries the reason on `UserActionMeta.problem` for
+      // precisely this. A file that PRESENTS the id answers 422 with the
+      // reason; 404 is reserved for an id nothing on disk presents.
+      const problem = (await listUserActions()).find(
+        (meta) => meta.id === body.actionId && meta.problem !== undefined,
+      )?.problem;
+
+      if (problem !== undefined) {
+        return NextResponse.json(
+          { error: `Action "${body.actionId}" could not be loaded: ${problem}` },
+          { status: 422 },
+        );
+      }
       return NextResponse.json({ error: "Action not found" }, { status: 404 });
     }
 
