@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
@@ -16,12 +15,15 @@ import {
   applyOperationIds,
   commitFailed,
   commitReviewDecisions,
+  describeAbortedReview,
   describeApplyFailure,
   describeReviewCommit,
   loadOperationDisplays,
   printOperationList,
   reviewOperations,
+  SIGINT_EXIT_CODE,
 } from "./approvals.js";
+import { withPrompt } from "../prompt.js";
 
 export interface RunOutcomeLine {
   tone: "error" | "warn" | "info";
@@ -227,21 +229,42 @@ async function promptApproval(batchId: string): Promise<void> {
   const displays = await loadOperationDisplays(ops);
   printOperationList(displays);
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  let answer: string;
-  try {
-    answer = (
-      await rl.question(
-        "\nApply? [a]ll / [r]eview each / [s]kip for later [a/r/S] ",
-      )
-    )
-      .trim()
-      .toLowerCase();
-  } finally {
-    rl.close();
+  // ONE prompt session for BOTH questions. Two things were wrong here and only
+  // one of them was the prompt primitive:
+  //
+  //  1. This was `rl.question()`, which at EOF — a piped `run-action`, a
+  //     redirect, Ctrl-D — never settles: commander's action promise hung and
+  //     node exited 0 with the batch silently left pending.
+  //  2. Even after porting it, `printf 'r\ny\nn\n' | email-agent run-action X`
+  //     still lost the review answers, because THIS interface is in flowing
+  //     mode and had already buffered `y` and `n` before it closed, so the
+  //     second interface `reviewOperations` opened saw immediate EOF. Caught by
+  //     `run-action.e2e.test.ts`, not by reading.
+  //
+  // So the `[a/r/S]` answer and the per-email review share one interface.
+  const decision = await withPrompt(async (session) => {
+    const raw = await session.ask(
+      "\nApply? [a]ll / [r]eview each / [s]kip for later [a/r/S] ",
+    );
+    if (session.aborted) return { kind: "aborted" as const };
+    // EOF (`null`) falls through to the default branch, which is `skip` — the
+    // prompt already promises S as the default, and leaving a Gmail change
+    // queued is the only answer that discards nothing.
+    const answer = (raw ?? "").trim().toLowerCase();
+    if (answer === "a") return { kind: "all" as const };
+    if (answer !== "r") return { kind: "skip" as const };
+
+    const decisions = await reviewOperations(displays, { session });
+    return { kind: "review" as const, decisions };
+  });
+
+  if (decision.kind === "aborted") {
+    console.log(chalk.yellow(`\n${describeAbortedReview(ops.length)}`));
+    process.exitCode = SIGINT_EXIT_CODE;
+    return;
   }
 
-  if (answer === "a") {
+  if (decision.kind === "all") {
     const ids = ops.map((op) => op.id);
     try {
       const outcome = await applyOperationIds(ids);
@@ -252,22 +275,31 @@ async function promptApproval(batchId: string): Promise<void> {
       }
       process.exitCode = 1;
     }
-  } else if (answer === "r") {
+    return;
+  }
+
+  if (decision.kind === "review") {
+    if (decision.decisions.aborted) {
+      console.log(chalk.yellow(`\n${describeAbortedReview(ops.length)}`));
+      process.exitCode = SIGINT_EXIT_CODE;
+      return;
+    }
     // Route through `commitReviewDecisions` rather than calling the two halves
     // directly: it rejects FIRST, so a Gmail failure part-way through the apply
     // cannot discard the "no" answers the user just typed — the bug that was
     // fixed in `approvals review` and left in place here — and it reports what
     // was actually recorded rather than what was requested.
-    const commit = await commitReviewDecisions(await reviewOperations(displays));
+    const commit = await commitReviewDecisions(decision.decisions);
     for (const line of describeReviewCommit(commit)) {
       console.error(chalk.red(line));
     }
     if (commitFailed(commit)) process.exitCode = 1;
-  } else {
-    console.log(
-      chalk.dim(
-        "Left pending — review later with `email-agent approvals` or in the web UI.",
-      ),
-    );
+    return;
   }
+
+  console.log(
+    chalk.dim(
+      "Left pending — review later with `email-agent approvals` or in the web UI.",
+    ),
+  );
 }

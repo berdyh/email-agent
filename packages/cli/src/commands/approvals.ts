@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 import chalk from "chalk";
 import ora, { type Ora } from "ora";
@@ -19,6 +18,24 @@ import type {
   StrandedDecision,
 } from "@email-agent/core";
 import { emailRefKey, getEmailsByRefs } from "../email-lookup.js";
+import {
+  askOnce,
+  usingPrompt,
+  SIGINT_EXIT_CODE,
+  type PromptSession,
+  type PromptStreams,
+} from "../prompt.js";
+
+export { SIGINT_EXIT_CODE };
+
+/**
+ * How a review loop gets its prompt.
+ *
+ * `session` is how a caller that has ALREADY asked something threads its own
+ * interface through — see `usingPrompt` for the input-loss bug that makes this
+ * mandatory rather than an optimisation.
+ */
+export type ReviewPromptOptions = PromptStreams & { session?: PromptSession };
 
 export function describeOperation(op: PendingOperationRecord): string {
   return describeGmailOperation(op.type, parseLabelIds(op.labelIds));
@@ -408,54 +425,47 @@ export function confirmedYes(raw: string | null): boolean {
 }
 
 /**
- * An answer reader that survives the input ending. Returns `null` at EOF.
+ * What the user is told when Ctrl-C ended a review.
  *
- * DO NOT REPLACE THIS WITH `rl.question()`. That is what it used to be, and the
- * failure was silent and expensive. `readline/promises` settles a pending
- * `question()` only on a `line` event, and it PAUSES the input between
- * questions: when stdin reaches EOF with a question outstanding — the user
- * presses Ctrl-D, or the command is run with piped/redirected input — the
- * interface emits `close`, the promise NEVER SETTLES, commander's action
- * promise hangs, nothing keeps the event loop alive, and node exits 0.
- *
- * What that did to `approvals review`, reproduced against the BUILT binary:
- * three queued changes with answers piped in, the first answer read, the second
- * prompt printed, then exit 0 with all three rows still `pending`. Every
- * decision the user had already made was discarded and the shell was told the
- * command succeeded. Racing a `close` listener against the question is not
- * enough either — it stops the hang but still loses every line still sitting in
- * the buffer, because `close` wins before they are delivered.
- *
- * Draining the interface's async iterator keeps it in flowing mode, so every
- * buffered line is delivered and `done` arrives only at real EOF. The prompt is
- * written by hand because that is the one thing `question()` was doing for us.
- * Verified on both paths: three piped answers all arrive, and an empty stdin
- * yields `null` on the first ask instead of hanging.
+ * Pure, because the promise it makes — that nothing was written — is the whole
+ * point of aborting, and a wording that hedged it would undo the guarantee.
+ * See `prompt.ts` for why SIGINT and EOF deliberately mean different things.
  */
-function createAnswerReader(
-  rl: ReturnType<typeof createInterface>,
-): (prompt: string) => Promise<string | null> {
-  const lines = rl[Symbol.asyncIterator]();
-  return async (prompt: string) => {
-    process.stdout.write(prompt);
-    const next = await lines.next();
-    return next.done === true ? null : next.value;
-  };
+export function describeAbortedReview(queuedCount: number): string {
+  const one = queuedCount === 1;
+  return (
+    `Aborted — nothing was applied to Gmail and nothing was rejected. ` +
+    `${one ? "The change is" : `All ${queuedCount} changes are`} still queued; ` +
+    `run \`email-agent approvals review\` again when you are ready.`
+  );
+}
+
+export interface ReviewDecisions {
+  approved: string[];
+  rejected: string[];
+  /**
+   * The user pressed Ctrl-C. The caller MUST NOT commit anything: `approved`
+   * and `rejected` are whatever had been typed before the interrupt, and the
+   * point of an abort is that they are discarded.
+   */
+  aborted: boolean;
 }
 
 /**
  * Steps through operations one by one; each answer is the user's personal
  * decision for that email. Unanswered operations (skip/quit) stay queued.
+ *
+ * Ctrl-C sets `aborted` and stops asking. It is NOT "stop and keep what I
+ * said" — that is `q` and EOF. See `prompt.ts`.
  */
 export async function reviewOperations(
   displays: OperationDisplay[],
-): Promise<{ approved: string[]; rejected: string[] }> {
+  options: ReviewPromptOptions = {},
+): Promise<ReviewDecisions> {
   const approved: string[] = [];
   const rejected: string[] = [];
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = createAnswerReader(rl);
 
-  try {
+  return usingPrompt(options.session, async (session) => {
     for (const [index, display] of displays.entries()) {
       const { op } = display;
       console.log(
@@ -467,19 +477,24 @@ export async function reviewOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       if (display.snippet) console.log(chalk.dim(`  ${display.snippet}`));
 
-      const answer = classifyReviewAnswer(
-        await ask("  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: "),
+      const raw = await session.ask(
+        "  Apply? [y]es / [n]o, reject / [s]kip, keep pending / [q]uit: ",
       );
+      // Checked BEFORE classifying: an abort delivers `null`, which the
+      // classifier reads as `stop` — i.e. "keep what was decided" — and
+      // committing on Ctrl-C is exactly the bug this guard exists for.
+      if (session.aborted) {
+        return { approved: [], rejected: [], aborted: true };
+      }
+      const answer = classifyReviewAnswer(raw);
       if (answer === "approve") approved.push(op.id);
       else if (answer === "reject") rejected.push(op.id);
       else if (answer === "stop") break;
       // "skip" keeps the operation queued
     }
-  } finally {
-    rl.close();
-  }
 
-  return { approved, rejected };
+    return { approved, rejected, aborted: false };
+  }, options);
 }
 
 /**
@@ -606,13 +621,12 @@ function printStrandedList(displays: OperationDisplay[]): void {
  */
 export async function reviewStrandedOperations(
   displays: OperationDisplay[],
-): Promise<{ applied: string[]; notApplied: string[] }> {
+  options: ReviewPromptOptions = {},
+): Promise<{ applied: string[]; notApplied: string[]; aborted: boolean }> {
   const applied: string[] = [];
   const notApplied: string[] = [];
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = createAnswerReader(rl);
 
-  try {
+  return usingPrompt(options.session, async (session) => {
     for (const [index, display] of displays.entries()) {
       const { op } = display;
       console.log(
@@ -624,20 +638,22 @@ export async function reviewStrandedOperations(
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       console.log(chalk.dim(`  ${describeStrandedAge(op.claimedAt || op.createdAt)}`));
 
-      const answer = classifyStrandedAnswer(
-        await ask(
-          "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
-        ),
+      const raw = await session.ask(
+        "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
       );
+      // An adjudication is a write, so Ctrl-C must discard the answers already
+      // given here for the same reason it does in `reviewOperations`.
+      if (session.aborted) {
+        return { applied: [], notApplied: [], aborted: true };
+      }
+      const answer = classifyStrandedAnswer(raw);
       if (answer === "applied") applied.push(op.id);
       else if (answer === "notApplied") notApplied.push(op.id);
       // "skip" leaves the row stuck, which is the honest default.
     }
-  } finally {
-    rl.close();
-  }
 
-  return { applied, notApplied };
+    return { applied, notApplied, aborted: false };
+  }, options);
 }
 
 async function loadPending(batchId?: string): Promise<PendingOperationRecord[]> {
@@ -694,6 +710,11 @@ export function registerApprovals(program: Command) {
         return;
       }
       const decisions = await reviewOperations(await loadOperationDisplays(ops));
+      if (decisions.aborted) {
+        console.log(chalk.yellow(`\n${describeAbortedReview(ops.length)}`));
+        process.exitCode = SIGINT_EXIT_CODE;
+        return;
+      }
       const commit = await commitReviewDecisions(decisions);
 
       for (const line of describeReviewCommit(commit)) {
@@ -720,17 +741,17 @@ export function registerApprovals(program: Command) {
         return;
       }
       printOperationList(await loadOperationDisplays(ops));
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        const answer = await createAnswerReader(rl)(
-          `\nApply all ${ops.length} changes to Gmail? [y/N] `,
-        );
-        if (!confirmedYes(answer)) {
-          console.log(chalk.dim("Skipped — changes stay pending."));
-          return;
-        }
-      } finally {
-        rl.close();
+      const { answer, aborted } = await askOnce(
+        `\nApply all ${ops.length} changes to Gmail? [y/N] `,
+      );
+      if (aborted) {
+        console.log(chalk.yellow(`\n${describeAbortedReview(ops.length)}`));
+        process.exitCode = SIGINT_EXIT_CODE;
+        return;
+      }
+      if (!confirmedYes(answer)) {
+        console.log(chalk.dim("Skipped — changes stay pending."));
+        return;
       }
 
       try {
@@ -783,6 +804,16 @@ export function registerApprovals(program: Command) {
       }
 
       const decisions = await reviewStrandedOperations(displays);
+      if (decisions.aborted) {
+        console.log(
+          chalk.yellow(
+            `\nAborted — no outcome was recorded for any of the ${ops.length} stuck ` +
+              `${ops.length === 1 ? "change" : "changes"}. They are exactly as they were.`,
+          ),
+        );
+        process.exitCode = SIGINT_EXIT_CODE;
+        return;
+      }
       for (const [decision, ids] of [
         ["applied", decisions.applied],
         ["notApplied", decisions.notApplied],

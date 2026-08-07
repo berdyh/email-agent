@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 import chalk from "chalk";
 import {
@@ -8,6 +7,7 @@ import {
   UnsafeActionSourceError,
 } from "@email-agent/core";
 import type { SnapshotEntry } from "@email-agent/core";
+import { askOnce, SIGINT_EXIT_CODE } from "../prompt.js";
 
 /**
  * Recover the action filename a snapshot belongs to.
@@ -57,14 +57,20 @@ function printListings(listings: SnapshotListing[]): void {
   );
 }
 
-async function confirm(question: string): Promise<boolean> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(question);
-    return answer.trim().toLowerCase() === "y";
-  } finally {
-    rl.close();
-  }
+/**
+ * A `[y/N]` confirmation.
+ *
+ * NOT `rl.question()`. It used to be, and `readline/promises` never settles a
+ * pending question at EOF — so `email-agent actions snapshots restore X < /dev/null`
+ * hung commander's action promise and exited 0 having restored nothing while
+ * saying nothing. EOF is No here, exactly as the prompt promises; Ctrl-C is a
+ * separate answer the caller reports and exits 130 on. See `prompt.ts`.
+ */
+async function confirm(
+  question: string,
+): Promise<{ confirmed: boolean; aborted: boolean }> {
+  const { answer, aborted } = await askOnce(question);
+  return { confirmed: answer !== null && answer.trim().toLowerCase() === "y", aborted };
 }
 
 export function registerActionSnapshots(program: Command) {
@@ -115,15 +121,20 @@ export function registerActionSnapshots(program: Command) {
         return;
       }
 
-      if (
-        !options.yes &&
-        !(await confirm(
+      if (!options.yes) {
+        const { confirmed, aborted } = await confirm(
           `Restore ${chalk.cyan(snapshot)} over ${chalk.cyan(original)}? ` +
             `The current version is snapshotted first. [y/N] `,
-        ))
-      ) {
-        console.log(chalk.dim("Skipped — nothing was changed."));
-        return;
+        );
+        if (aborted) {
+          console.log(chalk.yellow("\nAborted — nothing was changed."));
+          process.exitCode = SIGINT_EXIT_CODE;
+          return;
+        }
+        if (!confirmed) {
+          console.log(chalk.dim("Skipped — nothing was changed."));
+          return;
+        }
       }
 
       try {
