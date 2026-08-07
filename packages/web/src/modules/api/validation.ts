@@ -1,4 +1,8 @@
-import { defaultConfig, type AppConfig } from "@email-agent/core/config";
+import {
+  defaultConfig,
+  normalizeAutoApplyConsent,
+  type AppConfig,
+} from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
@@ -804,18 +808,23 @@ export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSetti
 }
 
 /**
- * Mirrors the core `normalizeSettings` invariant at the API boundary: enabling
- * auto-apply requires a recorded acknowledgement of its warnings, so a client
- * can never flip the toggle alone (and revoking consent disables it again).
+ * The consent invariant at the API boundary: enabling auto-apply requires a
+ * recorded acknowledgement of its warnings, so a client can never flip the
+ * toggle alone (and revoking consent disables it again).
+ *
+ * ENFORCED TWICE, IMPLEMENTED ONCE. Keeping the second enforcement point is
+ * deliberate defense in depth — a settings PUT that somehow bypassed core's
+ * `normalizeSettings` must still not be able to arm unattended Gmail writes.
+ * What must not exist is a second IMPLEMENTATION, and until now this was one:
+ * a hand-written copy of `normalizeAutoApplyConsent`'s body with the same
+ * signature. Two copies of a consent rule is the shape that drifts, and the
+ * direction it drifts in is "the toggle is honoured without the
+ * acknowledgement". It is a call now.
  */
 function normalizeGmailConfig(
   gmail: Partial<AppConfig["gmail"]> | undefined,
 ): AppConfig["gmail"] {
-  const autoApplyAcknowledged = gmail?.autoApplyAcknowledged === true;
-  return {
-    autoApplyActions: autoApplyAcknowledged && gmail?.autoApplyActions === true,
-    autoApplyAcknowledged,
-  };
+  return normalizeAutoApplyConsent(gmail);
 }
 
 /**
