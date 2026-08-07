@@ -21,8 +21,11 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
  * the connection is refused by the kernel before any handler runs.
  *
  * `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` — already the documented escape hatch
- * for non-local browser writes — also opens the bind, so the two halves of
- * "I meant to expose this" stay one switch. `--host` overrides both.
+ * for non-local browser writes — also opens the bind, and `--host` with a
+ * non-loopback address sets that flag for the child (see `resolveServeEnv`), so
+ * the two halves of "I meant to expose this" stay one switch whichever end you
+ * pull. `--host` wins over the flag when it names a loopback address, which is
+ * how you get "reachable by a headless local client, still not on the network".
  *
  * What this does NOT stop: another process on this machine. It can reach
  * loopback, and if it runs as this user it can also read the OAuth tokens under
@@ -38,6 +41,27 @@ export function resolveServeHost(
 
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host);
+}
+
+/**
+ * The child's environment. The one thing it changes: a non-loopback bind
+ * implies `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`.
+ *
+ * `serve --host 0.0.0.0` used to open the listener and leave the API's header
+ * checks demanding a local `Host`, so every request from the LAN — the entire
+ * point of passing `--host` — answered 403. The two halves of "I meant to
+ * expose this" have to agree, and the flag is exactly the switch that says so.
+ * The warning printed alongside is what makes it a decision rather than a
+ * surprise.
+ */
+export function resolveServeEnv(
+  host: string,
+  env: NodeJS.ProcessEnv,
+  port: string,
+): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env, PORT: port };
+  if (!isLoopbackHost(host)) next["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] = "1";
+  return next;
 }
 
 export function registerServe(program: Command) {
@@ -58,8 +82,9 @@ export function registerServe(program: Command) {
         console.log(
           chalk.yellow(
             `Binding to ${host}: anything that can reach this port can read your mail and\n` +
-              `approve queued Gmail changes. The API's origin checks are header-based and do\n` +
-              `not stop a non-browser client.\n`,
+              `approve queued Gmail changes. The API's local-origin header checks are turned\n` +
+              `OFF for this run (they would refuse the LAN browser this bind exists for), and\n` +
+              `they never stopped a non-browser client anyway.\n`,
           ),
         );
       }
@@ -75,7 +100,7 @@ export function registerServe(program: Command) {
         ["next", "dev", "--port", options.port, "--hostname", host],
         {
           stdio: "inherit",
-          env: { ...process.env, PORT: options.port },
+          env: resolveServeEnv(host, process.env, options.port),
           cwd: webDir,
         },
       );

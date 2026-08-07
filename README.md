@@ -124,10 +124,26 @@ Then open [http://localhost:3847](http://localhost:3847), or
 `Host`, `Origin` and `Sec-Fetch-Site` headers, all of which a non-browser client
 sets for itself, so they stop cross-site pages and DNS-rebound pages but not a
 determined caller. Binding to loopback is the part no header can talk its way
-past. Set `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` (or pass
-`email-agent serve --host <addr>`) if you genuinely want it reachable from
-elsewhere — and understand that anything that can then reach the port can read
-your mail and approve queued Gmail changes.
+past.
+
+If you genuinely want it reachable from elsewhere, use the CLI — either form
+works and they do the same thing:
+
+```bash
+npx email-agent serve --host 0.0.0.0
+EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1 npx email-agent serve
+```
+
+Each binds every interface **and** turns the header checks off for that run.
+Both halves are needed: a guard that insists on a local `Host` refuses the LAN
+browser the open bind exists for, so a bind without the relaxation just returns
+403 to everything. Anything that can then reach the port can read your mail and
+approve queued Gmail changes; `serve` prints that warning before it starts.
+
+`npm run dev` and `npm run start` always bind `127.0.0.1`. The hostname is
+hardcoded in `packages/web/package.json` and `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS`
+does not move it — setting it there only relaxes the header checks on a server
+nothing off-box can reach. Use `email-agent serve` for remote access.
 
 None of this protects you from another process running as **you** on this
 machine: it can reach loopback, and it can read the OAuth tokens under

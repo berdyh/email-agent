@@ -502,7 +502,21 @@ Closed at the only layer that can close it: **the listener now binds
 escape hatch) also opens the bind to `0.0.0.0`, so "I meant to expose this" is
 one switch; `serve --host` overrides and prints what the exposure costs. Off-box
 processes no longer reach the socket at all, whatever `Host` they would have
-sent. Alongside that, mutations must now carry at least one of
+sent.
+
+**Correction (review of PR #10).** "One switch" only held in one direction.
+`serve --host 0.0.0.0` opened the listener and left the header guards demanding
+a local `Host`, so every request from the LAN — the entire point of the flag —
+answered 403; and with `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` the guard still
+compared the browser's LAN-IP `Origin` against Next's own URL and refused that
+too. Both now work end to end: the env flag short-circuits the whole header
+check rather than a subset, and `serve --host <non-loopback>` sets the flag for
+its child so the bind and the guards agree (`resolveServeEnv`, under test). The
+third documented path did not exist at all and is now documented as not
+existing: `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1 npm start` stays on `127.0.0.1`,
+because `packages/web/package.json` hardcodes `--hostname`, so the variable only
+relaxes headers on a server nothing off-box can reach. README says to use
+`email-agent serve` for remote access. Alongside that, mutations must now carry at least one of
 `Origin`/`Sec-Fetch-Site` — a browser always sends at least one (`Origin` on
 every non-GET fetch since long before Fetch Metadata, which Safari only shipped
 in 16.4/2023), so the UI is unaffected while the header-less one-liner is
