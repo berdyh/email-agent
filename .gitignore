@@ -20,3 +20,9 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/work-log/
+
+# graphify knowledge graph — graph.json is committed so it survives worktree
+# removal and lands in fresh worktrees; everything else is per-machine or
+# regenerable. Merges use the union driver (see .gitattributes).
+graphify-out/*
+!graphify-out/graph.json
