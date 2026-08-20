@@ -281,41 +281,55 @@ Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); scope corrected after
 the codex (gpt-5.6-sol xhigh) review of PR #8, 2026-08-07, which found the
 branch describing these as fixed.
 
-### An apply hung past the staleness threshold still loses its outcome
+### Verify a stranded apply against Gmail instead of asking the user
 **Priority:** P2
-**Narrowed:** feature/todos-w7-surface-adoption (2026-08-07)
-The stranded-row adjudication protects an outcome recorded BEFORE it claims. It
-does not protect an apply that is in flight AT claim time — it can only refuse
-to touch rows that are not stale, which is what
-`buildStrandedClaimFilter(ids, cutoffIso)` now does, folding the age test into
-the same atomic write that stamps the token (a JS pre-filter would leave a
-window between the test and the destructive stamp).
+**Decision taken 2026-08-20 by the repo owner: the app should check Gmail
+itself.** The original design asked the user, on the reasoning that "only a
+person can know whether the change actually reached Gmail". That is true in
+general and **false for this application's operation set** — which is what makes
+this work rather than a nicety.
 
-**What remains, exactly.** An apply that claims a row, calls Gmail, hangs past
-`STALE_APPLYING_THRESHOLD_MS` (15 minutes) and THEN succeeds. The user, seeing
-the row listed as stranded, answers "it didn't happen"; the adjudication stamps
-its own token and requeues the row; the apply's write-back — scoped to the token
-it no longer holds — matches zero rows. **What a user would observe:** the change
-really is in Gmail (the message is in Trash), the queue row is `pending` again
-and re-approvable, and the audit trail says the change never happened. Approving
-it again sends the same mutation a second time. For `trash`/`spam` that is
-idempotent; for a label pair racing an opposing operation it is not.
+**Why verification is possible here.** Every operation this app performs is an
+idempotent label state, readable back from `messages.get(id, format=minimal)`:
 
-`resolveClaimedOperations` now DETECTS this: it keeps its claim token on every
-row it writes, reads back by token, and warns with the row ids and — for a lost
-`applied` — the double-mutation consequence. It reports, it does not repair;
-overwriting the adjudication would replace an answer the user personally
-checked with a record they have already contradicted.
+| operation | intended end state |
+|---|---|
+| `markRead` / `markUnread` | `UNREAD` absent / present |
+| `trash` | `TRASH` present |
+| `spam` | `SPAM` present |
+| `addLabels` / `removeLabels` | the label ids present / absent |
 
-**Why this losing direction was chosen.** The other direction (a hung apply's
-late write wins) leaves a user who has personally looked in Gmail unable to
-close out the row at all, which is the exact failure the stranded surface exists
-to remove. Closing the window entirely needs the apply to hold a lease it
-renews, or a two-phase record that survives the process — neither of which
-LanceDB's update primitives express without a lock. Pinned by
-`db/stranded-adjudication.race.test.ts`, which drives both directions against a
-real temp-directory LanceDB under a throwaway `$HOME`.
-Found by: codex adversarial review of PR #13, 2026-08-07.
+There is no send, no permanent delete (`batchDelete` is rejected — see
+"Concurrency for applying operations"), and no counter. Nothing in this set is
+dangerous to repeat, which is what makes both the check and a re-apply safe.
+
+**What to build.**
+1. For each row stale in `applying`, read the message back and compare its
+   labels to the intended end state. Resolve `applied`, or return it to
+   `pending`, without involving the user.
+2. **Notify.** Today a stranded row is invisible unless someone navigates to it,
+   which is the real gap — the notifications module was removed as dead code in
+   an earlier cleanup, so this is a small re-add, or simply a line printed by
+   `serve` and `fetch`.
+3. Keep the human path for the cases the API genuinely cannot answer: the
+   message 404s because it was deleted outright, the credentials for that
+   account no longer work, or the verification call itself fails.
+4. **Record the evidence separately.** `verified-by-api` and `user-confirmed`
+   are not the same claim, and the audit trail should not merge them.
+
+**Two limits to write down rather than smooth over.** The check reads the state
+*now*; it cannot prove this app's call caused it, so a message you archived
+yourself on your phone will be credited to the app. The end state is right and
+the attribution is not. And a row queued under the `""` ADC sentinel is
+verified against whatever identity is ambient at check time — the same trap as
+applying it, so the same caveat applies.
+
+**What this replaces.** The previously-documented residual: an apply that
+claims a row, calls Gmail, hangs past `STALE_APPLYING_THRESHOLD_MS` (15 min)
+and then succeeds would have its outcome discarded by the user's adjudication,
+returning the row to `pending` with an audit trail saying it never happened.
+That window closes for every operation the check can answer, and shrinks to the
+404 / broken-credentials cases for the rest.
 
 ### The adjudication count can undercount (the stale-handle half is closed)
 **Priority:** P3 for the undercount; the stale-handle half closed on feature/todos-w10-cleanup (2026-08-07)
@@ -651,37 +665,123 @@ unchanged — which is the check that the two bodies really were identical.
 
 ## Web
 
-### The local API still has no shared secret
+### The regex action-id reader is still alive in web, and skips the collision check
+**Priority:** P3
+Found 2026-08-20 while writing the product explainer. Still live.
+
+`actions/MODULE.md` states that the regex reader of an action's id was
+eliminated so a file has ONE identity — "a second reader is how a file came to
+list under one id and load under another". That is true **inside core**:
+`readUserActionFiles()` is the sole reader there.
+
+It is not true of web. `packages/web/src/lib/action-id.ts` still matches the id
+out of the raw source with a regular expression:
+
+```js
+source.match(/id:\s*["'`]([^"'`]+)["'`]/)
+```
+
+and `POST /api/actions/user` (`route.ts:57-66`) uses its result to gate the
+built-in-id conflict check, returning 409 when the id collides with `junk`,
+`priority` or `subscription`.
+
+The regex only sees an id written as a literal on the `id:` line. An action
+written as
+
+```ts
+const ID = "junk";
+export default { id: ID, name: "…", prompt: "…" };
+```
+
+is accepted by the AST evaluator (a name bound to a literal earlier in the file
+resolves — that is deliberate, it is what allows `const PROMPT = "…"`), but
+`extractActionId` returns `null`, so `actionId` is falsy and the whole conflict
+block is skipped. The file saves, and now shadows a built-in.
+
+`use-action-chat.ts:3` uses the same helper to derive a filename, so the same
+shape also produces a filename that does not match the action's real id.
+
+Fix: have the route ask core for the parsed id (`extractActionData` already
+returns it, and already proves it is a non-empty string) instead of re-deriving
+it from text. That deletes the second reader rather than repairing it, which is
+what the module card already claims happened.
+
+### The web settings form stores a Google client secret that nothing ever reads
+**Priority:** P3
+Found 2026-08-20 while writing the product explainer. Still live.
+
+`PUT /api/settings` accepts an `oauth` block and requires both fields
+(`modules/api/validation.ts:538-544`), `normalizeSettings` persists it
+(`config/settings.ts:164`), and it is correctly kept out of responses
+(`SanitizedSettings` omits `oauth`), so it never leaks back to a client.
+
+But **no code path reads it for authentication.** `getOAuthCredentials()`
+(`gmail/account-manager.ts:35`) reads `~/.email-agent/oauth.json` and nothing
+else, and it is the only source `addAccount` consults.
+
+Net effect for a user who finds the field in Settings and fills it in: their
+Google **client secret** is written to `~/.email-agent/settings.json` in
+plaintext, and the OAuth flow still fails with "OAuth credentials not
+configured". Two defects in one — a dead end that reads as the configuration
+step, and an unnecessary secret at rest.
+
+Decide which way it goes and make the code say so:
+- **wire it up** — have `getOAuthCredentials()` fall back to `settings.oauth`
+  when `oauth.json` is absent, and the field becomes real; or
+- **remove it** — drop the block from the validator and the settings type, and
+  point the UI at `setup.sh` / `oauth.json`, which is where the credentials
+  actually have to live.
+Removing is the smaller surface and does not add a second place a secret can
+sit. Either way, a field that silently does nothing with a secret is the worst
+of the three options.
+
+### Unlock the local UI with a one-time token, then a session cookie
 **Priority:** P2
-The Host-header hole is closed at the layer that can actually close it — the
-listener binds `127.0.0.1`, so an off-box process cannot open the socket at all
-— and mutations now require `Origin` or `Sec-Fetch-Site` to be present, which
-refuses the bare `curl -X POST -H 'Host: localhost:3847'` one-liner. Both of
-those are honest about what they are: the bind is the boundary, the header
-requirement is a speed bump an attacker defeats by setting the header.
+**Decision taken 2026-08-20 by the repo owner: build the token flow.** This
+entry is no longer a question; it is specified work. The scope note at the
+bottom is part of the spec, not a caveat bolted on.
 
-What is still open is **another process on this machine, running as another
-user**. It reaches loopback and passes every check. The fix is a
-locally-generated shared secret at `~/.email-agent/session.token` (mode 0600,
-`randomBytes(32)`), required by `mutationGuardResponse` and `readGuardResponse`
-via an `x-email-agent-token` header or an httpOnly `SameSite=Strict` cookie,
-compared with `timingSafeEqual` (the `oauth-state.ts` compare is the model).
+**Where the boundary actually is today.** The Host-header hole is closed at the
+layer that can close it — the listener binds `127.0.0.1`, so an off-box process
+cannot open the socket at all — and mutations require `Origin` or
+`Sec-Fetch-Site` to be present, which refuses the bare
+`curl -X POST -H 'Host: localhost:3847'` one-liner. Both are labelled honestly
+in the code: the bind is the boundary, the header checks are a speed bump. What
+neither covers is a process that CAN reach the port: another Unix user on this
+machine, a container, or a browser page that has DNS-rebound its own name to
+127.0.0.1.
 
-The reason it did not ship in wave 2 is the bootstrap, and it is worth writing
-down so it is not rediscovered: **there is no safe in-band handshake.** Any
-process that can reach the port can also `GET /`, so a cookie the server issues
-on document load is issued to the attacker too. The secret has to arrive
-out-of-band, which means the Jupyter model — `email-agent serve` prints/opens
-`http://127.0.0.1:3847/?token=…`, a route handler exchanges the query token for
-the cookie, and a browser without the cookie gets an "unlock" page telling the
-user to `cat ~/.email-agent/session.token`. That is a real UX change and it
-cannot be verified from here (no browser harness), so it needs its own wave with
-a live run. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` must keep bypassing it.
+**What to build.**
+1. On start, `serve` mints a random one-time token and prints the URL it belongs
+   to — `http://127.0.0.1:3847/?token=…` — the way Jupyter does.
+2. A route exchanges that token for an `httpOnly`, `SameSite=Lax` session cookie
+   with a TTL of about a day, and **burns the token on use** so it is not a
+   reusable credential sitting in shell scrollback.
+3. A browser arriving without a valid cookie gets an unlock page, not a 403 —
+   a bare rejection is indistinguishable from the app being broken.
+4. Rate-limit the exchange endpoint and compare in constant time. Store only
+   what is needed to validate a session, never the token itself.
+5. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` keeps its current meaning and must
+   continue to bypass this, so the LAN path and automated runs are not broken by
+   a change whose whole point is the browser.
 
-**Still out of scope even then, by construction:** a process running as *this*
-user. It can read the token file, and it can read the OAuth tokens under
-`~/.email-agent/accounts/` and call Gmail without the app at all.
-Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
+**State the honest claim, in the code and in the README.** This does NOT stop
+code running as you on this machine: such code reads
+`~/.email-agent/accounts/{email}/token.json` and calls Gmail directly, never
+touching the app. What it buys is narrower and real — it raises the bar from
+"anything that can reach the port" to "anything that can read your home
+directory". Do not describe it as a security boundary against local malware.
+
+**Scope, deliberately.** This is the right shape *for the current product*: one
+person, one laptop, `serve` run from the same machine that reads the output.
+The token flow's weakest point is a second device — you cannot easily carry a
+printed URL to a phone — and that is acceptable precisely because that is not
+the supported mode today. **If this is ever deployed so several people use it,
+do not extend this design.** Multi-user needs real accounts, per-user
+authorization and per-user Gmail grants, which is a different system, not a
+bigger token. Treat that as a rewrite of this layer, and revisit
+"Ambiguous account identity for queued unscoped rows" at the same time, because
+a shared deployment makes the `""` ADC sentinel indefensible.
 
 ### Snapshot restore is reachable from the CLI but not the UI
 **Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
@@ -768,6 +868,37 @@ found by mutation-checking, not by design: the first version of the test passed
 against the unguarded setter.
 
 ## Core Gmail
+
+### `listAccounts()` fails open, and can route writes to a different mailbox
+**Priority:** P2
+Found 2026-08-20 while writing the product explainer, by checking prose against
+source. Still live.
+
+`listAccounts()` (`gmail/account-manager.ts:129-137`) wraps `loadSettings()` in
+`try { … } catch { return [] }`. That catch swallows **every** error, including
+the deliberate fail-closed throw the config layer documents at length: only
+ENOENT means "no settings file, use defaults"; every other errno and an
+unparsable file THROW, precisely so that absence of information is never read as
+permission.
+
+The catch converts that throw into "this user has no accounts configured", and
+an empty account list is exactly the input that sends `createGmailClient()` down
+the ambient-credentials branch. So a settings file that is momentarily
+unreadable — a permissions change, a partial write, a disk error — does not
+fail. It silently redirects Gmail **writes** to whatever identity `gcloud` is
+signed in as.
+
+That is the same class of harm the credential router's deliberate refusal
+exists to prevent (a named account with missing tokens THROWS rather than
+falling back). One function undoes it for the whole-list case. Note the
+observable symptom is not an error: Gmail message ids are per-mailbox, so the
+call against the wrong account 404s and the queue row resolves `failed` — a
+dropped approved change, attributed to nothing.
+
+Fix: catch ENOENT only, and let every other error propagate, matching
+`loadSettingsFromPath`. Check the one in-module caller
+(`account-manager.ts:194`) and every barrel consumer for a path that relied on
+the swallow.
 
 ### Concurrency for applying operations (batchModify is rejected)
 **Priority:** P4 (deferred with preconditions, 2026-08-07)
