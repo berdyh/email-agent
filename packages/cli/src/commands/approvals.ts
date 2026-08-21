@@ -602,7 +602,7 @@ function strandedSkipReasons(one: boolean): string {
     `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
     `outcome; another person may have answered ${one ? "it" : "them"} first (the web UI, or ` +
     `another shell); Email Agent's own automatic check against Gmail may have answered ` +
-    `${one ? "it" : "them"} in the meantime; or ${one ? "it" : "them"} may have been requeued ` +
+    `${one ? "it" : "them"} in the meantime; or ${one ? "it" : "they"} may have been requeued ` +
     `and picked up by a fresh apply, which makes ${one ? "it" : "them"} too new to adjudicate. ` +
     `Run \`email-agent approvals stranded\` again to see where ${one ? "it stands" : "they stand"}.`
   );

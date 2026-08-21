@@ -557,6 +557,16 @@ describe("stranded rows (`approvals stranded`)", () => {
     assert.ok(message.includes("automatic"), message);
   });
 
+  it("agrees with the plural for a skip of more than one — the regression: 'them may have been requeued'", () => {
+    // requested 3, resolved 1 -> skipped 2, a genuinely plural skip. The
+    // rewrite that split "another answer" into "another person" / "an
+    // automatic check" also changed the trailing pronoun on the requeued
+    // clause from "they" to "them" by mistake.
+    const message = describeStrandedResolution("applied", 3, 1);
+    assert.ok(message.includes("they may have been requeued"), message);
+    assert.equal(message.includes("them may have been requeued"), false, message);
+  });
+
   it("describeStrandedReason: passes message-missing/unscoped-account through, frames the rest", () => {
     assert.equal(
       describeStrandedReason("message-missing", "Gmail has no such message."),
