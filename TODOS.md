@@ -2108,9 +2108,18 @@ Nine entries closed together because they are one path. In queue order:
   would read as stranded. A row whose timestamp cannot be parsed surfaces
   rather than hides. Deliberately a report, not an auto-retry.
   feature/todos-w7-surface-adoption (2026-08-07) gave it callers on both
-  surfaces plus `adjudicateStrandedOperations`, which records what the USER
-  reports about Gmail and verifies nothing. It is adjudication, not recovery —
-  do not restate it as recovery.
+  surfaces plus `adjudicateStrandedOperations`, which AT THAT POINT recorded
+  only what the USER reported about Gmail and verified nothing. That last
+  clause is no longer true of the function, and this entry is kept corrected
+  rather than left as shipped, because an archived present-tense sentence is
+  read as current: feature/todos-w11-bugfixes made
+  `adjudicateStrandedOperations` the SINGLE write path for both sources —
+  `options.evidence` says which — and the second source,
+  `verifyStrandedApplyingOperations()`, does check Gmail, reading the message's
+  current labels back before anyone is asked (see "Verify a stranded apply
+  against Gmail instead of asking the user" above). What did NOT change: it is
+  adjudication, not recovery — neither source establishes CAUSATION, nothing
+  re-applies and nothing rolls back. Do not restate either as recovery.
 - **Retention / prune policy** (was P2). `prunePendingOperations(olderThanIso)`
   runs opportunistically after every apply and reject, counting before
   deleting because a LanceDB delete rewrites the table. Only `applied` and
