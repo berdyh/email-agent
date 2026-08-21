@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useActionChatStore, type ChatMessage } from "@/store/action-chat-store";
-import { extractActionId } from "@/lib/action-id";
 import { toast } from "sonner";
 
 interface SaveRequest {
@@ -19,9 +18,29 @@ function extractCode(text: string): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
+/**
+ * Best-effort id guess for a suggested filename ONLY — cosmetic, not an
+ * identity or security decision.
+ *
+ * This is deliberately a bare regex, not a parser: no AST evaluator is
+ * available client-side, and this value is never used to decide anything.
+ * The result seeds an editable `<Input>` the user can retype before Save
+ * (`action-chat-card.tsx`), so a wrong guess costs nothing but the default
+ * text in a text box. Post-fix, the built-in-conflict check on save reads
+ * identity from core's `extractActionData()` (`app/api/actions/user/route.ts`),
+ * and list/load identity always comes from `readUserActionFiles()` in core —
+ * never from this guess or from the filename. Do not export this as
+ * `extractActionId` again or rewire it into a security decision; that name
+ * implied an authority this helper never actually had.
+ */
+function bestEffortIdGuess(code: string): string | null {
+  const match = code.match(/id:\s*["'`]([^"'`]+)["'`]/);
+  return match?.[1] ?? null;
+}
+
 /** Derive a filename from action ID in code, or from user message. */
 export function deriveFilename(code: string): string {
-  const actionId = extractActionId(code);
+  const actionId = bestEffortIdGuess(code);
   return actionId ? `${actionId}.action.ts` : "new-action.action.ts";
 }
 

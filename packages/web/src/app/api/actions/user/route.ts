@@ -5,6 +5,7 @@ import {
   deleteUserAction,
   readUserActionSource,
   builtInActions,
+  extractActionData,
   UnsafeActionSourceError,
 } from "@email-agent/core/actions";
 import {
@@ -16,7 +17,6 @@ import {
   readGuardResponse,
   validationResponse,
 } from "@/modules/api/validation";
-import { extractActionId } from "@/lib/action-id";
 
 export async function GET(request: NextRequest) {
   const guard = readGuardResponse(request);
@@ -54,13 +54,31 @@ export async function POST(request: NextRequest) {
   try {
     const body = parseUserActionSaveRequest(await parseJsonBody(request));
 
-    // Check for ID conflict with built-in actions
-    const actionId = extractActionId(body.content);
-    if (actionId) {
-      const conflicting = builtInActions.find((a) => a.id === actionId);
+    // Check for ID conflict with built-in actions. Reads identity the same
+    // way core's own loader does — `extractActionData()` statically evaluates
+    // the file's AST and resolves identifiers against names the file bound
+    // earlier, so `const ID = "junk"; export default { id: ID, ... }`
+    // resolves to "junk" here exactly as it would at load time. The old
+    // regex (`extractActionId`, since deleted) only matched a literal on the
+    // `id:` line, so a const-bound id returned null and this whole check was
+    // skipped — the file saved to disk shadowing a built-in action. Letting
+    // `UnsafeActionSourceError` propagate to the catch block below is
+    // deliberate: a file that is both unsafe AND collides is reported for the
+    // guard violation, the more fundamental problem, and the one the chat UI
+    // needs `.violations` to fix. `saveUserAction()` below still
+    // independently re-validates via `assertSafeActionSource` internally —
+    // a deliberate, accepted double-parse of the same content, not a bug to
+    // dedupe.
+    const parsedAction = extractActionData(body.content, body.filename, {
+      onDiagnostic: (message) => console.warn(message),
+    });
+    if (parsedAction) {
+      const conflicting = builtInActions.find((a) => a.id === parsedAction.id);
       if (conflicting) {
         return NextResponse.json(
-          { error: `Action ID "${actionId}" conflicts with built-in action "${conflicting.name}"` },
+          {
+            error: `Action ID "${parsedAction.id}" conflicts with built-in action "${conflicting.name}"`,
+          },
           { status: 409 },
         );
       }
