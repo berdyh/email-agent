@@ -997,7 +997,7 @@
       "label": "result()",
       "file_type": "code",
       "source_file": "packages/cli/src/commands/approvals.test.ts",
-      "source_location": "L587",
+      "source_location": "L597",
       "_origin": "ast",
       "id": "packages_cli_src_commands_approvals_test_result",
       "community": 36,
@@ -10097,8 +10097,8 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_react_dom",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 53,
+      "community_name": "react-dom",
       "norm_label": "react-dom"
     },
     {
@@ -10108,8 +10108,8 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "react_dom",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 53,
+      "community_name": "react-dom",
       "norm_label": "react-dom"
     },
     {
@@ -10185,8 +10185,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_class_variance_authority",
-      "community": 53,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -10196,8 +10196,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "class_variance_authority",
-      "community": 53,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -19163,7 +19163,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "packages/cli/src/commands/approvals.test.ts",
-      "source_location": "L587",
+      "source_location": "L597",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_cli_src_commands_approvals_test",
@@ -60774,5 +60774,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "6b3dfadda191a3a264b2ef9be17724f9dd692c15"
+  "built_at_commit": "f4732e5b99acb7b9cb12168f73a547f4a44839ec"
 }
