@@ -4440,7 +4440,7 @@
       "label": "seedStranded()",
       "file_type": "code",
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L38",
+      "source_location": "L44",
       "_origin": "ast",
       "id": "packages_core_src_actions_verify_stranded_realdb_test_seedstranded",
       "community": 22,
@@ -4451,7 +4451,7 @@
       "label": "onlyStranded()",
       "file_type": "code",
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L58",
+      "source_location": "L64",
       "_origin": "ast",
       "id": "packages_core_src_actions_verify_stranded_realdb_test_onlystranded",
       "community": 22,
@@ -7050,8 +7050,8 @@
       "source_location": "L326",
       "_origin": "ast",
       "id": "packages_core_src_db_emails_updateemailvector",
-      "community": 37,
-      "community_name": "schema.ts",
+      "community": 7,
+      "community_name": "db/index.ts",
       "norm_label": "updateemailvector()"
     },
     {
@@ -9910,8 +9910,8 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_email_agent_core",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 70,
+      "community_name": "@email-agent/core",
       "norm_label": "@email-agent/core"
     },
     {
@@ -9921,8 +9921,8 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "packages_web_package_json_email_agent_core",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 70,
+      "community_name": "@email-agent/core",
       "norm_label": "@email-agent/core"
     },
     {
@@ -10152,8 +10152,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_class_variance_authority",
-      "community": 70,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -10163,8 +10163,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "class_variance_authority",
-      "community": 70,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -28227,7 +28227,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L58",
+      "source_location": "L64",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_realdb_test",
@@ -28238,7 +28238,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L38",
+      "source_location": "L44",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_realdb_test",
@@ -28275,7 +28275,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L46",
+      "source_location": "L52",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_realdb_test_seedstranded",
@@ -28287,7 +28287,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "packages/core/src/actions/verify-stranded.realdb.test.ts",
-      "source_location": "L42",
+      "source_location": "L48",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_realdb_test_seedstranded",
@@ -60031,5 +60031,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "0a8fca4458f153218bd3bf96b63144db5a2cdc07"
+  "built_at_commit": "129f36f2039f5c97c42a1bcc58523e0ccee7e837"
 }
