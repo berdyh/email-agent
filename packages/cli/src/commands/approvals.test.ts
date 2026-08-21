@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import ora, { type Ora } from "ora";
-import type { ActionApplyResult, PendingOperationRecord } from "@email-agent/core";
+import type {
+  ActionApplyResult,
+  PendingOperationRecord,
+  StrandedVerificationResult,
+} from "@email-agent/core";
 import {
   applyOperationIds,
   commitFailed,
@@ -13,6 +17,8 @@ import {
   describeReviewCommit,
   describeStrandedAge,
   describeStrandedHeader,
+  describeStrandedNotifyLines,
+  describeStrandedReason,
   describeStrandedResolution,
   type ApplyOutcome,
   type RejectOutcome,
@@ -476,11 +482,16 @@ describe("committing review decisions", () => {
 describe("stranded rows (`approvals stranded`)", () => {
   const NOW = new Date("2026-08-07T12:00:00.000Z");
 
-  it("states the uncertainty, and that the CLI has not and cannot check", () => {
+  it("names the count and points at the command that checks Gmail, without claiming this one did", () => {
     const [headline, explanation, footnote] = describeStrandedHeader(2);
-    assert.ok(headline?.includes("we do not know whether they reached Gmail"));
-    assert.ok(explanation?.includes("has not checked and it cannot"));
-    assert.ok(/open gmail, look/i.test(explanation ?? ""));
+    assert.ok(headline?.includes("2 Gmail changes are stuck mid-apply"));
+    // Must not claim EITHER "we checked" (this teaser never does) or "we
+    // cannot check" (elsewhere, `approvals stranded` now can) — the falsified
+    // sentence this replaces asserted the second.
+    assert.equal(headline?.includes("we do not know whether"), false, headline);
+    assert.equal(explanation?.includes("has not checked and it cannot"), false, explanation);
+    assert.ok(explanation?.includes("approvals stranded"));
+    assert.ok(explanation?.includes("resolve what it can automatically"));
     // These rows are `applying`; every other approvals command lists `pending`.
     assert.ok(footnote?.includes("`approvals list`, `apply` and `reject` do not see them"));
   });
@@ -488,7 +499,6 @@ describe("stranded rows (`approvals stranded`)", () => {
   it("agrees with the singular", () => {
     const [headline] = describeStrandedHeader(1);
     assert.ok(headline?.includes("1 Gmail change is stuck mid-apply"));
-    assert.ok(headline?.includes("whether it reached Gmail"));
   });
 
   it("ages a row down to the minute and survives an unparsable stamp", () => {
@@ -531,12 +541,119 @@ describe("stranded rows (`approvals stranded`)", () => {
       describeStrandedResolution("notApplied", 2, 1),
     ]) {
       assert.ok(message.includes("may have finished"), message);
-      assert.ok(message.includes("another answer"), message);
       assert.ok(message.includes("requeued"), message);
       assert.equal(message.includes("has since finished"), false, message);
       assert.equal(message.includes("the outcome it recorded was kept"), false, message);
       assert.equal(message.includes("real outcome was kept"), false, message);
     }
+  });
+
+  it("offers a background verification pass as a SEPARATE cause from another person answering", () => {
+    // A user who pressed nothing themselves cannot guess an automatic Gmail
+    // check exists — folding it into "another answer" would read as
+    // impossible to them.
+    const message = describeStrandedResolution("applied", 1, 0);
+    assert.ok(message.includes("another person"), message);
+    assert.ok(message.includes("automatic"), message);
+  });
+
+  it("describeStrandedReason: passes message-missing/unscoped-account through, frames the rest", () => {
+    assert.equal(
+      describeStrandedReason("message-missing", "Gmail has no such message."),
+      "Gmail has no such message.",
+    );
+    assert.equal(
+      describeStrandedReason("unscoped-account", "Labels match, no named account."),
+      "Labels match, no named account.",
+    );
+    const credentials = describeStrandedReason("credentials", "invalid_grant");
+    assert.ok(credentials.includes("Gmail access"));
+    assert.ok(credentials.includes("invalid_grant"));
+
+    const checkFailed = describeStrandedReason("check-failed", "ETIMEDOUT");
+    assert.ok(checkFailed.includes("check itself failed"));
+    assert.ok(checkFailed.includes("may resolve"));
+
+    const unverifiable = describeStrandedReason(
+      "unverifiable-operation",
+      'a change of an unrecognised kind ("foo")',
+    );
+    assert.ok(unverifiable.includes("will not resolve on its own"));
+    assert.equal(unverifiable.includes("may resolve"), false, unverifiable);
+  });
+});
+
+describe("describeStrandedNotifyLines (`fetch`/`serve`'s notify line)", () => {
+  function result(
+    overrides: Partial<StrandedVerificationResult>,
+  ): StrandedVerificationResult {
+    return {
+      checked: 0,
+      appliedIds: [],
+      requeuedIds: [],
+      appliedRecorded: 0,
+      requeuedRecorded: 0,
+      unresolved: [],
+      ...overrides,
+    };
+  }
+
+  it("prints nothing when nothing was stale — the happy-path silence the owner asked for", () => {
+    assert.deepEqual(describeStrandedNotifyLines(result({ checked: 0 })), []);
+  });
+
+  it("matches the owner's selected output shape for a mixed applied/requeued result", () => {
+    const lines = describeStrandedNotifyLines(
+      result({ checked: 2, appliedRecorded: 1, requeuedRecorded: 1 }),
+    );
+    assert.ok(lines[0]?.includes("2 Gmail changes were stuck mid-apply. Checked Gmail:"));
+    assert.ok(lines[1]?.includes("1 had landed (recorded applied)"));
+    assert.ok(lines[1]?.includes("1 had not (back in the queue)"));
+  });
+
+  it("reports the recorded counts, never the id-array lengths", () => {
+    // Core can classify more rows than the write actually reaches (a row can
+    // leave `applying` between the read and the write) — this must report
+    // what WAS WRITTEN, not what was read.
+    const lines = describeStrandedNotifyLines(
+      result({
+        checked: 2,
+        appliedIds: ["a", "b"],
+        appliedRecorded: 1,
+        requeuedRecorded: 0,
+      }),
+    );
+    assert.ok(lines.some((line) => line.includes("1 had landed")));
+    assert.equal(
+      lines.some((line) => line.includes("2 had landed")),
+      false,
+    );
+  });
+
+  it("says so when nothing could be resolved automatically", () => {
+    const lines = describeStrandedNotifyLines(result({ checked: 1 }));
+    assert.ok(lines.some((line) => line.includes("None could be resolved automatically")));
+  });
+
+  it("points at --review only when something residual remains", () => {
+    const cleared = describeStrandedNotifyLines(
+      result({ checked: 1, appliedRecorded: 1 }),
+    );
+    assert.equal(
+      cleared.some((line) => line.includes("--review")),
+      false,
+    );
+
+    const residual = describeStrandedNotifyLines(
+      result({
+        checked: 1,
+        unresolved: [
+          { id: "a", emailId: "m1", accountId: "x", reason: "credentials", detail: "d" },
+        ],
+      }),
+    );
+    assert.ok(residual.some((line) => line.includes("1 still needs you to look")));
+    assert.ok(residual.some((line) => line.includes("approvals stranded --review")));
   });
 });
 

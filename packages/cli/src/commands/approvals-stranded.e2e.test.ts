@@ -71,8 +71,16 @@ describe("email-agent approvals stranded", () => {
       1,
       "an unresolved change to the user's mailbox is a non-zero condition",
     );
-    assert.match(result.output, /stuck mid-apply/);
-    assert.match(result.output, /It has not checked and it cannot/);
+    // The command checks Gmail FIRST (no linked account here, so the read-back
+    // fails and the row becomes residual rather than resolved) and says so —
+    // this is the "checked, could not resolve" copy, not the old "cannot
+    // check at all" claim.
+    assert.match(result.output, /Checked Gmail/);
+    assert.match(result.output, /could not resolve automatically/);
+    // No linked account: `createGmailClient` throws locally for the named
+    // "me@example.com" account, which classifies as `credentials`, not
+    // `check-failed` — see gmail/read.ts's classification and AGENTS.md.
+    assert.match(result.output, /could not use this account's Gmail access to check/);
     assert.match(result.output, /Win a free cruise/);
     assert.match(result.output, /stuck for 16 minutes/);
     assert.match(result.output, /stranded --review/);

@@ -16,11 +16,15 @@ import {
   prunePendingOperations,
   resolveRetentionCutoff,
   STALE_APPLYING_THRESHOLD_MS,
+  verifyStrandedApplyingOperations,
 } from "@email-agent/core";
 import type {
   ActionApplyResult,
   PendingOperationRecord,
   StrandedDecision,
+  StrandedResidual,
+  StrandedVerificationResult,
+  VerificationResidualReason,
 } from "@email-agent/core";
 
 import {
@@ -532,22 +536,52 @@ export function describeStrandedAge(
 /**
  * The header a user reads before adjudicating stranded rows.
  *
- * Every claim in it is one we can actually support: the process died mid-apply,
- * we never recorded the outcome, and we have not checked. It must never suggest
- * the CLI can find out, because it cannot.
+ * `approvals list`'s teaser (a plain DB count, no Gmail call) is the only
+ * caller left after M1 — `approvals stranded` builds its own header from a
+ * `StrandedVerificationResult` instead, because by the time that command has
+ * anything to show a human, it has already checked. So this one must not claim
+ * either "we checked" (it did not) or "we cannot check" (elsewhere, we can) —
+ * it names the count and points at the command that resolves it.
  */
 export function describeStrandedHeader(count: number): string[] {
   const one = count === 1;
   const minutes = Math.round(STALE_APPLYING_THRESHOLD_MS / 60_000);
   return [
-    `${count} Gmail ${one ? "change is" : "changes are"} stuck mid-apply — ` +
-      `we do not know whether ${one ? "it" : "they"} reached Gmail.`,
+    `${count} Gmail ${one ? "change is" : "changes are"} stuck mid-apply.`,
     `A run was interrupted after ${one ? "this change was" : "these changes were"} sent to ` +
-      `Gmail, or just before; Email Agent could not record which. It has not checked and it ` +
-      `cannot. Open Gmail, look, then tell it what you found.`,
-    `(Listed after ${minutes} minutes with no recorded result. They are not pending, so ` +
-      `\`approvals list\`, \`apply\` and \`reject\` do not see them.)`,
+      `Gmail, or just before, and the outcome was never recorded. Run ` +
+      `\`email-agent approvals stranded\` to check Gmail and resolve what it can automatically.`,
+    `(Listed after ${minutes} minutes with no recorded result. ${one ? "It is" : "They are"} ` +
+      `not pending, so \`approvals list\`, \`apply\` and \`reject\` do not see ` +
+      `${one ? "it" : "them"}.)`,
   ];
+}
+
+/**
+ * Per-reason sentence for a row Email Agent's own Gmail check could not close
+ * out. THE REASON PICKS THE HEADLINE; `detail` (core's own words, from
+ * `verifyStrandedApplyingOperations`) carries the specifics, so this never
+ * re-authors what core already said. `message-missing` and `unscoped-account`
+ * arrive as complete sentences already — pass through unchanged.
+ *
+ * `unverifiable-operation` NEVER resolves itself on a later pass; word it
+ * differently from `check-failed`, which may.
+ */
+export function describeStrandedReason(
+  reason: VerificationResidualReason,
+  detail: string,
+): string {
+  switch (reason) {
+    case "message-missing":
+    case "unscoped-account":
+      return detail;
+    case "credentials":
+      return `Email Agent could not use this account's Gmail access to check: ${detail}`;
+    case "check-failed":
+      return `The check itself failed, not the change: ${detail} This may resolve on its own the next time Email Agent checks.`;
+    case "unverifiable-operation":
+      return `Email Agent does not know how to check this one automatically — it is ${detail}. This will not resolve on its own; only you can close it out.`;
+  }
 }
 
 /**
@@ -555,20 +589,68 @@ export function describeStrandedHeader(count: number): string[] {
  *
  * Mirrors the web wording (`approvals-contract.ts`) and follows the precedent
  * `describeApplyOutcome` above already sets: state what is certain, offer the
- * rest as possibilities. The earlier version asserted one cause as fact — that
- * a still-running apply had finished the row and its outcome was kept — when
- * the row could equally have been answered by another adjudication, whose
- * "outcome" is another unverified assertion by a person, or requeued and
- * re-claimed by a fresh apply, which makes it too new to adjudicate at all.
+ * rest as possibilities. There are now FOUR causes, only one of which involves
+ * a real apply. A row can equally have been answered by another PERSON (the
+ * web UI, or another shell), or by Email Agent's own automatic Gmail check
+ * running elsewhere — these are offered SEPARATELY, because a user who pressed
+ * nothing themselves cannot guess the second exists. Or it can have been
+ * requeued and re-claimed by a fresh apply, which makes it too new to
+ * adjudicate at all.
  */
 function strandedSkipReasons(one: boolean): string {
   return (
     `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
-    `outcome; another answer (the web UI, or another shell) may already have been recorded; or ` +
-    `${one ? "it" : "they"} may have been requeued and picked up by a fresh apply, which makes ` +
-    `${one ? "it" : "them"} too new to adjudicate. Run \`email-agent approvals stranded\` again to ` +
-    `see where ${one ? "it stands" : "they stand"}.`
+    `outcome; another person may have answered ${one ? "it" : "them"} first (the web UI, or ` +
+    `another shell); Email Agent's own automatic check against Gmail may have answered ` +
+    `${one ? "it" : "them"} in the meantime; or ${one ? "it" : "them"} may have been requeued ` +
+    `and picked up by a fresh apply, which makes ${one ? "it" : "them"} too new to adjudicate. ` +
+    `Run \`email-agent approvals stranded\` again to see where ${one ? "it stands" : "they stand"}.`
   );
+}
+
+/**
+ * What a verify pass just did, for `fetch`/`serve`'s notify line AND
+ * `approvals stranded`'s own summary — ONE function, so the wording cannot
+ * drift into a third hand-copied string the way `describeStrandedHeader` used
+ * to.
+ *
+ * `checked: 0` returns an EMPTY array: no stale rows, no Gmail call, nothing to
+ * say — this is what makes fetch/serve's happy path silent, per the owner's
+ * decision. `appliedRecorded`/`requeuedRecorded` are what the WRITE actually
+ * reached, never `checked` or the id-array lengths — core mutation-tested this
+ * distinction (a shortfall between the read and the write is real information,
+ * not a rounding error to hide).
+ */
+export function describeStrandedNotifyLines(
+  result: StrandedVerificationResult,
+): string[] {
+  if (result.checked === 0) return [];
+
+  const resolved = result.appliedRecorded + result.requeuedRecorded;
+  const parts: string[] = [];
+  if (result.appliedRecorded > 0) {
+    parts.push(`${result.appliedRecorded} had landed (recorded applied)`);
+  }
+  if (result.requeuedRecorded > 0) {
+    parts.push(`${result.requeuedRecorded} had not (back in the queue)`);
+  }
+
+  const lines = [
+    `${result.checked} Gmail ${result.checked === 1 ? "change was" : "changes were"} stuck mid-apply. Checked Gmail:`,
+    parts.length > 0
+      ? `  ${parts.join(", ")}.`
+      : resolved === 0
+        ? "  None could be resolved automatically."
+        : "",
+  ].filter((line) => line !== "");
+
+  if (result.unresolved.length > 0) {
+    lines.push(
+      `  ${result.unresolved.length} still ${result.unresolved.length === 1 ? "needs" : "need"} you to look — ` +
+        "run `email-agent approvals stranded --review`.",
+    );
+  }
+  return lines;
 }
 
 /** Wording for a finished adjudication. Pure for the same reason as the rest. */
@@ -603,7 +685,16 @@ export function describeStrandedResolution(
         `that ${one ? "it" : "they"} never reached Gmail.${skippedNote}`;
 }
 
-function printStrandedList(displays: OperationDisplay[]): void {
+/**
+ * `reasonById` is keyed by queue row id, from the verify pass that ran
+ * immediately before this — every row here SHOULD have an entry, since verify
+ * resolves everything else. A missing entry (a fresh crash racing the check
+ * itself) prints the honest fallback rather than inventing a reason.
+ */
+function printStrandedList(
+  displays: OperationDisplay[],
+  reasonById: Map<string, StrandedResidual>,
+): void {
   for (const [index, display] of displays.entries()) {
     const { op } = display;
     const account = op.accountId ? chalk.dim(` [${op.accountId}]`) : "";
@@ -616,6 +707,16 @@ function printStrandedList(displays: OperationDisplay[]): void {
     console.log(
       chalk.dim(
         `       ${describeStrandedAge(op.claimedAt || op.createdAt)} · ${op.actionName}`,
+      ),
+    );
+    const residual = reasonById.get(op.id);
+    console.log(
+      chalk.yellow(
+        `       ${
+          residual
+            ? describeStrandedReason(residual.reason, residual.detail)
+            : "Not checked this run — it may be newly stuck since the check above ran."
+        }`,
       ),
     );
   }
@@ -632,6 +733,7 @@ function printStrandedList(displays: OperationDisplay[]): void {
 export async function reviewStrandedOperations(
   displays: OperationDisplay[],
   options: ReviewPromptOptions = {},
+  reasonById: Map<string, StrandedResidual> = new Map(),
 ): Promise<{ applied: string[]; notApplied: string[]; aborted: boolean }> {
   const applied: string[] = [];
   const notApplied: string[] = [];
@@ -647,6 +749,10 @@ export async function reviewStrandedOperations(
       if (display.from) console.log(chalk.dim(`  From: ${display.from}`));
       if (op.accountId) console.log(chalk.dim(`  Account: ${op.accountId}`));
       console.log(chalk.dim(`  ${describeStrandedAge(op.claimedAt || op.createdAt)}`));
+      const residual = reasonById.get(op.id);
+      if (residual) {
+        console.log(chalk.yellow(`  ${describeStrandedReason(residual.reason, residual.detail)}`));
+      }
 
       const raw = await session.ask(
         "  Look in Gmail: did this change happen? [y]es / [n]o, requeue it / [s]kip: ",
@@ -755,6 +861,8 @@ export function registerApprovals(program: Command) {
       // everything above. Saying "no changes awaiting approval" and stopping
       // there, while a change with an unknown effect on the mailbox sits in the
       // table, is the silence this command family existed inside until now.
+      // A PLAIN DB COUNT, deliberately not a verify pass — `approvals stranded`
+      // is the command that checks Gmail; this is only a pointer to it.
       const stranded = await getStaleApplyingOperations();
       if (stranded.length > 0) {
         console.log(
@@ -762,7 +870,7 @@ export function registerApprovals(program: Command) {
         );
         console.log(
           chalk.dim(
-            "Run `email-agent approvals stranded` to see them.",
+            "Run `email-agent approvals stranded` to check them against Gmail.",
           ),
         );
       }
@@ -846,19 +954,45 @@ export function registerApprovals(program: Command) {
     .option("-r, --review", "Decide each one after checking Gmail yourself")
     .action(async (options: { review?: boolean }) => {
       await initDb();
-      const ops = await getStaleApplyingOperations();
-      if (ops.length === 0) {
-        console.log(chalk.dim("No Gmail changes are stuck mid-apply."));
+
+      // CHECKS GMAIL FIRST. This is the command whose entire job is showing
+      // stranded rows, so checking them now — rather than only at `fetch`/
+      // `serve` startup — is what makes it correct to say "most of these
+      // resolve themselves before you ever see them" (task requirement). It is
+      // still an ON-DEMAND check, fired by one explicit invocation, not a
+      // timer: `verifyStrandedApplyingOperations` is gated on a cheap DB read
+      // and makes zero Gmail calls when nothing is stale.
+      const verified = await verifyStrandedApplyingOperations();
+      for (const line of describeStrandedNotifyLines(verified)) {
+        console.log(chalk.dim(line));
+      }
+
+      if (verified.unresolved.length === 0) {
+        if (verified.checked === 0) {
+          console.log(chalk.dim("No Gmail changes are stuck mid-apply."));
+        }
+        // checked > 0 && unresolved === 0: describeStrandedNotifyLines already
+        // said what happened — nothing further to print, and nothing left
+        // stuck, so this run succeeds.
         return;
       }
 
-      const [headline, ...rest] = describeStrandedHeader(ops.length);
-      console.log(chalk.red(`\n${headline}`));
-      for (const line of rest) console.log(chalk.dim(line));
+      // Only the RESIDUAL — what the check above could not resolve — ever
+      // reaches a human. Re-reading rather than trusting `verified.unresolved`
+      // for the row DATA (subject, batch, labels): that array carries only
+      // enough to explain WHY, not enough to display or adjudicate a row.
+      const ops = await getStaleApplyingOperations();
+      const reasonById = new Map(verified.unresolved.map((row) => [row.id, row]));
+
+      console.log(
+        chalk.red(
+          `\n${ops.length} Gmail ${ops.length === 1 ? "change" : "changes"} Email Agent checked and could not resolve automatically:`,
+        ),
+      );
       console.log("");
 
       const displays = await loadOperationDisplays(ops);
-      printStrandedList(displays);
+      printStrandedList(displays, reasonById);
 
       if (!options.review) {
         console.log(
@@ -872,7 +1006,7 @@ export function registerApprovals(program: Command) {
         return;
       }
 
-      const decisions = await reviewStrandedOperations(displays);
+      const decisions = await reviewStrandedOperations(displays, {}, reasonById);
       if (decisions.aborted) {
         console.log(
           chalk.yellow(
