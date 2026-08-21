@@ -102,10 +102,17 @@ export interface ActionRunResult {
    * Surfaces must report it as "may have been applied"; the message built by
    * `describeAutoApplyFailure` already says so, and both print it verbatim.
    * The stranded rows are LISTED by `getStaleApplyingOperations()` — a report,
-   * not a recovery. It re-applies nothing, rolls back nothing and resolves
-   * nothing. `adjudicateStrandedOperations` closes such a row out, but only by
-   * recording what the USER says they found in Gmail; nothing here verifies
-   * anything, so do not call those rows "recoverable".
+   * not a recovery, and it still re-applies nothing, rolls back nothing and
+   * resolves nothing itself. `verifyStrandedApplyingOperations` (`verify-
+   * stranded.ts`) now sits in front of it and resolves what it can by reading
+   * the message's current labels back from Gmail, WITHOUT the user, before
+   * anyone is asked; `adjudicateStrandedOperations` closes out only the
+   * residual it could not — a message gone, this account's credentials not
+   * working, the check itself failing, an operation this build cannot
+   * classify, or a `""`-account row whose match can never be trusted — by
+   * recording what the USER says they found. Do not call EITHER path's rows
+   * "recoverable": both record an end state, not a cause, and neither offers a
+   * retry.
    */
   applyError?: string;
   /**
