@@ -17,7 +17,6 @@ const SETTING_KEYS = new Set([
   "retention",
   "dataDir",
   "accounts",
-  "oauth",
 ]);
 
 export class RequestValidationError extends Error {
@@ -123,7 +122,6 @@ type SettingsUpdate = Partial<
     | "ui"
     | "retention"
     | "accounts"
-    | "oauth"
   >
 > & {
   gcp?: Partial<AppConfig["gcp"]>;
@@ -133,7 +131,6 @@ type SettingsUpdate = Partial<
   ui?: Partial<AppConfig["ui"]>;
   retention?: Partial<NonNullable<AppConfig["retention"]>>;
   accounts?: AppConfig["accounts"];
-  oauth?: AppConfig["oauth"];
 };
 
 /**
@@ -146,7 +143,7 @@ type SettingsUpdate = Partial<
  * that cannot see the window silently deletes audit rows on a schedule the user
  * never chose. It was omitted from this response for exactly that reason once.
  */
-export type SanitizedSettings = Omit<AppConfig, "oauth" | "retention"> & {
+export type SanitizedSettings = Omit<AppConfig, "retention"> & {
   retention: NonNullable<AppConfig["retention"]>;
 };
 
@@ -574,14 +571,6 @@ export function parseSettingsUpdateRequest(input: unknown): SettingsUpdate {
     });
   }
 
-  if (body["oauth"] !== undefined) {
-    const oauth = asRecord(body["oauth"]);
-    settings.oauth = {
-      clientId: requiredString(oauth["clientId"], "oauth.clientId"),
-      clientSecret: requiredString(oauth["clientSecret"], "oauth.clientSecret"),
-    };
-  }
-
   return settings;
 }
 
@@ -606,7 +595,6 @@ export function mergeSettingsUpdate(
     // PUT must never mutate them, or a stale client snapshot resurrects a
     // removed account. Ignore any accounts key in the update.
     accounts: current.accounts,
-    oauth: update.oauth ?? current.oauth,
   };
 }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
   clearSettingsCache,
+  hasLegacyOauthKey,
   hasLegacySyncActionsKey,
   hashSettingsContent,
   isSettingsCacheFresh,
@@ -64,7 +65,6 @@ describe("config settings normalization", () => {
       ui: { fetchInterval: 15, fetchScope: "all" },
       dataDir: "/tmp/data",
       accounts: [{ email: "me@example.com", isDefault: true }],
-      oauth: { clientId: "id", clientSecret: "secret" },
     });
 
     assert.equal(normalized.agentMode, "direct-api");
@@ -75,7 +75,6 @@ describe("config settings normalization", () => {
     assert.equal(normalized.ui.fetchInterval, 15);
     assert.equal(normalized.dataDir, "/tmp/data");
     assert.equal(normalized.accounts[0]?.email, "me@example.com");
-    assert.equal(normalized.oauth?.clientSecret, "secret");
   });
 
   it("falls back to defaults for empty or non-object input", () => {
@@ -110,9 +109,19 @@ describe("config settings normalization", () => {
     assert.equal(acknowledgedOnly.gmail.autoApplyAcknowledged, true);
   });
 
-  it("drops oauth when its fields are malformed", () => {
-    const normalized = normalizeSettings({ oauth: { clientId: 123 } });
-    assert.equal("oauth" in normalized, false);
+  it("drops a legacy oauth block entirely, malformed or not", () => {
+    // oauth is a removed field (dead config nothing ever reads — Gmail OAuth
+    // credentials come only from ~/.email-agent/oauth.json). It must be
+    // dropped like any other legacy key, whether or not its shape was ever
+    // well-formed — the malformed case alone would not have caught a
+    // normalizeSettings that still round-tripped a VALID oauth block.
+    const malformed = normalizeSettings({ oauth: { clientId: 123 } });
+    assert.equal("oauth" in malformed, false);
+
+    const wellFormed = normalizeSettings({
+      oauth: { clientId: "id", clientSecret: "secret" },
+    });
+    assert.equal("oauth" in wellFormed, false);
   });
 });
 
@@ -447,6 +456,125 @@ describe("a dropped legacy gmail.syncActions key is announced once", () => {
       restore();
     }
     assert.deepEqual(lines, []);
+  });
+});
+
+describe("a dropped legacy oauth key is announced once", () => {
+  let dir = "";
+
+  before(async () => {
+    dir = await mkdtemp(join(tmpdir(), "email-agent-legacy-oauth-"));
+  });
+
+  after(async () => {
+    clearSettingsCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function captureWarnings(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    return { lines, restore: () => { console.warn = original; } };
+  }
+
+  it("detects the key only when the file actually carries it", () => {
+    assert.equal(hasLegacyOauthKey({ oauth: { clientId: "x", clientSecret: "y" } }), true);
+    // Value-independent: even an empty/malformed block is the on-disk
+    // condition the notice is about.
+    assert.equal(hasLegacyOauthKey({ oauth: {} }), true);
+    assert.equal(hasLegacyOauthKey({ gmail: {} }), false);
+    assert.equal(hasLegacyOauthKey({}), false);
+    assert.equal(hasLegacyOauthKey(null), false);
+    // An own-property check, so a polluted prototype cannot fabricate it.
+    assert.equal(hasLegacyOauthKey(Object.create({ oauth: {} })), false);
+  });
+
+  it("warns on the load that drops it, and says what happens now", async () => {
+    clearSettingsCache();
+    const path = join(dir, "legacy-oauth.json");
+    await writeFile(
+      path,
+      JSON.stringify({ oauth: { clientId: "id", clientSecret: "secret" } }),
+    );
+
+    const { lines, restore } = captureWarnings();
+    try {
+      const config = await loadSettingsFromPath(path);
+      assert.equal("oauth" in config, false);
+    } finally {
+      restore();
+    }
+
+    assert.equal(lines.length, 1);
+    assert.match(lines[0] ?? "", /legacy "oauth" key/);
+    assert.match(lines[0] ?? "", /oauth\.json/);
+    assert.match(lines[0] ?? "", new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  it("does not warn again on every read, even when the file changes", async () => {
+    clearSettingsCache();
+    const path = join(dir, "chatty-oauth.json");
+    await writeFile(path, JSON.stringify({ oauth: { clientId: "id" } }));
+
+    const { lines, restore } = captureWarnings();
+    try {
+      await loadSettingsFromPath(path);
+      await loadSettingsFromPath(path);
+      await writeFile(
+        path,
+        JSON.stringify({ oauth: { clientId: "id" }, ui: { fetchInterval: 30 } }),
+      );
+      await loadSettingsFromPath(path);
+      await writeFile(path, JSON.stringify({ ui: { fetchInterval: 45 } }));
+      await loadSettingsFromPath(path);
+    } finally {
+      restore();
+    }
+
+    assert.equal(lines.length, 1, `expected exactly one notice, got:\n${lines.join("\n")}`);
+  });
+
+  it("says nothing for a settings file without the legacy key", async () => {
+    clearSettingsCache();
+    const path = join(dir, "clean-oauth.json");
+    await writeFile(path, JSON.stringify({ gmail: { autoApplyActions: false } }));
+
+    const { lines, restore } = captureWarnings();
+    try {
+      await loadSettingsFromPath(path);
+    } finally {
+      restore();
+    }
+    assert.deepEqual(lines, []);
+  });
+
+  it("announces BOTH a dropped syncActions key and a dropped oauth key in one load, neither suppressing the other", async () => {
+    // The case the composite (path, kind) cache key exists for: a naive
+    // bare-path `legacyNoticeShownFor` would let whichever check runs first
+    // mark the path warned and silently swallow the second notice.
+    clearSettingsCache();
+    const path = join(dir, "both-legacy.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        gmail: { syncActions: true },
+        oauth: { clientId: "id", clientSecret: "secret" },
+      }),
+    );
+
+    const { lines, restore } = captureWarnings();
+    try {
+      await loadSettingsFromPath(path);
+    } finally {
+      restore();
+    }
+
+    assert.equal(lines.length, 2, `expected two notices, got:\n${lines.join("\n")}`);
+    assert.ok(lines.some((line) => /gmail\.syncActions/.test(line)));
+    assert.ok(lines.some((line) => /legacy "oauth" key/.test(line)));
   });
 });
 

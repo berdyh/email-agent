@@ -279,14 +279,22 @@ describe("web API validation", () => {
       },
       dataDir: "/tmp/email-agent",
       accounts: [{ email: "me@example.com", name: "Me", isDefault: true }],
-      oauth: { clientId: "client", clientSecret: "secret" },
     });
 
     assert.equal(settings.agentMode, "hybrid");
     assert.equal(settings.prompts?.summary, "summary");
     assert.equal(settings.accounts?.[0]?.isDefault, true);
-    assert.equal(settings.oauth?.clientSecret, "secret");
     assert.equal("panelWidths" in settings.ui!, false);
+  });
+
+  it("rejects oauth as an unknown setting — the field is removed, never read", () => {
+    assert.throws(
+      () =>
+        parseSettingsUpdateRequest({
+          oauth: { clientId: "x", clientSecret: "y" },
+        }),
+      /Unknown setting: oauth/,
+    );
   });
 
   it("rejects malformed nested settings", () => {

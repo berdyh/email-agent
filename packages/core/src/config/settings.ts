@@ -2,12 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
-import type {
-  AccountConfig,
-  AppConfig,
-  GmailAutoApplyConfig,
-  OAuthConfig,
-} from "./types.js";
+import type { AccountConfig, AppConfig, GmailAutoApplyConfig } from "./types.js";
 
 /**
  * A cached parse of one settings file, tagged with a hash of the exact bytes
@@ -77,8 +72,9 @@ export function normalizeAutoApplyConsent(
  *
  * Unknown top-level keys and unknown nested keys are dropped, so a legacy
  * `~/.email-agent/settings.json` carrying removed fields (e.g. `notifications`,
- * `prompts.priority`, `prompts.clustering`, `gcp.pubsubTopic`) can never
- * survive a load/merge cycle back into the runtime config or API responses.
+ * `oauth`, `prompts.priority`, `prompts.clustering`, `gcp.pubsubTopic`) can
+ * never survive a load/merge cycle back into the runtime config or API
+ * responses.
  * Partial nested sections keep their sibling defaults.
  *
  * Pure and side-effect free — safe to unit test without touching the fs.
@@ -159,14 +155,6 @@ export function normalizeSettings(
       : defaults.accounts,
   };
 
-  const oauth = asRecord(input["oauth"]);
-  if (typeof oauth["clientId"] === "string" && typeof oauth["clientSecret"] === "string") {
-    normalized.oauth = {
-      clientId: oauth["clientId"],
-      clientSecret: oauth["clientSecret"],
-    } satisfies OAuthConfig;
-  }
-
   return normalized;
 }
 
@@ -207,7 +195,46 @@ export function legacySyncActionsNotice(path: string): string {
 }
 
 /**
- * Paths this process has already warned about.
+ * The other removed key this build still recognises well enough to explain.
+ *
+ * `oauth` held a Google OAuth client secret in plaintext. It was never read
+ * for authentication — `getOAuthCredentials()` (`gmail/account-manager.ts`)
+ * reads exclusively from `~/.email-agent/oauth.json` — so it was a fully-wired
+ * dead end: accepted by the web settings PUT, round-tripped to disk, never
+ * consulted by anything. `normalizeSettings` drops it like any other unknown
+ * key now; this notice exists because, unlike most dropped keys, a settings
+ * file that still carries it has a plaintext secret sitting on disk.
+ */
+const LEGACY_OAUTH_KEY = "oauth";
+
+/**
+ * True when the parsed settings still carry the top-level `oauth` key.
+ *
+ * Own-property check, deliberately — see `hasLegacySyncActionsKey`. Value
+ * independent, on purpose: even `{ oauth: {} }` is the condition worth
+ * flagging, since the notice is about the KEY still being present on disk,
+ * not about whether its contents happen to be well-formed.
+ */
+export function hasLegacyOauthKey(parsed: unknown): boolean {
+  return Object.prototype.hasOwnProperty.call(asRecord(parsed), LEGACY_OAUTH_KEY);
+}
+
+/** The notice text, exported so a test can assert what the user is told. */
+export function legacyOauthNotice(path: string): string {
+  return (
+    `Settings at ${path} still contain a legacy "oauth" key with a Google ` +
+    "OAuth client secret. It is never read for authentication — Gmail OAuth " +
+    "credentials are read only from ~/.email-agent/oauth.json (written by " +
+    "setup.sh, or hand-create it: { \"clientId\": ..., \"clientSecret\": ... " +
+    "}). The secret is dropped from the running config, but the file on disk " +
+    "still contains it in plaintext until the next save — any settings save " +
+    "(the Settings page, or `email-agent config set`) rewrites the file " +
+    "without it. To remove it immediately, edit the file by hand."
+  );
+}
+
+/**
+ * Paths this process has already warned about, per (path, notice kind).
  *
  * WHY THIS EXISTS AND NOT A BARE `console.warn`. `loadSettings()` re-reads the
  * file on EVERY call — that is deliberate and load-bearing, because
@@ -222,6 +249,13 @@ export function legacySyncActionsNotice(path: string): string {
  * file whose contents flip back and forth) or when `clearSettingsCache()` has
  * dropped the parse.
  *
+ * Keyed on `${path}\0${kind}`, not on the bare path: two independent legacy
+ * keys (`gmail.syncActions`, `oauth`) can both be present in the same file,
+ * and each needs its own notice. A key of the bare path would let whichever
+ * check runs first mark the path as warned and silently suppress the other's
+ * notice — a real bug, not a hypothetical, since `loadSettingsFromPath` checks
+ * both on the same cache miss.
+ *
  * Per module instance, not per process: Next.js does not guarantee one instance
  * of this module per process (see the note on `loadSettingsFromPath`), so a
  * bundle that carries a second copy warns once from that copy too. Acceptable —
@@ -229,6 +263,11 @@ export function legacySyncActionsNotice(path: string): string {
  * guarantee than the mechanism gives.
  */
 const legacyNoticeShownFor = new Set<string>();
+
+/** The composite key `legacyNoticeShownFor` is keyed on. */
+function legacyNoticeKey(path: string, kind: string): string {
+  return `${path}\0${kind}`;
+}
 
 /**
  * Content hash of the exact bytes a settings parse came from.
@@ -353,11 +392,17 @@ export async function loadSettingsFromPath(path: string): Promise<AppConfig> {
       );
     }
     // Removed keys are dropped by normalizeSettings without a word. Say so for
-    // the one whose loss changes behaviour the user will notice. Reached only
-    // on a cache miss, and at most once per path — see `legacyNoticeShownFor`.
-    if (hasLegacySyncActionsKey(parsed) && !legacyNoticeShownFor.has(path)) {
-      legacyNoticeShownFor.add(path);
+    // the ones whose loss the user should know about. Reached only on a cache
+    // miss, and at most once per (path, kind) — see `legacyNoticeShownFor`.
+    const syncActionsKey = legacyNoticeKey(path, "syncActions");
+    if (hasLegacySyncActionsKey(parsed) && !legacyNoticeShownFor.has(syncActionsKey)) {
+      legacyNoticeShownFor.add(syncActionsKey);
       console.warn(legacySyncActionsNotice(path));
+    }
+    const oauthKey = legacyNoticeKey(path, "oauth");
+    if (hasLegacyOauthKey(parsed) && !legacyNoticeShownFor.has(oauthKey)) {
+      legacyNoticeShownFor.add(oauthKey);
+      console.warn(legacyOauthNotice(path));
     }
 
     config = normalizeSettings(parsed);

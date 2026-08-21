@@ -80,11 +80,6 @@ export interface AccountConfig {
   isDefault?: boolean;
 }
 
-export interface OAuthConfig {
-  clientId: string;
-  clientSecret: string;
-}
-
 export interface AppConfig {
   agentMode: AgentMode;
   preferredAgent: AgentId;
@@ -96,5 +91,4 @@ export interface AppConfig {
   retention: RetentionConfig;
   dataDir: string;
   accounts: AccountConfig[];
-  oauth?: OAuthConfig;
 }

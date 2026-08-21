@@ -245,6 +245,10 @@ export default function SettingsPage() {
                     )}
                     Add Account
                   </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Google OAuth client credentials live in ~/.email-agent/oauth.json,
+                    written by setup.sh — not in this page.
+                  </p>
                 </CardContent>
               </Card>
             </TabsContent>

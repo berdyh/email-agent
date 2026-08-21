@@ -46,7 +46,12 @@ export async function POST(request: NextRequest) {
       const creds = await getOAuthCredentials();
       if (!creds) {
         return NextResponse.json(
-          { error: "OAuth credentials not configured. Run setup first." },
+          {
+            error:
+              "OAuth credentials not configured. Run setup.sh, or create " +
+              "~/.email-agent/oauth.json with { clientId, clientSecret } " +
+              "from your Google Cloud OAuth client.",
+          },
           { status: 400 },
         );
       }
