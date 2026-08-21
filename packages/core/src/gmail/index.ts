@@ -23,6 +23,13 @@ export { syncEmails, type SyncResult } from "./sync.js";
 // ./operations.js relatively; web's manual mail actions use the webpack-only
 // deep path `@email-agent/core/gmail/operations` (tsconfig paths), which Node's
 // exports map refuses at runtime.
+// The label READER (./read.js) is deliberately not re-exported either, and for
+// a different reason than the write ops above: it cannot change anything, but
+// it hands back mailbox content keyed by message id, which is not something a
+// public barrel should offer. It is also kept out of ./operations.js on
+// purpose — that module's names are denied a public export *because they
+// write*, and a read-only name in that deny list would muddy what
+// `barrel-surface.test.ts` asserts. Core imports ./read.js relatively.
 export {
   listAccounts,
   addAccount,

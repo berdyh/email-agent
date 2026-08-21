@@ -72,6 +72,32 @@ describe("public barrel surface (approval-gate enforcement)", () => {
     assertAbsent(distActions, "dist actions barrel");
   });
 
+  it("keeps the Gmail label READER out of every barrel, without denying it as a mutator", () => {
+    // Deliberately its own case rather than an entry in `deniedNames`. That
+    // list is derived from `Object.keys(gmailOps)` and means "this writes to a
+    // mailbox"; putting a read-only name in it would make the assertion say
+    // something it does not mean. What is asserted here is narrower and true:
+    // the reader hands back mailbox content by message id, so it stays
+    // core-internal and reachable only through the verification function that
+    // needs it.
+    for (const [name, barrel] of [
+      ["root barrel", rootBarrel],
+      ["gmail barrel", gmailBarrel],
+      ["actions barrel", actionsBarrel],
+    ] as const) {
+      assert.equal(
+        "readMessageLabels" in barrel,
+        false,
+        `${name} exports readMessageLabels`,
+      );
+      assert.equal(
+        "readMessageLabelsFromGmail" in barrel,
+        false,
+        `${name} exports readMessageLabelsFromGmail`,
+      );
+    }
+  });
+
   it("still exports the queue-driving surface the approval UIs need", () => {
     // These stay public on purpose: the CLI (barrel-only imports) and the web
     // approvals routes drive the flow through them. They are NOT an
