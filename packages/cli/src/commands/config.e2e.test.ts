@@ -41,6 +41,41 @@ describe("email-agent config get/set", () => {
   });
 });
 
+describe("config set does not report a write that did not happen", () => {
+  // `oauth` was a real settings block until this wave, and it is the key a user
+  // is most likely to still try — it was on the Settings page. The web answers
+  // `Unknown setting: oauth` with a 400; before this, `config set` printed
+  // `oauth.clientSecret = undefined` in GREEN with exit 0, so the two surfaces
+  // disagreed about the same removed key and the CLI reported success for a
+  // secret it had just dropped.
+  it("refuses a key removed from AppConfig, and says where the setting really lives", async () => {
+    const result = await cli.run(["config", "set", "oauth.clientSecret", "s3cret"]);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /no longer a setting/);
+    assert.match(result.output, /oauth\.json/);
+    assert.doesNotMatch(result.output, /s3cret/);
+
+    // Refused BEFORE saveSettings, so the block never reaches disk at all.
+    assert.equal((await settings())["oauth"], undefined);
+  });
+
+  it("refuses the bare section too, not just a leaf under it", async () => {
+    const result = await cli.run(["config", "set", "oauth", "anything"]);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /no longer a setting/);
+  });
+
+  // The general case behind that specific one: anything normalization drops.
+  it("fails rather than printing `= undefined` in green for an unknown section", async () => {
+    const result = await cli.run(["config", "set", "nosuchsection.key", "value"]);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.output, /was not stored/);
+    assert.doesNotMatch(result.stdout, /nosuchsection\.key = undefined/);
+
+    assert.equal((await settings())["nosuchsection"], undefined);
+  });
+});
+
 describe("config set refuses a prototype-chain path", () => {
   it("refuses `__proto__` in an interior position and writes nothing", async () => {
     const before = await settings();

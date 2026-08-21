@@ -44,6 +44,27 @@ const CONSENT_GATED_KEYS = new Set([
   "gmail.autoApplyAcknowledged",
 ]);
 
+/**
+ * Keys this writer used to accept and no longer does, with where the setting
+ * actually lives now. `oauth` was a settings block that `normalizeSettings`
+ * persisted and NO code path ever read for authentication — a plaintext Google
+ * client secret at rest behind a field that read as the configuration step.
+ * `PUT /api/settings` refuses it loudly (`Unknown setting: oauth`, 400); this
+ * refusal is the CLI saying the same thing rather than the two surfaces
+ * disagreeing about the same removed key.
+ *
+ * Matched on the first segment, so `oauth` and `oauth.clientSecret` are both
+ * refused. A refusal here happens BEFORE `saveSettings`, so nothing is written.
+ */
+const REMOVED_KEYS = new Map([
+  [
+    "oauth",
+    "Google OAuth client credentials are not settings. They live in\n" +
+      "~/.email-agent/oauth.json as {clientId, clientSecret}, which `setup.sh`\n" +
+      "writes, and `gmail/account-manager.ts` reads from nowhere else.",
+  ],
+]);
+
 function parseValue(raw: string): unknown {
   if (raw === "true") return true;
   if (raw === "false") return false;
@@ -95,6 +116,13 @@ export function registerConfig(program: Command) {
         process.exit(1);
       }
 
+      const removed = REMOVED_KEYS.get(key.split(".")[0] ?? "");
+      if (removed !== undefined) {
+        console.error(chalk.red(`"${key}" is no longer a setting.`));
+        console.error(chalk.yellow(`\n${removed}`));
+        process.exit(1);
+      }
+
       const settings = await loadSettings();
       const obj = settings as unknown as Record<string, unknown>;
       try {
@@ -114,6 +142,22 @@ export function registerConfig(program: Command) {
         stored as unknown as Record<string, unknown>,
         key,
       );
+
+      // A key that is absent after the save is a key normalization dropped —
+      // an unknown section, or one removed from `AppConfig`. Printing
+      // `key = undefined` in GREEN with exit 0 reports a write that did not
+      // happen, which is the one thing this read-back exists to prevent.
+      if (effective === undefined) {
+        console.error(chalk.red(`"${key}" was not stored.`));
+        console.error(
+          chalk.yellow(
+            "The value did not survive normalization, so this is not a setting\n" +
+              "this build recognises. Nothing was changed.",
+          ),
+        );
+        process.exit(1);
+      }
+
       console.log(chalk.green(`${key} = ${String(effective)}`));
     });
 }
