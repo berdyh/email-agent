@@ -8,6 +8,10 @@ export {
   type ActionResultRecord,
   type PendingOperationRecord,
   type PendingOperationStatus,
+  // Type-only, zero runtime surface. Public because both approval surfaces
+  // render `resolutionEvidence` and need to name its domain rather than
+  // string-matching a bare `string`.
+  type ResolutionEvidence,
 } from "./schema.js";
 export {
   upsertEmails,

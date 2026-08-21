@@ -9,7 +9,11 @@ import {
   STALE_APPLYING_THRESHOLD_MS,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
-import type { ApprovedVia, PendingOperationRecord } from "../db/schema.js";
+import type {
+  ApprovedVia,
+  PendingOperationRecord,
+  ResolutionEvidence,
+} from "../db/schema.js";
 import { loadSettings } from "../config/settings.js";
 import { applyOperations } from "./apply.js";
 import type {
@@ -547,14 +551,20 @@ export async function applyPendingOperationsByIds(
 }
 
 /**
- * What the user can tell us about a row a crash stranded in `applying`.
+ * What can be said about a row a crash stranded in `applying`.
  *
- * Two answers, because there are only two things a person can actually check:
- * whether the change is visible in Gmail or not. There is deliberately no
- * "retry" — `applyPendingOperationsByIds` claimed the row before it called
- * Gmail, so re-applying could be the second trash of an already-trashed
- * message, and no automated check can distinguish "we did this" from "it was
- * already like that".
+ * Two answers, because there are only two things that can actually be
+ * observed: whether the change is visible in Gmail or not. Both a person and
+ * `verifyStrandedApplyingOperations` (which reads the message's labels back)
+ * are limited to exactly these two, and for the same reason — NO CHECK
+ * DISTINGUISHES "we did this" FROM "it was already like that". Reading the end
+ * state got possible; establishing causation did not.
+ *
+ * There is deliberately no third answer and no "retry".
+ * `applyPendingOperationsByIds` claimed the row before it called Gmail, so
+ * re-applying could be the second trash of an already-trashed message. `applied`
+ * retires the row; `notApplied` returns it to `pending`, where it is an
+ * ordinary proposal that needs an explicit approval before anything is sent.
  */
 export type StrandedDecision = "applied" | "notApplied";
 
@@ -566,8 +576,28 @@ export const STRANDED_APPLIED_NOTE =
   "Recorded as applied by the user after a crash left it mid-apply. Email Agent did not verify this with Gmail.";
 
 /**
- * Writes down the user's judgement about stranded rows and returns how many
- * rows it actually changed.
+ * The sibling note for the branch where Email Agent DID look.
+ *
+ * It rides in the same `error` field as `STRANDED_APPLIED_NOTE` because both
+ * surfaces already render that field, and the audit trail has to read
+ * correctly to a human who knows nothing about `resolutionEvidence`. The
+ * column is the machine-readable discriminator; this sentence is the human
+ * one, and the second half of it is not decoration — an end-state match is
+ * exactly as consistent with "the user archived it on their phone" as with
+ * "our call did it".
+ */
+export const STRANDED_VERIFIED_NOTE =
+  "Recorded as applied after reading this message's current labels from Gmail: they match what the change asked for. That is the end state, not proof this app's call produced it.";
+
+/**
+ * Writes down a judgement about stranded rows and returns how many rows it
+ * actually changed.
+ *
+ * `options.evidence` says where the judgement came from — a person
+ * (`"user-confirmed"`, the default) or a Gmail label read-back
+ * (`"verified-api"`, passed only by `verifyStrandedApplyingOperations`). It
+ * selects the note as well as the column, so the sentence a human reads and
+ * the value a machine reads cannot drift apart.
  *
  * `applied` retires the row into the audit trail with a note saying who decided
  * it. `notApplied` puts it back to `pending`, where it is an ordinary proposal
@@ -589,6 +619,11 @@ export const STRANDED_APPLIED_NOTE =
  * actually stale — it left `applying`, was requeued, and a fresh apply claimed
  * it inside the threshold.
  *
+ * The second of those now has two flavours, and a surface should offer them
+ * SEPARATELY: another person, or an automatic verification pass that read the
+ * answer out of Gmail. A user who pressed nothing cannot guess that the second
+ * exists, so "someone else answered it" would read as impossible to them.
+ *
  * WHAT IS STILL NOT PROTECTED: an apply hung PAST the threshold that later
  * returns from Gmail. Its write-back is scoped to the token this call
  * overwrites, so it matches nothing and the real outcome is discarded —
@@ -601,20 +636,31 @@ export const STRANDED_APPLIED_NOTE =
 export async function adjudicateStrandedOperations(
   ids: string[],
   decision: StrandedDecision,
-  options?: { olderThanMs?: number; now?: Date },
+  options?: { olderThanMs?: number; now?: Date; evidence?: ResolutionEvidence },
 ): Promise<number> {
   if (ids.length === 0) return 0;
 
   const olderThanMs = options?.olderThanMs ?? STALE_APPLYING_THRESHOLD_MS;
   const now = options?.now ?? new Date();
   const cutoffIso = new Date(now.getTime() - olderThanMs).toISOString();
+  // Defaulted, not required, because the overwhelming majority of call sites
+  // are the two human surfaces and "a person told us" is what they mean. The
+  // verifier is the only caller that passes anything else.
+  const evidence: ResolutionEvidence = options?.evidence ?? "user-confirmed";
 
   const resolved =
     decision === "applied"
       ? await resolveStrandedApplyingOperations(ids, randomUUID(), cutoffIso, {
           status: "applied",
-          error: STRANDED_APPLIED_NOTE,
+          // The note follows the evidence, so the sentence in the audit trail
+          // and the value in the column can never disagree about who or what
+          // established this.
+          error:
+            evidence === "verified-api"
+              ? STRANDED_VERIFIED_NOTE
+              : STRANDED_APPLIED_NOTE,
           resolvedAt: new Date().toISOString(),
+          resolutionEvidence: evidence,
         })
       : await resolveStrandedApplyingOperations(ids, randomUUID(), cutoffIso, {
           status: "pending",
@@ -626,6 +672,13 @@ export async function adjudicateStrandedOperations(
           // `applied` branch above deliberately does NOT clear it — there the
           // surface that initiated the crashed apply is the useful record.
           approvedVia: "",
+          // The evidence goes with it, for BOTH answers and whoever gave them.
+          // The row is `pending` again: it has no resolution, so it can carry
+          // no evidence of one, and a pending row showing evidence would read
+          // as resolved in every list. Consequence to accept rather than paper
+          // over: a requeue leaves no trace of having been adjudicated, exactly
+          // as a user `notApplied` already did before this column existed.
+          resolutionEvidence: "",
         });
 
   return resolved.length;

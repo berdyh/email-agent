@@ -452,6 +452,21 @@ export interface StrandedResolutionValues {
    * the crashed apply — the one case where the field is genuinely informative.
    */
   approvedVia?: string;
+  /**
+   * HOW this resolution was established — a `ResolutionEvidence` value on the
+   * `applied` branch, and "" on a requeue (a `pending` row has no resolution,
+   * so it can carry no evidence of one).
+   *
+   * The OPPOSITE convention to `approvedVia` on the applied branch, and
+   * deliberately so: `approvedVia` is carried over because the surface that
+   * initiated the crashed apply is still the true answer to "who approved
+   * this?", whereas the evidence is being established right now by whoever is
+   * writing, so it is stamped rather than preserved.
+   *
+   * A `values`-only slot, like `approvedVia`. It never enters a `where`
+   * predicate, so the atomic claim filter is byte-for-byte unchanged.
+   */
+  resolutionEvidence?: string;
 }
 
 /**
@@ -465,14 +480,20 @@ export interface StrandedResolutionHooks {
 }
 
 /**
- * Records the user's judgement about rows a crash left mid-apply.
+ * Records a judgement about rows a crash left mid-apply.
  *
- * THIS VERIFIES NOTHING. It contacts neither Gmail nor the mailbox; it writes
- * down what the person told us they saw. `applied` means "the user reports the
- * change is in Gmail"; `pending` means "the user reports it is not, put it back
- * in the approval queue so it can be approved again". Nothing else may be
- * offered here without a real check, and there is no real check — Gmail message
- * state is not a reliable witness to whether *this* operation caused it.
+ * THIS FUNCTION CONTACTS NOTHING. It writes down a conclusion reached
+ * elsewhere: by a person who says they looked in Gmail, or by
+ * `verifyStrandedApplyingOperations`, which reads the message's current labels
+ * back and compares them with the operation's target state. `values` carries
+ * which of those it was (`resolutionEvidence`), so the row records not just the
+ * verdict but how it was reached.
+ *
+ * NEITHER SOURCE ESTABLISHES CAUSATION, and the difference between them is
+ * smaller than it looks: Gmail message state is not a witness to whether *this*
+ * operation caused it. An `applied` verdict means the end state matches, from
+ * whatever produced it. `pending` means it does not, and puts the row back in
+ * the approval queue so it can be approved again.
  *
  * CLAIM-THEN-WRITE, over rows that are `applying` AND past the staleness
  * cutoff: stamp a fresh token, read back by that token to learn what was won,

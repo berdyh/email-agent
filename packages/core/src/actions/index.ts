@@ -22,6 +22,7 @@ export {
   rejectPendingOperationsByIds,
   adjudicateStrandedOperations,
   STRANDED_APPLIED_NOTE,
+  STRANDED_VERIFIED_NOTE,
   type StrandedDecision,
   chunkList,
   mergeApplyResults,

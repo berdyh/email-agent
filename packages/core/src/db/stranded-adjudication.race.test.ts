@@ -27,9 +27,11 @@ const {
   resolveStrandedApplyingOperations,
   STALE_APPLYING_THRESHOLD_MS,
 } = await import("./pending-operations.js");
-const { adjudicateStrandedOperations, STRANDED_APPLIED_NOTE } = await import(
-  "../actions/approval.js"
-);
+const {
+  adjudicateStrandedOperations,
+  STRANDED_APPLIED_NOTE,
+  STRANDED_VERIFIED_NOTE,
+} = await import("../actions/approval.js");
 const {
   backdateClaim,
   capturingWarnings,
@@ -37,8 +39,13 @@ const {
   seedPendingOperations,
 } = await import("../testing/lancedb-fixture.js");
 
-async function seedPending(id: string): Promise<void> {
-  await seedPendingOperations([{ id, emailId: `m-${id}`, status: "pending" }]);
+async function seedPending(
+  id: string,
+  overrides: Record<string, string> = {},
+): Promise<void> {
+  await seedPendingOperations([
+    { id, emailId: `m-${id}`, status: "pending", ...overrides },
+  ]);
 }
 
 describe("adjudicating a row an apply is still working on", () => {
@@ -132,6 +139,91 @@ describe("adjudicating a row an apply is still working on", () => {
     // The lease is released, or a later claim-scoped read would match a row it
     // does not own.
     assert.equal(row.claimToken, "");
+    // HOW it was decided, as a value rather than a sentence to grep for. "The
+    // user says so" is the default because it is what both human surfaces mean.
+    assert.equal(row.resolutionEvidence, "user-confirmed");
+  });
+
+  it("records a row the API verified with the API's own note and evidence", async () => {
+    // The verifier's branch. The two evidence values must produce two
+    // DIFFERENT notes as well as two different column values: a human reading
+    // the audit trail sees only `error`, and telling them a person confirmed
+    // something no person looked at is the failure this column exists to stop.
+    const id = "op-verified";
+    await seedPending(id);
+    await claimPendingOperations([id], "token-A", "applying", "web");
+    await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+    assert.equal(
+      await adjudicateStrandedOperations([id], "applied", {
+        evidence: "verified-api",
+      }),
+      1,
+    );
+    const row = await readRow(id);
+    assert.equal(row.status, "applied");
+    assert.equal(row.resolutionEvidence, "verified-api");
+    assert.equal(row.error, STRANDED_VERIFIED_NOTE);
+    assert.notEqual(row.error, STRANDED_APPLIED_NOTE);
+    // The note must not overclaim: an end-state match is not causation.
+    assert.match(row.error, /not proof this app's call produced it/);
+    // Claim-time attribution is untouched by resolve-time evidence. The web
+    // surface really did initiate the apply that crashed; the API is only what
+    // established the outcome.
+    assert.equal(row.approvedVia, "web");
+  });
+
+  it("clears the evidence on a requeue, whoever gave the answer", async () => {
+    // A `pending` row has no resolution, so it can carry no evidence of one —
+    // and a pending row showing "verified-api" would read as resolved in every
+    // list. Both answers clear it, exactly as `approvedVia` is cleared.
+    for (const evidence of ["user-confirmed", "verified-api"] as const) {
+      const id = `op-requeue-${evidence}`;
+      // Seeded already carrying evidence, so the clear is load-bearing rather
+      // than vacuous. Nothing in the product reaches this branch with a
+      // non-empty value today — `claimPendingOperations` does not touch the
+      // column and an `applied` row is never re-claimed — which is exactly why
+      // the invariant needs pinning here instead of being inferred from the
+      // reachable states.
+      await seedPending(id, { resolutionEvidence: "verified-api" });
+      await claimPendingOperations([id], "token-A", "applying", "cli");
+      await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+      assert.equal(
+        await adjudicateStrandedOperations([id], "notApplied", { evidence }),
+        1,
+      );
+      const row = await readRow(id);
+      assert.equal(row.status, "pending", evidence);
+      assert.equal(row.resolutionEvidence, "", evidence);
+      assert.equal(row.approvedVia, "", evidence);
+      assert.equal(row.claimedAt, "", evidence);
+      assert.equal(row.resolvedAt, "", evidence);
+      assert.equal(row.error, "", evidence);
+      assert.equal(row.claimToken, "", evidence);
+    }
+  });
+
+  it("refuses a row a healthy apply claimed a second ago, verifier or not", async () => {
+    // The age clause is the ONLY thing standing between an automatic
+    // verification pass and a row an apply is legitimately working on right
+    // now. The verifier gets no private write path for exactly this reason: it
+    // goes through `adjudicateStrandedOperations`, which recomputes the cutoff
+    // at write time and folds it into the same predicate that stamps the token.
+    const id = "op-fresh-verified";
+    await seedPending(id);
+    await claimPendingOperations([id], "token-live", "applying", "web");
+
+    assert.equal(
+      await adjudicateStrandedOperations([id], "applied", {
+        evidence: "verified-api",
+      }),
+      0,
+    );
+    const untouched = await readRow(id);
+    assert.equal(untouched.status, "applying");
+    assert.equal(untouched.claimToken, "token-live");
+    assert.equal(untouched.resolutionEvidence, "");
   });
 });
 
@@ -179,6 +271,63 @@ describe("two adjudications racing over one stranded row", () => {
     const row = await readRow(id);
     assert.equal(row.status, "pending", "B's answer is what survives");
     assert.equal(row.claimToken, "");
+  });
+
+  it("gives the winner's evidence, not the loser's, when a verifier and a person collide", async () => {
+    // THE CROSS-SOURCE RACE. Neither answer is authoritative and there is
+    // deliberately no priority ordering: the person may have looked at Gmail a
+    // second ago while the verifier's read is minutes old, and neither can
+    // establish causation anyway. First token stamp wins, exactly as two people
+    // racing already do — and the row must not end up with one source's status
+    // and the other's evidence.
+    const id = "op-cross-source";
+    await seedPending(id);
+    await claimPendingOperations([id], "token-A", "applying", "cli");
+    await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+    const cutoffIso = new Date(
+      Date.now() - STALE_APPLYING_THRESHOLD_MS,
+    ).toISOString();
+
+    let verifierWon = -1;
+    const userWon = await resolveStrandedApplyingOperations(
+      [id],
+      "adjudicate-user",
+      cutoffIso,
+      {
+        status: "applied",
+        error: STRANDED_APPLIED_NOTE,
+        resolvedAt: new Date().toISOString(),
+        resolutionEvidence: "user-confirmed",
+      },
+      {
+        afterClaim: async () => {
+          const rows = await resolveStrandedApplyingOperations(
+            [id],
+            "adjudicate-verifier",
+            cutoffIso,
+            {
+              status: "applied",
+              error: STRANDED_VERIFIED_NOTE,
+              resolvedAt: new Date().toISOString(),
+              resolutionEvidence: "verified-api",
+            },
+          );
+          verifierWon = rows.length;
+        },
+      },
+    );
+
+    assert.equal(verifierWon, 1, "the verifier's write is the one that landed");
+    assert.equal(userWon.length, 0, "the loser must not claim credit");
+
+    // Read the row back OFF THE TABLE: the returned rows are a snapshot, and
+    // what matters is that the surviving status, note and evidence all came
+    // from the same writer.
+    const row = await readRow(id);
+    assert.equal(row.status, "applied");
+    assert.equal(row.resolutionEvidence, "verified-api");
+    assert.equal(row.error, STRANDED_VERIFIED_NOTE);
   });
 
   it("reports the row when no one steals it", async () => {
