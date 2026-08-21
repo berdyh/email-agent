@@ -89,6 +89,10 @@ describe("adjudicating a row an apply is still working on", () => {
     const requeued = await readRow(id);
     assert.equal(requeued.status, "pending");
     assert.equal(requeued.claimToken, "");
+    // The attribution goes back with the status. The user has just said this
+    // apply never reached Gmail, so the row must not keep recording "cli" as
+    // having approved it — a pending row is unclaimed, and unclaimed is "".
+    assert.equal(requeued.approvedVia, "");
 
     const { value, warnings } = await capturingWarnings(() =>
       resolveClaimedOperations(
@@ -120,6 +124,11 @@ describe("adjudicating a row an apply is still working on", () => {
     const row = await readRow(id);
     assert.equal(row.status, "applied");
     assert.equal(row.error, STRANDED_APPLIED_NOTE);
+    // The OPPOSITE of the `notApplied` branch, deliberately: the surface that
+    // initiated the crashed apply is kept, because on this branch it is the one
+    // case where the attribution is genuinely informative. Adjudicating does not
+    // make the adjudicator the approver.
+    assert.equal(row.approvedVia, "cli");
     // The lease is released, or a later claim-scoped read would match a row it
     // does not own.
     assert.equal(row.claimToken, "");
