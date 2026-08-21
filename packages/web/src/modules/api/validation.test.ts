@@ -18,12 +18,53 @@ import {
   parseSnapshotRestoreRequest,
   parseStrandedResolutionRequest,
   parseFetchEmailsRequest,
+  parseJsonBody,
   parseUserActionSaveRequest,
   readGuardResponse,
+  RequestValidationError,
   sanitizeSettingsForResponse,
 } from "./validation.js";
 
 describe("web API validation", () => {
+  it("rejects a malformed JSON body as a 400-shaped error, not a rethrown SyntaxError", async () => {
+    const malformed = new Request("http://localhost/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    await assert.rejects(
+      () => parseJsonBody(malformed),
+      (err: unknown) => {
+        assert.ok(err instanceof RequestValidationError, "must be a RequestValidationError");
+        assert.match((err as Error).message, /valid JSON/);
+        return true;
+      },
+    );
+
+    // A well-formed body still parses normally — the wrapper is transparent
+    // on the success path.
+    const ok = new Request("http://localhost/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ a: 1 }),
+    });
+    assert.deepEqual(await parseJsonBody(ok), { a: 1 });
+
+    // Only SyntaxError is reclassified. A request whose body was already
+    // consumed throws a TypeError, not a SyntaxError, and must still surface
+    // as itself rather than being misreported as "not valid JSON".
+    const consumed = new Request("http://localhost/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ a: 1 }),
+    });
+    await consumed.json();
+    await assert.rejects(
+      () => parseJsonBody(consumed),
+      (err: unknown) => !(err instanceof RequestValidationError),
+    );
+  });
+
   it("normalizes fetch requests and clamps invalid scope to unread", () => {
     assert.deepEqual(parseFetchEmailsRequest({ scope: "all", maxResults: 25 }), {
       scope: "all",

@@ -4,6 +4,7 @@ import { summarizeEmail } from "@email-agent/core/analysis";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseEmailIdRequest,
   validationResponse,
 } from "@/modules/api/validation";
@@ -13,7 +14,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseEmailIdRequest(await request.json());
+    const body = parseEmailIdRequest(await parseJsonBody(request));
     await initDb();
     const email = await getEmailById(body.emailId, body.accountId);
     if (!email) {

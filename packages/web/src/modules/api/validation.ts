@@ -27,6 +27,45 @@ export class RequestValidationError extends Error {
   }
 }
 
+/**
+ * Parses a request body as JSON, turning a malformed body into a
+ * `RequestValidationError` (400) instead of letting it reach
+ * `internalErrorResponse` as an unrecognised 500.
+ *
+ * `request.json()` throws a plain `SyntaxError` for invalid JSON (including an
+ * empty body) — undici's `parseJSONFromBytes` is the source, verified above by
+ * running the reject/apply/stranded route tests before this existed. Every
+ * mutating route used to call `request.json()` inline and rely on
+ * `validationResponse` to recognise the failure; it only recognises
+ * `RequestValidationError`, so a client that sent junk was told the server
+ * broke, and a stack trace was logged for a request that never reached
+ * anything worth erroring about.
+ *
+ * This is the ONE place that call happens now — every route in `app/api`
+ * calls `parseJsonBody(request)` instead of `request.json()` directly, so the
+ * 400 is a property of the shared entry point, not something each route has to
+ * remember to opt into.
+ *
+ * Deliberately narrow: only `SyntaxError` is caught. `validationResponse`
+ * turning EVERY `SyntaxError` a route's try block might throw into a 400 would
+ * misclassify one raised somewhere else in that block (e.g. by a downstream
+ * parser) as "the client sent a bad body" — catching it here, at the one call
+ * site that can genuinely produce it for that reason, keeps the reclassification
+ * scoped to what it is actually about. Anything else `.json()` throws (a body
+ * already consumed, a network error mid-stream) is a real 500 and is rethrown
+ * unchanged.
+ */
+export async function parseJsonBody(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new RequestValidationError("Request body must be valid JSON");
+    }
+    throw err;
+  }
+}
+
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;

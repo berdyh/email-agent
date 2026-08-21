@@ -10,6 +10,7 @@ import {
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseUserActionDeleteRequest,
   parseUserActionSaveRequest,
   readGuardResponse,
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseUserActionSaveRequest(await request.json());
+    const body = parseUserActionSaveRequest(await parseJsonBody(request));
 
     // Check for ID conflict with built-in actions
     const actionId = extractActionId(body.content);
@@ -90,7 +91,7 @@ export async function DELETE(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseUserActionDeleteRequest(await request.json());
+    const body = parseUserActionDeleteRequest(await parseJsonBody(request));
 
     await deleteUserAction(body.filename);
     return NextResponse.json({ success: true });

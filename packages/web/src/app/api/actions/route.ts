@@ -11,6 +11,7 @@ import { getEmails, initDb, recordToGmailMessage } from "@email-agent/core/db";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseActionRunRequest,
   readGuardResponse,
   validationResponse,
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
 
   try {
     ensureLoaded();
-    const body = parseActionRunRequest(await request.json());
+    const body = parseActionRunRequest(await parseJsonBody(request));
     let action = registry.get(body.actionId);
 
     // Fall back to user actions if not found in built-ins

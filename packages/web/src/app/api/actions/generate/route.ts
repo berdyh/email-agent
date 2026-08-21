@@ -5,6 +5,7 @@ import { AgentRouter } from "@email-agent/core/agents";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseActionGenerateRequest,
   validationResponse,
 } from "@/modules/api/validation";
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseActionGenerateRequest(await request.json());
+    const body = parseActionGenerateRequest(await parseJsonBody(request));
 
     // Build system prompt based on mode
     let systemPrompt: string;

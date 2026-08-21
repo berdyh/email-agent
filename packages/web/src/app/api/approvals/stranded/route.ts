@@ -8,6 +8,7 @@ import { adjudicateStrandedOperations } from "@email-agent/core/actions";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseStrandedResolutionRequest,
   readGuardResponse,
   validationResponse,
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const { ids, decision } = parseStrandedResolutionRequest(await request.json());
+    const { ids, decision } = parseStrandedResolutionRequest(await parseJsonBody(request));
     await initDb();
     const resolved = await adjudicateStrandedOperations(ids, decision);
 

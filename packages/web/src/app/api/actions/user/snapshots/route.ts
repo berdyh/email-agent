@@ -7,6 +7,7 @@ import {
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseSnapshotRestoreRequest,
   parseUserActionDeleteRequest,
   validationResponse,
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
 
   let snapshotFilename = "That version";
   try {
-    const body = parseSnapshotRestoreRequest(await request.json());
+    const body = parseSnapshotRestoreRequest(await parseJsonBody(request));
     snapshotFilename = body.snapshotFilename;
 
     await restoreSnapshot(body.snapshotFilename, body.originalFilename);

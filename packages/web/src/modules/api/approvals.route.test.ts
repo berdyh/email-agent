@@ -427,20 +427,26 @@ describe("/api/approvals/stranded", () => {
     );
     assert.equal(badShape.status, 400, "a well-formed body with a bad shape is a 400");
 
-    // MALFORMED JSON IS A 500 TODAY, AND THAT IS A WART, NOT A CONTRACT.
-    // `await request.json()` throws a SyntaxError, `validationResponse` does not
-    // recognise it, and it falls through to `internalErrorResponse` — so a
-    // client that sent junk is told the server broke, and a stack trace is
-    // logged. Pinned rather than left undefined so the behaviour cannot drift
-    // unnoticed; recorded in TODOS.md as the thing to change. When it becomes a
-    // 400, change this line in the same commit.
-    const malformed = await callHandler(
+    // MALFORMED JSON IS A 400, NOT A 500. Every mutating route now parses its
+    // body through `parseJsonBody` (`modules/api/validation.ts`), which catches
+    // the `SyntaxError` `request.json()` throws for invalid JSON and turns it
+    // into a `RequestValidationError` — the same shape `validationResponse`
+    // already maps to 400 for a well-formed-but-wrong-shaped body. A client
+    // that sends junk is told its body was rejected, not that the server broke,
+    // and nothing is logged for a request that never reached anything worth
+    // erroring about.
+    const malformed = await callHandler<{ error: string }>(
       stranded.POST,
       buildRequest("/api/approvals/stranded", {
         method: "POST",
         rawBody: "{not json",
       }),
     );
-    assert.equal(malformed.status, 500);
+    assert.equal(malformed.status, 400);
+    assert.match(
+      malformed.body.error,
+      /valid JSON/,
+      "must read differently from the bad-shape 400 above it",
+    );
   });
 });

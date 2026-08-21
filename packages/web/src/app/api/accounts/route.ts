@@ -9,6 +9,7 @@ import {
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseAccountDeleteRequest,
   parseAccountPostRequest,
   readGuardResponse,
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseAccountPostRequest(await request.json());
+    const body = parseAccountPostRequest(await parseJsonBody(request));
 
     if (body.action === "add") {
       const creds = await getOAuthCredentials();
@@ -76,7 +77,7 @@ export async function DELETE(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseAccountDeleteRequest(await request.json());
+    const body = parseAccountDeleteRequest(await parseJsonBody(request));
 
     await removeAccount(body.email);
     return NextResponse.json({ ok: true });

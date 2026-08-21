@@ -4,6 +4,7 @@ import { initDb } from "@email-agent/core/db";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseApprovalIdsRequest,
   validationResponse,
 } from "@/modules/api/validation";
@@ -14,7 +15,7 @@ export async function POST(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const { ids } = parseApprovalIdsRequest(await request.json());
+    const { ids } = parseApprovalIdsRequest(await parseJsonBody(request));
 
     await initDb();
     // Core claims each row before rejecting it and returns only the rows it

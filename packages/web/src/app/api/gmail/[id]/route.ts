@@ -10,6 +10,7 @@ import { markAsRead, markAsUnread } from "@email-agent/core/gmail/operations";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseEmailIdentityQuery,
   parseEmailReadStatusRequest,
   readGuardResponse,
@@ -54,7 +55,7 @@ export async function PATCH(
 
   try {
     const { accountId } = parseEmailIdentityQuery(request.nextUrl.searchParams);
-    const { isUnread } = parseEmailReadStatusRequest(await request.json());
+    const { isUnread } = parseEmailReadStatusRequest(await parseJsonBody(request));
 
     await initDb();
     const email = await getEmailById(id, accountId);

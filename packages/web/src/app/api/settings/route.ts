@@ -4,6 +4,7 @@ import {
   internalErrorResponse,
   mergeSettingsUpdate,
   mutationGuardResponse,
+  parseJsonBody,
   parseSettingsUpdateRequest,
   readGuardResponse,
   sanitizeSettingsForResponse,
@@ -29,7 +30,7 @@ export async function PUT(request: NextRequest) {
   if (guard) return guard;
 
   try {
-    const body = parseSettingsUpdateRequest(await request.json());
+    const body = parseSettingsUpdateRequest(await parseJsonBody(request));
     const current = await loadSettings();
     const merged = mergeSettingsUpdate(current, body);
     await saveSettings(merged);

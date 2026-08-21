@@ -3,6 +3,7 @@ import { syncEmails } from "@email-agent/core/gmail";
 import {
   internalErrorResponse,
   mutationGuardResponse,
+  parseJsonBody,
   parseFetchEmailsRequest,
   validationResponse,
 } from "@/modules/api/validation";
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
   try {
     fetching = true;
 
-    const options = parseFetchEmailsRequest(await request.json());
+    const options = parseFetchEmailsRequest(await parseJsonBody(request));
 
     const result = await syncEmails(options);
     return NextResponse.json(result);
