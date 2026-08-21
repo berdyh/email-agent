@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
+import { initDb, verifyStrandedApplyingOperations } from "@email-agent/core";
+import { describeStrandedNotifyLines } from "./approvals.js";
 
 // This file compiles to packages/cli/dist/commands/serve.js — walk up to the
 // monorepo root so `serve` works regardless of the caller's cwd.
@@ -73,7 +75,7 @@ export function registerServe(program: Command) {
       "-H, --host <host>",
       "Interface to bind (default: loopback; 0.0.0.0 when EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1)",
     )
-    .action((options: { port: string; host?: string }) => {
+    .action(async (options: { port: string; host?: string }) => {
       const host = resolveServeHost(options.host, process.env);
       console.log(
         chalk.bold(`\nStarting Email Agent on ${host}:${options.port}...\n`),
@@ -85,6 +87,32 @@ export function registerServe(program: Command) {
               `approve queued Gmail changes. The API's local-origin header checks are turned\n` +
               `OFF for this run (they would refuse the LAN browser this bind exists for), and\n` +
               `they never stopped a non-browser client anyway.\n`,
+          ),
+        );
+      }
+
+      // D1 (owner's decision): verification runs automatically at startup,
+      // GATED ON A CHEAP DB READ FIRST — zero Gmail calls and zero output when
+      // nothing is stale. This is a GENUINELY NEW COST for this command: unlike
+      // `fetch`, `serve` never opened the database before this. It costs one
+      // LanceDB connect plus one filtered scan before the Next.js child even
+      // spawns; when rows ARE stale, it costs one live Gmail call per row (see
+      // AGENTS.md and `verify-stranded.ts`'s own module header for why that is
+      // serial, not batched). A failure here must never stop `serve` from
+      // starting — wrapped in its own try/catch, one honest line, and the
+      // child spawns regardless.
+      try {
+        await initDb();
+        const verified = await verifyStrandedApplyingOperations();
+        for (const line of describeStrandedNotifyLines(verified)) {
+          console.log(chalk.yellow(line));
+        }
+      } catch (verifyErr) {
+        console.log(
+          chalk.yellow(
+            `Could not check for Gmail changes stuck mid-apply: ` +
+              `${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}. ` +
+              `Starting the server anyway.`,
           ),
         );
       }

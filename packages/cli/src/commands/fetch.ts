@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { syncEmails } from "@email-agent/core";
+import { syncEmails, verifyStrandedApplyingOperations } from "@email-agent/core";
+import { describeStrandedNotifyLines } from "./approvals.js";
 
 export function registerFetch(program: Command) {
   program
@@ -41,6 +42,27 @@ export function registerFetch(program: Command) {
             `\nRun ${chalk.cyan("email-agent serve")} to view them.\n`,
           ),
         );
+
+        // D1 (owner's decision): verification runs automatically here, GATED
+        // ON A CHEAP DB READ FIRST — `verifyStrandedApplyingOperations` returns
+        // immediately with zero Gmail calls when nothing is stale, so the
+        // happy path (nothing stranded) prints nothing extra at all. A failure
+        // here must never break a fetch that otherwise succeeded — it is
+        // wrapped in its own try/catch and prints one honest line instead.
+        try {
+          const verified = await verifyStrandedApplyingOperations();
+          for (const line of describeStrandedNotifyLines(verified)) {
+            console.log(chalk.yellow(line));
+          }
+        } catch (verifyErr) {
+          console.log(
+            chalk.yellow(
+              `Could not check for Gmail changes stuck mid-apply: ` +
+                `${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}. ` +
+                `Your fetch still succeeded.`,
+            ),
+          );
+        }
       } catch (err) {
         spinner.fail("Failed to fetch emails");
         console.error(
