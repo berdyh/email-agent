@@ -1298,7 +1298,7 @@ merged. The surfaces — `StrandedOperationsPanel`, `approvals stranded`, and
 the `fetch`/`serve` notify line — all shipped in this same wave, on this same
 branch; this was not left as a follow-up.
 
-**What this does NOT do — three limits, written down rather than smoothed
+**What this does NOT do — four limits, written down rather than smoothed
 over:**
 
 LIMIT 1 (causation, not correctness): The check reads the message's state NOW
@@ -1328,6 +1328,38 @@ needs approval again), but a wrong-mailbox `applied` would retire the row
 silently on evidence from a different account — so such a row may be READ and
 REQUEUED, but this pass never records it `applied`. Only a person can close it
 out. Named-account rows are unaffected.
+
+LIMIT 4 (the read-before-write window — NARROWED on 2026-08-21, never closed):
+the pass reads Gmail and then writes, so a hung apply landing in between
+falsifies the evidence. Only ONE direction of that was ever a defect. Labels
+the check SAW present were present, so an `applied` verdict a late apply also
+lands is still the right end-state record; a `notApplied` is not — it requeues
+a change that has now happened, on an audit trail saying it never did, and a
+later explicit approval can send it to Gmail a second time. As shipped the
+exposure was seconds to minutes wide, not milliseconds: the reads are
+deliberately serial (429 risk) and both adjudications are batched at the end,
+so row 1's evidence was already minutes old when its claim landed.
+
+Every requeue candidate — and ONLY those, because re-reading the applied set
+buys nothing and spends quota — is now RE-READ immediately before adjudication,
+collapsing the exposure to one read and one write. A candidate that FLIPS to
+`applied` on the re-read is a SECOND route to an `applied` write and goes
+through the SAME `recordApplied` as the first pass, so LIMIT 3's `""` refusal
+covers both routes (mutation-checked: deleting that one guard fails all four
+ADC tests, unit and real-table). A re-read that FAILS never falls back to the
+first read — no verdict on evidence that could not be refreshed, so the row
+stays `applying` for a human.
+
+**What REMAINS, and it is irreducible:** Gmail can still land between the
+re-read and the write. An external system and a local database cannot be read
+and written atomically. The word is NARROWED; do not let a later edit write
+"closed". Nor can it be closed by claiming the row before reading: a crash
+between claim and release would re-stamp `claimedAt`, reset the 15-minute
+staleness clock and hide the row for another threshold, which is strictly
+worse. The DB layer was not touched for this — the atomic claim predicate, the
+cutoff folded into it and the stale-handle wrappers are exactly as they were,
+because the verifier must still beat a hung apply's token at the claim or it
+cannot function at all. Only the FRESHNESS of the evidence changed.
 
 **What this replaces, and what it does not close.** The residual documented in
 "The adjudication count can undercount" — an apply that claims a row, calls Gmail, hangs past
@@ -1362,6 +1394,13 @@ meaning, and Gmail's purge-from-Trash behaviour are documented, not observed.
 React component rendering (`StrandedOperationsPanel` firing the check once per
 mount, the toast, the per-row reason) remains untested — no component testing
 library exists in this repo.
+
+Found by: owner's decision of 2026-08-20 (build the check). LIMIT 4's
+read-before-write window was found and narrowed after a codex (gpt-5.x, medium
+effort) cross-vendor review of this wave, 2026-08-21, which also confirmed the
+six other safety claims (the ADC guard, the empty-label fail-closed, a 404
+never becoming a verdict, the spam/trash predicates, the cutoff inside the
+atomic predicate, and the stale-handle wrappers).
 
 ### The chained-`.where()` fix has no regression test
 **Completed:** feature/todos-w3-tests (2026-08-07)
