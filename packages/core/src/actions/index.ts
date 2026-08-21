@@ -31,6 +31,18 @@ export {
   APPLY_RESOLUTION_CHUNK_SIZE,
   type EnqueueOperationsInput,
 } from "./approval.js";
+export {
+  verifyStrandedApplyingOperations,
+  verdictFromLabels,
+  type StrandedVerificationDeps,
+  type StrandedVerificationResult,
+  type StrandedResidual,
+  type VerificationResidualReason,
+  type VerificationVerdict,
+} from "./verify-stranded.js";
+// `readMessageLabels` (../gmail/read.js) is deliberately NOT re-exported here
+// either — the verification function above is the only thing that needs it,
+// and it hands back mailbox content keyed by message id.
 export { ActionRegistry } from "./registry.js";
 export {
   ActionRunner,
