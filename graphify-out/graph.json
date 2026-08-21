@@ -9943,8 +9943,8 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_email_agent_core",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 67,
+      "community_name": "@email-agent/core",
       "norm_label": "@email-agent/core"
     },
     {
@@ -9954,8 +9954,8 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "packages_web_package_json_email_agent_core",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 67,
+      "community_name": "@email-agent/core",
       "norm_label": "@email-agent/core"
     },
     {
@@ -10141,8 +10141,8 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_sonner",
-      "community": 84,
-      "community_name": "sonner",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "sonner"
     },
     {
@@ -10152,8 +10152,8 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "sonner",
-      "community": 84,
-      "community_name": "sonner",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "sonner"
     },
     {
@@ -15938,20 +15938,20 @@
       "norm_label": "honesty rules for this page"
     },
     {
-      "label": "CLAUDE.md",
+      "label": "AGENTS.md",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L1",
       "_origin": "ast",
       "id": "claude",
       "community": 30,
       "community_name": "Gotchas",
-      "norm_label": "claude.md"
+      "norm_label": "agents.md"
     },
     {
       "label": "Email Agent",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L1",
       "_origin": "ast",
       "id": "claude_email_agent",
@@ -15962,7 +15962,7 @@
     {
       "label": "Commands",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L18",
       "_origin": "ast",
       "id": "claude_commands",
@@ -15973,7 +15973,7 @@
     {
       "label": "CLI",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L33",
       "_origin": "ast",
       "id": "claude_cli",
@@ -15984,7 +15984,7 @@
     {
       "label": "Architecture",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L61",
       "_origin": "ast",
       "id": "claude_architecture",
@@ -15995,7 +15995,7 @@
     {
       "label": "Key Patterns",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L72",
       "_origin": "ast",
       "id": "claude_key_patterns",
@@ -16006,7 +16006,7 @@
     {
       "label": "Key Files",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L112",
       "_origin": "ast",
       "id": "claude_key_files",
@@ -16017,7 +16017,7 @@
     {
       "label": "Gotchas",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L144",
       "_origin": "ast",
       "id": "claude_gotchas",
@@ -16028,7 +16028,7 @@
     {
       "label": "Build & TypeScript",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L146",
       "_origin": "ast",
       "id": "claude_build_typescript",
@@ -16039,7 +16039,7 @@
     {
       "label": "Imports & Modules",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L151",
       "_origin": "ast",
       "id": "claude_imports_modules",
@@ -16050,7 +16050,7 @@
     {
       "label": "Database",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L157",
       "_origin": "ast",
       "id": "claude_database",
@@ -16061,7 +16061,7 @@
     {
       "label": "Config",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L178",
       "_origin": "ast",
       "id": "claude_config",
@@ -16072,7 +16072,7 @@
     {
       "label": "Tests",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L188",
       "_origin": "ast",
       "id": "claude_tests",
@@ -16083,7 +16083,7 @@
     {
       "label": "Web (Next.js)",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L199",
       "_origin": "ast",
       "id": "claude_web_next_js",
@@ -16094,7 +16094,7 @@
     {
       "label": "CLI",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L214",
       "_origin": "ast",
       "id": "claude_cli_214",
@@ -16105,7 +16105,7 @@
     {
       "label": "Other",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L219",
       "_origin": "ast",
       "id": "claude_other",
@@ -16116,7 +16116,7 @@
     {
       "label": "Agent Executors (Spawning CLIs)",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L225",
       "_origin": "ast",
       "id": "claude_agent_executors_spawning_clis",
@@ -16127,7 +16127,7 @@
     {
       "label": "Code Style",
       "file_type": "document",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L238",
       "_origin": "ast",
       "id": "claude_code_style",
@@ -17305,7 +17305,7 @@
       "label": "`tokensUsed` means a different thing in every executor",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2186",
+      "source_location": "L2195",
       "_origin": "ast",
       "id": "todos_tokensused_means_a_different_thing_in_every_executor",
       "community": 15,
@@ -17316,7 +17316,7 @@
       "label": "Codex token counts are inferred, not verified",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2225",
+      "source_location": "L2234",
       "_origin": "ast",
       "id": "todos_codex_token_counts_are_inferred_not_verified",
       "community": 15,
@@ -17327,7 +17327,7 @@
       "label": "User actions are silently broken on the declared Node floor",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2262",
+      "source_location": "L2271",
       "_origin": "ast",
       "id": "todos_user_actions_are_silently_broken_on_the_declared_node_floor",
       "community": 15,
@@ -17338,7 +17338,7 @@
       "label": "User actions can bypass the gate entirely",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2283",
+      "source_location": "L2292",
       "_origin": "ast",
       "id": "todos_user_actions_can_bypass_the_gate_entirely",
       "community": 15,
@@ -17349,7 +17349,7 @@
       "label": "Chained `.where()` silently dropped every filter but the last",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2324",
+      "source_location": "L2333",
       "_origin": "ast",
       "id": "todos_chained_where_silently_dropped_every_filter_but_the_last",
       "community": 15,
@@ -17360,7 +17360,7 @@
       "label": "Codebase audit remediation",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2340",
+      "source_location": "L2349",
       "_origin": "ast",
       "id": "todos_codebase_audit_remediation",
       "community": 15,
@@ -17371,7 +17371,7 @@
       "label": "Approval gate for Gmail-mutating actions",
       "file_type": "document",
       "source_file": "TODOS.md",
-      "source_location": "L2356",
+      "source_location": "L2365",
       "_origin": "ast",
       "id": "todos_approval_gate_for_gmail_mutating_actions",
       "community": 15,
@@ -59103,7 +59103,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L1",
       "weight": 1.0,
       "_origin": "ast",
@@ -59114,7 +59114,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L61",
       "weight": 1.0,
       "_origin": "ast",
@@ -59125,7 +59125,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L238",
       "weight": 1.0,
       "_origin": "ast",
@@ -59136,7 +59136,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L18",
       "weight": 1.0,
       "_origin": "ast",
@@ -59147,7 +59147,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L144",
       "weight": 1.0,
       "_origin": "ast",
@@ -59158,7 +59158,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L112",
       "weight": 1.0,
       "_origin": "ast",
@@ -59169,7 +59169,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L72",
       "weight": 1.0,
       "_origin": "ast",
@@ -59180,7 +59180,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L33",
       "weight": 1.0,
       "_origin": "ast",
@@ -59191,7 +59191,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L225",
       "weight": 1.0,
       "_origin": "ast",
@@ -59202,7 +59202,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L146",
       "weight": 1.0,
       "_origin": "ast",
@@ -59213,7 +59213,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L214",
       "weight": 1.0,
       "_origin": "ast",
@@ -59224,7 +59224,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L178",
       "weight": 1.0,
       "_origin": "ast",
@@ -59235,7 +59235,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L157",
       "weight": 1.0,
       "_origin": "ast",
@@ -59246,7 +59246,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L151",
       "weight": 1.0,
       "_origin": "ast",
@@ -59257,7 +59257,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L219",
       "weight": 1.0,
       "_origin": "ast",
@@ -59268,7 +59268,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L188",
       "weight": 1.0,
       "_origin": "ast",
@@ -59279,7 +59279,7 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
+      "source_file": "AGENTS.md",
       "source_location": "L199",
       "weight": 1.0,
       "_origin": "ast",
@@ -60160,7 +60160,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2356",
+      "source_location": "L2365",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60215,7 +60215,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2324",
+      "source_location": "L2333",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60237,7 +60237,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2340",
+      "source_location": "L2349",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60248,7 +60248,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2225",
+      "source_location": "L2234",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60468,7 +60468,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2186",
+      "source_location": "L2195",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60490,7 +60490,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2262",
+      "source_location": "L2271",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60501,7 +60501,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "TODOS.md",
-      "source_location": "L2283",
+      "source_location": "L2292",
       "weight": 1.0,
       "_origin": "ast",
       "source": "todos_completed",
@@ -60774,5 +60774,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "43ccf099eafcd0b3bbf643274337f8550c41932a"
+  "built_at_commit": "7c89e53bec202d4e207c062ceeaf8a7bbc2504e7"
 }
