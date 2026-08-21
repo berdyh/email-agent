@@ -36,6 +36,7 @@ import type {
   RejectApprovalsResult,
   ResolveStrandedResult,
   StrandedApprovalsResponse,
+  VerifyStrandedResult,
 } from "./approvals-contract.js";
 
 const harness = await startRouteHarness("approvals-routes");
@@ -56,6 +57,9 @@ const reject = await harness.load<{ POST: Handler }>(
 );
 const stranded = await harness.load<{ GET: Handler; POST: Handler }>(
   "app/api/approvals/stranded/route.js",
+);
+const verify = await harness.load<{ POST: Handler }>(
+  "app/api/approvals/stranded/verify/route.js",
 );
 
 const { STALE_APPLYING_THRESHOLD_MS } = await import("@email-agent/core/db");
@@ -448,5 +452,98 @@ describe("/api/approvals/stranded", () => {
       /valid JSON/,
       "must read differently from the bad-shape 400 above it",
     );
+  });
+});
+
+describe("POST /api/approvals/stranded/verify", () => {
+  it("refuses a bare POST — this is a mutation guard, not a read", async () => {
+    const bare = await callHandler(
+      verify.POST,
+      buildRequest("/api/approvals/stranded/verify", {
+        method: "POST",
+        sameOrigin: false,
+      }),
+    );
+    assert.equal(bare.status, 403);
+  });
+
+  it("makes ZERO Gmail calls and reports checked:0 when nothing is stale — the cheap gate", async () => {
+    // Nothing stale is seeded ahead of this test. `verifyStrandedApplyingOperations`
+    // is documented to return immediately without constructing a Gmail client
+    // at all in this case; if it did try, this harness has no stored token and
+    // would surface a residual row instead of an all-zero result.
+    const result = await callHandler<VerifyStrandedResult>(
+      verify.POST,
+      buildRequest("/api/approvals/stranded/verify", { method: "POST" }),
+    );
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body, {
+      checked: 0,
+      appliedRecorded: 0,
+      requeuedRecorded: 0,
+      unresolved: [],
+    });
+  });
+
+  it("classifies the no-linked-account failure and leaves the row exactly as it was", async () => {
+    await harness.db.seedPendingOperations([
+      {
+        id: "w-verify1",
+        emailId: "w-m1",
+        accountId: "me@example.com",
+        type: "trash",
+        status: "applying",
+        claimToken: "dead-process-2",
+      },
+    ]);
+    await harness.db.backdateClaim("w-verify1", STALE_APPLYING_THRESHOLD_MS + 60_000);
+
+    const before = await harness.db.readPendingOperation("w-verify1");
+
+    const result = await callHandler<VerifyStrandedResult>(
+      verify.POST,
+      buildRequest("/api/approvals/stranded/verify", { method: "POST" }),
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.body.checked, 1);
+    assert.equal(result.body.appliedRecorded, 0);
+    assert.equal(result.body.requeuedRecorded, 0);
+    assert.equal(result.body.unresolved.length, 1);
+    assert.equal(result.body.unresolved[0]?.id, "w-verify1");
+    // No stored OAuth credentials in this temp $HOME: `createGmailClient`
+    // throws before any request is made, which `gmail/read.ts` classifies as
+    // `credentials` (not `check-failed`) — pinned here rather than assumed,
+    // per the module's own docstring on why that classification matters.
+    assert.equal(result.body.unresolved[0]?.reason, "credentials");
+
+    // Left EXACTLY as it was: still `applying`, still holding its claim token
+    // — a residual row is untouched, not partially resolved.
+    const after = await harness.db.readPendingOperation("w-verify1");
+    assert.equal(after.status, "applying");
+    assert.equal(after.claimToken, before.claimToken);
+
+    // And it is still visible on the plain stranded list, unchanged.
+    const list = await callHandler<StrandedApprovalsResponse>(
+      stranded.GET,
+      buildRequest("/api/approvals/stranded"),
+    );
+    assert.ok(list.body.operations.some((op) => op.id === "w-verify1"));
+  });
+
+  it("does not resolve a row claimed moments ago by a healthy apply", async () => {
+    // Reuses `w-str-fresh` from the GET test above: claimed `now`, so it fails
+    // the staleness gate `getStaleApplyingOperations` (and therefore the
+    // verifier's own `listStranded`) applies before any Gmail call is made.
+    const before = await harness.db.readPendingOperation("w-str-fresh");
+    const result = await callHandler<VerifyStrandedResult>(
+      verify.POST,
+      buildRequest("/api/approvals/stranded/verify", { method: "POST" }),
+    );
+    assert.equal(
+      result.body.unresolved.some((row) => row.id === "w-str-fresh"),
+      false,
+    );
+    const after = await harness.db.readPendingOperation("w-str-fresh");
+    assert.equal(after.claimToken, before.claimToken, "a fresh claim must survive untouched");
   });
 });

@@ -4,10 +4,13 @@ import {
   claimedNothing,
   describeApplyOutcome,
   describeRejectOutcome,
+  describeResidualReason,
   describeStrandedAge,
   describeStrandedResolution,
+  describeVerifyResolution,
   summarizeApplyResult,
   unclaimedApplyMessage,
+  type VerifyStrandedResult,
 } from "./approvals-contract.js";
 
 describe("approvals apply accounting", () => {
@@ -174,11 +177,100 @@ describe("stranded row wording", () => {
       }).message,
     ]) {
       assert.ok(message.includes("may have finished"), message);
-      assert.ok(message.includes("another answer"), message);
       assert.ok(message.includes("requeued"), message);
       assert.equal(message.includes("has since finished"), false, message);
       assert.equal(message.includes("the outcome it recorded was kept"), false, message);
       assert.equal(message.includes("real outcome was kept"), false, message);
     }
+  });
+
+  it("offers a background verification pass as a SEPARATE cause from another person answering", () => {
+    // A user who pressed nothing themselves cannot guess that an automatic
+    // Gmail check exists — folding it into "another answer" would read as
+    // impossible to them. The two must be distinct sentences.
+    const message = describeStrandedResolution({
+      decision: "applied",
+      requested: 1,
+      resolved: 0,
+      skipped: 1,
+    }).message;
+    assert.ok(message.includes("another person"), message);
+    assert.ok(message.includes("automatic"), message);
+  });
+});
+
+describe("describeResidualReason", () => {
+  it("passes message-missing and unscoped-account through unchanged — core already wrote complete sentences", () => {
+    assert.equal(
+      describeResidualReason("message-missing", "Gmail has no message with this id."),
+      "Gmail has no message with this id.",
+    );
+    assert.equal(
+      describeResidualReason("unscoped-account", "Labels match, but no named account."),
+      "Labels match, but no named account.",
+    );
+  });
+
+  it("frames credentials and check-failed with a headline, keeping core's detail verbatim", () => {
+    const credentials = describeResidualReason("credentials", "invalid_grant");
+    assert.ok(credentials.includes("Gmail access"));
+    assert.ok(credentials.includes("invalid_grant"));
+
+    const checkFailed = describeResidualReason("check-failed", "ETIMEDOUT");
+    assert.ok(checkFailed.includes("check itself failed"));
+    assert.ok(checkFailed.includes("ETIMEDOUT"));
+    assert.ok(checkFailed.includes("may resolve"), "check-failed may fix itself");
+  });
+
+  it("says unverifiable-operation will NOT resolve itself — the opposite of check-failed", () => {
+    const message = describeResidualReason(
+      "unverifiable-operation",
+      'a change of an unrecognised kind ("foo")',
+    );
+    assert.ok(message.includes("will not resolve on its own"));
+    assert.equal(message.includes("may resolve"), false, message);
+  });
+});
+
+describe("describeVerifyResolution", () => {
+  function result(overrides: Partial<VerifyStrandedResult>): VerifyStrandedResult {
+    return {
+      checked: 0,
+      appliedRecorded: 0,
+      requeuedRecorded: 0,
+      unresolved: [],
+      ...overrides,
+    };
+  }
+
+  it("says nothing at all when nothing was stale", () => {
+    assert.equal(describeVerifyResolution(result({ checked: 0 })), null);
+  });
+
+  it("reports success and 'nothing left for you' when verification cleared everything", () => {
+    const { tone, message } = describeVerifyResolution(
+      result({ checked: 2, appliedRecorded: 1, requeuedRecorded: 1 }),
+    )!;
+    assert.equal(tone, "success");
+    assert.ok(message.includes("Checked 2"));
+    assert.ok(message.includes("1 had landed"));
+    assert.ok(message.includes("1 had not"));
+    assert.ok(message.includes("Nothing left for you to do"));
+  });
+
+  it("reports warning and names the residual count when rows remain", () => {
+    const { tone, message } = describeVerifyResolution(
+      result({
+        checked: 3,
+        appliedRecorded: 1,
+        requeuedRecorded: 0,
+        unresolved: [
+          { id: "a", emailId: "m1", accountId: "x", reason: "credentials", detail: "d" },
+          { id: "b", emailId: "m2", accountId: "x", reason: "check-failed", detail: "d" },
+        ],
+      }),
+    )!;
+    assert.equal(tone, "warning");
+    assert.ok(message.includes("2 still need you"));
   });
 });

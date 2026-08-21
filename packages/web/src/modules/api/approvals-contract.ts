@@ -134,6 +134,120 @@ export function describeStrandedAge(claimedAt: string, now: Date = new Date()): 
  */
 export type StrandedDecision = "applied" | "notApplied";
 
+/**
+ * Why a stranded row is STILL stranded after Email Agent checked Gmail for it.
+ *
+ * Duplicated from core's `VerificationResidualReason` for the same reason
+ * `StrandedDecision` is duplicated above — this module stays free of core, and
+ * `app/api/approvals/stranded/verify/route.ts` is the one place that sees both
+ * and must be kept in step by hand.
+ */
+export type VerificationResidualReason =
+  | "message-missing"
+  | "credentials"
+  | "check-failed"
+  | "unverifiable-operation"
+  | "unscoped-account";
+
+/** One row a verification pass could not resolve, and why. */
+export interface StrandedVerificationResidual {
+  id: string;
+  emailId: string;
+  accountId: string;
+  reason: VerificationResidualReason;
+  /** Gmail's or core's own words about what went wrong — safe to show a user. */
+  detail: string;
+}
+
+/**
+ * What `POST /api/approvals/stranded/verify` reports back.
+ *
+ * `checked: 0` means there was nothing stale — no Gmail call was made, and
+ * nothing changed. `appliedRecorded`/`requeuedRecorded` are what the WRITE
+ * actually reached, which can be lower than the number of rows the read
+ * classified that way (a row can leave `applying` between the read and the
+ * write) — never derive a count from `unresolved.length` being smaller than
+ * `checked` instead of reading these two fields.
+ */
+export interface VerifyStrandedResult {
+  checked: number;
+  appliedRecorded: number;
+  requeuedRecorded: number;
+  unresolved: StrandedVerificationResidual[];
+}
+
+/**
+ * Per-reason sentence for a row Email Agent's own Gmail check could not close
+ * out. THE REASON PICKS THE HEADLINE; `detail` (core's own words) carries the
+ * specifics, so this never re-authors what core already said — it only frames
+ * it. `message-missing` and `unscoped-account` arrive as complete sentences
+ * from core already, so they pass through unchanged.
+ *
+ * `unverifiable-operation` NEVER resolves itself — word it differently from
+ * `check-failed`, which may.
+ */
+export function describeResidualReason(
+  reason: VerificationResidualReason,
+  detail: string,
+): string {
+  switch (reason) {
+    case "message-missing":
+    case "unscoped-account":
+      return detail;
+    case "credentials":
+      return `Email Agent could not use this account's Gmail access to check: ${detail}`;
+    case "check-failed":
+      return `The check itself failed, not the change: ${detail} This may resolve on its own the next time Email Agent checks.`;
+    case "unverifiable-operation":
+      return `Email Agent does not know how to check this one automatically — it is ${detail}. This will not resolve on its own; only you can close it out.`;
+  }
+}
+
+/**
+ * Wording for the toast/banner after a verify pass, fired once when the
+ * stranded panel mounts.
+ *
+ * THREE SHAPES, because "nothing happened" and "everything happened" read
+ * very differently to a user who is staring at an empty panel either way —
+ * this is exactly the distinction the empty state has to make (task
+ * requirement: "empty because verification cleared it" vs "empty because
+ * nothing was stranded").
+ */
+export function describeVerifyResolution(result: VerifyStrandedResult): {
+  tone: ToastTone;
+  message: string;
+} | null {
+  if (result.checked === 0) return null; // Nothing stale — say nothing, per the notify-line rule.
+
+  const resolved = result.appliedRecorded + result.requeuedRecorded;
+  const parts: string[] = [];
+  if (result.appliedRecorded > 0) {
+    parts.push(
+      `${result.appliedRecorded} had landed (recorded applied)`,
+    );
+  }
+  if (result.requeuedRecorded > 0) {
+    parts.push(`${result.requeuedRecorded} had not (back in the approval queue)`);
+  }
+
+  const checkedLine = `Checked ${result.checked} Gmail ${result.checked === 1 ? "change" : "changes"} that were stuck mid-apply against Gmail's current state.`;
+  const resolvedLine =
+    parts.length > 0
+      ? ` ${parts.join(", ")}.`
+      : resolved === 0
+        ? " None could be resolved automatically."
+        : "";
+  const residualLine =
+    result.unresolved.length > 0
+      ? ` ${result.unresolved.length} still ${result.unresolved.length === 1 ? "needs" : "need"} you to look — see below.`
+      : " Nothing left for you to do.";
+
+  return {
+    tone: result.unresolved.length > 0 ? "warning" : "success",
+    message: `${checkedLine}${resolvedLine}${residualLine}`,
+  };
+}
+
 export interface ResolveStrandedResult {
   decision: StrandedDecision;
   /** How many ids the client submitted. */
@@ -158,18 +272,21 @@ export interface ResolveStrandedResult {
  * STATES WHAT IS CERTAIN, OFFERS THE REST AS POSSIBILITIES — the precedent set
  * by `unclaimedApplyMessage` below. The earlier wording asserted one cause as
  * fact ("an apply that was still running has since finished it, and the outcome
- * it recorded was kept"), and there are three, only one of which involves a real
- * apply. A row can equally have been answered by another adjudication, in which
- * case what was "kept" is another unverified assertion by a person; or it can
- * have been requeued and re-claimed, in which case it is not stale and no answer
- * about it is meaningful yet.
+ * it recorded was kept"), and there are now FOUR, only one of which involves a
+ * real apply. A row can equally have been answered by another person (another
+ * tab, or the CLI), or by Email Agent's own automatic Gmail check running in
+ * the background — these are offered SEPARATELY, not folded into one "another
+ * answer" line, because a user who pressed nothing themselves cannot guess the
+ * second exists. Or it can have been requeued and re-claimed, in which case it
+ * is not stale and no answer about it is meaningful yet.
  */
 function strandedSkipReasons(one: boolean): string {
   return (
     `An apply that was still running may have finished ${one ? "it" : "them"} and recorded a real ` +
-    `outcome; another answer (another tab, or the CLI) may already have been recorded; or ` +
-    `${one ? "it may have been" : "they may have been"} requeued and picked up by a fresh apply, ` +
-    `which makes ${one ? "it" : "them"} too new to adjudicate. Reload to see where ` +
+    `outcome; another person may have answered ${one ? "it" : "them"} first (another tab, or the ` +
+    `CLI); Email Agent's own automatic check against Gmail may have answered ${one ? "it" : "them"} ` +
+    `in the meantime; or ${one ? "it may have been" : "they may have been"} requeued and picked up ` +
+    `by a fresh apply, which makes ${one ? "it" : "them"} too new to adjudicate. Reload to see where ` +
     `${one ? "it stands" : "they stand"}.`
   );
 }
@@ -205,6 +322,13 @@ export function describeStrandedResolution(result: ResolveStrandedResult): {
     };
   }
 
+  // "Email Agent did not check Gmail" stays true here specifically: this
+  // sentence describes only the human-adjudicated branch (a person clicked one
+  // of the two buttons). It does not describe the row's whole life — most rows
+  // never reach a human at all, because Email Agent's own verification pass
+  // resolves them first; the ones that DO land here are exactly the residual
+  // that check could not answer, and for THIS branch a human really is the only
+  // one who looked.
   const message =
     result.decision === "applied"
       ? `Recorded ${result.resolved} ${one ? "change" : "changes"} as applied, on your word — ` +

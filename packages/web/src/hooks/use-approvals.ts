@@ -6,6 +6,7 @@ import type {
   ResolveStrandedResult,
   StrandedApprovalsResponse,
   StrandedDecision,
+  VerifyStrandedResult,
 } from "@/modules/api/approvals-contract";
 
 // The wire types live with the routes that produce them, so adding a field on
@@ -21,6 +22,9 @@ export type {
   StrandedApprovalsResponse,
   StrandedDecision,
   StrandedOperation,
+  StrandedVerificationResidual,
+  VerificationResidualReason,
+  VerifyStrandedResult,
 } from "@/modules/api/approvals-contract";
 
 /**
@@ -96,6 +100,34 @@ export function useResolveStranded() {
       void queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
     onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+    },
+  });
+}
+
+/**
+ * Fires the on-demand Gmail check for every stranded row. Call this AT MOST
+ * ONCE per page load — see `StrandedOperationsPanel`, which guards it with a
+ * ref rather than firing it from `useStrandedApprovals`'s own refetches. A
+ * background refetch (window focus, a stale-time expiry) must never re-trigger
+ * a live Gmail call; that would turn an explicit one-time check into the
+ * polling loop this feature was deliberately built without.
+ */
+export function useVerifyStranded() {
+  const queryClient = useQueryClient();
+
+  return useMutation<VerifyStrandedResult, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch("/api/approvals/stranded/verify", { method: "POST" });
+      if (!res.ok) {
+        throw await errorFromResponse(res, "Failed to check stranded Gmail changes");
+      }
+      return res.json() as Promise<VerifyStrandedResult>;
+    },
+    onSuccess: () => {
+      // A resolved row leaves `applying` either way (`applied` retires it,
+      // `notApplied` moves it to `pending`), so both the stranded list and the
+      // pending queue can change.
       void queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
   });
