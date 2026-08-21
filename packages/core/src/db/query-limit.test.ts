@@ -117,7 +117,7 @@ describe("the approval queue reads past ten rows", () => {
     // rows back to learn what it won; a capped read-back means the apply
     // MUTATES GMAIL for rows it never learned it owned, and their outcome is
     // never written down. A chunk is 10 today, exactly at the boundary.
-    const won = await claimPendingOperations(ids, "lim-token", "applying");
+    const won = await claimPendingOperations(ids, "lim-token", "applying", "cli");
     assert.equal(won.length, ROWS);
 
     // And the stranded lister, which is the only surface those rows appear on.

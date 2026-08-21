@@ -2,6 +2,7 @@ import type { Table } from "@lancedb/lancedb";
 import { getDb } from "./connection.js";
 import {
   pendingOperationsTable,
+  type ApprovedVia,
   type PendingOperationRecord,
   type PendingOperationStatus,
 } from "./schema.js";
@@ -220,11 +221,19 @@ export function buildClaimFilter(token: string, status: string): string {
  * attempt's `token`. LanceDB's update() reports no row count, so the caller
  * MUST read back by token to learn which rows it actually won — a concurrent
  * apply or reject may have taken some of them first.
+ *
+ * `approvedVia` is REQUIRED and has no default, deliberately: "" is reserved for
+ * a row that is unclaimed or predates the column, so a claim that omitted a
+ * surface would be indistinguishable from a legacy row in the audit trail. It is
+ * a `values`-only field and never appears in a `where` predicate, so the claim's
+ * atomic write predicate is exactly what it was. Attribution only — see
+ * `ApprovedVia`; it prevents nothing.
  */
 export async function claimPendingOperations(
   ids: string[],
   token: string,
   status: Exclude<PendingOperationStatus, "pending">,
+  approvedVia: ApprovedVia,
   resolvedAt = "",
   claimedAt = new Date().toISOString(),
 ): Promise<PendingOperationRecord[]> {
@@ -243,7 +252,7 @@ export async function claimPendingOperations(
   // assumes. See COMMIT_CONFLICT_BACKOFF_MS.
   await updateAtLatestVersion(table, {
     where: buildPendingResolutionFilter(ids),
-    values: { status, claimToken: token, resolvedAt, claimedAt },
+    values: { status, claimToken: token, resolvedAt, claimedAt, approvedVia },
   });
 
   return queryAtLatestVersion(table, buildClaimFilter(token, status));
@@ -435,6 +444,14 @@ export interface StrandedResolutionValues {
   error?: string;
   resolvedAt?: string;
   claimedAt?: string;
+  /**
+   * Only ever set to "" here, and only when a row is being put BACK to
+   * `pending`: a row the user just told us was never applied must not keep
+   * claiming attribution for that apply. The `applied` branch deliberately
+   * leaves it alone, so a stranded row keeps recording which surface initiated
+   * the crashed apply — the one case where the field is genuinely informative.
+   */
+  approvedVia?: string;
 }
 
 /**

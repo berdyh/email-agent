@@ -196,7 +196,11 @@ export async function applyOperationIds(
     return { requested: 0, applied: 0, failed: 0, unclaimed: 0 };
   }
 
-  const apply = deps.apply ?? applyPendingOperationsByIds;
+  // The surface is bound here rather than widened into `ApplyDeps`: the CLI
+  // is always "cli", and the injected test doubles have nothing to say about
+  // attribution.
+  const apply =
+    deps.apply ?? ((ids: string[]) => applyPendingOperationsByIds(ids, "cli"));
   const createSpinner = deps.createSpinner ?? ((text: string) => ora(text));
   const spinner = createSpinner(`Applying ${ids.length} changes to Gmail...`).start();
 
@@ -242,7 +246,8 @@ export async function rejectOperationIds(
 ): Promise<RejectOutcome> {
   if (ids.length === 0) return { requested: 0, rejected: 0, unclaimed: 0 };
 
-  const reject = deps.reject ?? rejectPendingOperationsByIds;
+  const reject =
+    deps.reject ?? ((ids: string[]) => rejectPendingOperationsByIds(ids, "cli"));
   const rejected = await reject(ids);
   const outcome: RejectOutcome = {
     requested: ids.length,

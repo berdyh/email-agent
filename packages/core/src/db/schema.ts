@@ -85,6 +85,19 @@ export type PendingOperationStatus =
   | "rejected"
   | "failed";
 
+/**
+ * The surface that claimed a queued operation — the web approval UI, the CLI
+ * `approvals` commands, or the `gmail.autoApplyActions` auto-apply branch.
+ *
+ * Attribution only. It is not a capability, not a credential, and it gates
+ * nothing: the value is a literal bound at each call site, so anything that can
+ * reach `claimPendingOperations` can pass any of them. "Approval provenance" as
+ * a security control was considered and REJECTED — ESM module identity is
+ * process-global, so there is no unforgeable in-process caller identity inside
+ * one Node process to derive it from.
+ */
+export type ApprovedVia = "web" | "cli" | "auto-apply";
+
 export interface PendingOperationRecord {
   [key: string]: unknown;
   id: string;
@@ -123,6 +136,20 @@ export interface PendingOperationRecord {
    */
   claimedAt: string;
   resolvedAt: string; // "" while pending
+  /**
+   * Which surface claimed this row — an `ApprovedVia` value, or "" while the row
+   * is still unclaimed.
+   *
+   * "" ALSO means "written before this column existed", and the two cases are
+   * deliberately not distinguished: the migration sentinel is "" precisely
+   * because a legacy row in `applying` or `applied` genuinely has no recorded
+   * surface, and inventing one would fabricate an audit record. So never read ""
+   * on a resolved row as anything but "unattributed" — in particular, never
+   * guess a surface for it.
+   *
+   * Attribution only; see `ApprovedVia`.
+   */
+  approvedVia: string;
 }
 
 export interface ClusterRecord {

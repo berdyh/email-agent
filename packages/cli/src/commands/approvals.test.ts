@@ -38,6 +38,7 @@ function record(
     // unclaimed row really holds, never `undefined`.
     claimedAt: "",
     resolvedAt: "",
+    approvedVia: "",
     ...overrides,
   };
 }

@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     // Core claims each row before rejecting it and returns only the rows it
     // actually won, so anything left over was already resolved elsewhere —
     // same accounting as the apply route, so the UI can say so either way.
-    const rejected = await rejectPendingOperationsByIds(ids);
+    const rejected = await rejectPendingOperationsByIds(ids, "web");
     const body: RejectApprovalsResult = {
       rejected,
       requested: ids.length,

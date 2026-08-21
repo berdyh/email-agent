@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     const { ids } = parseApprovalIdsRequest(await request.json());
 
     await initDb();
-    const result = await applyPendingOperationsByIds(ids);
+    const result = await applyPendingOperationsByIds(ids, "web");
     const { requested, skipped } = summarizeApplyResult(ids, result);
     const body: ApplyApprovalsResult = { ...result, requested, skipped };
 

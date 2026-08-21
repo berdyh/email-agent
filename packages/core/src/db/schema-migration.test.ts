@@ -66,9 +66,47 @@ async function columnsOf(table: string): Promise<string[]> {
 const legacyPendingSchema = new Schema(
   pendingOperationSchema.fields.filter(
     (field: { name: string }) =>
-      !["claimToken", "claimedAt", "resolvedAt"].includes(field.name),
+      !["claimToken", "claimedAt", "resolvedAt", "approvedVia"].includes(
+        field.name,
+      ),
   ),
 );
+
+/**
+ * The shape AFTER the claim/lease columns and BEFORE `approvedVia` — a table
+ * that has already been migrated once. This is the realistic upgrade, and it is
+ * the only one that can carry rows already sitting in `applying`/`applied` with
+ * a real `claimToken`: the all-four-missing shape has no claim columns to fill,
+ * so it cannot test what a genuinely claimed legacy row comes back as.
+ */
+const preApprovedViaPendingSchema = new Schema(
+  pendingOperationSchema.fields.filter(
+    (field: { name: string }) => field.name !== "approvedVia",
+  ),
+);
+
+/** A still-queued row in the same pre-`approvedVia` shape. */
+function legacyPendingRow2Unclaimed(id: string): Record<string, unknown> {
+  return {
+    ...legacyPendingRow(id, "pending"),
+    claimToken: "",
+    claimedAt: "",
+    resolvedAt: "",
+  };
+}
+
+/** A row that WAS claimed, before anything recorded which surface claimed it. */
+function claimedLegacyRow(
+  id: string,
+  status: string,
+): Record<string, unknown> {
+  return {
+    ...legacyPendingRow(id, status),
+    claimToken: `tok-${id}`,
+    claimedAt: "2026-08-02T00:00:00.000Z",
+    resolvedAt: status === "applying" ? "" : "2026-08-02T00:00:05.000Z",
+  };
+}
 
 function legacyPendingRow(
   id: string,
@@ -140,7 +178,55 @@ describe("migrating a legacy pending_operations table", () => {
       assert.equal(row["claimToken"], "", `${String(row["id"])}.claimToken`);
       assert.equal(row["claimedAt"], "", `${String(row["id"])}.claimedAt`);
       assert.equal(row["resolvedAt"], "", `${String(row["id"])}.resolvedAt`);
+      assert.equal(row["approvedVia"], "", `${String(row["id"])}.approvedVia`);
     }
+  });
+
+  it("leaves an ALREADY-CLAIMED legacy row unattributed, never guessing a surface", async () => {
+    // The shape that actually matters for `approvedVia`: a table upgraded once
+    // already, whose rows carry real claim tokens from applies that happened
+    // before any column recorded which surface performed them.
+    //
+    // "" is the only honest answer for those rows, and it is why the sentinel is
+    // `CAST('' AS STRING)` rather than a plausible-looking "web". A migration
+    // that filled in a surface would fabricate an audit record of something
+    // nobody observed — and "" is deliberately the same value an unclaimed row
+    // carries, because for a legacy row the two really are indistinguishable.
+    const table = await conn.createEmptyTable(
+      pendingOperationsTable,
+      preApprovedViaPendingSchema,
+    );
+    await table.add([
+      claimedLegacyRow("op-1", "applied"),
+      claimedLegacyRow("op-2", "applying"),
+      claimedLegacyRow("op-3", "rejected"),
+      legacyPendingRow2Unclaimed("op-4"),
+    ]);
+
+    await migrateSchema(conn);
+
+    const migrated = await rows(pendingOperationsTable);
+    assert.equal(migrated.length, 4, "no row may be lost by a migration");
+    for (const row of migrated) {
+      assert.equal(
+        row["approvedVia"],
+        "",
+        `${String(row["id"])}.approvedVia must be unattributed, not guessed`,
+      );
+    }
+    // The claim state the rows already carried is untouched — the new column is
+    // added beside it, not derived from it.
+    assert.deepEqual(
+      migrated.map((row) => `${row["id"]}:${row["status"]}:${row["claimToken"]}`),
+      [
+        "op-1:applied:tok-op-1",
+        "op-2:applying:tok-op-2",
+        "op-3:rejected:tok-op-3",
+        "op-4:pending:",
+      ],
+    );
+    assert.equal(migrated[0]?.["claimedAt"], "2026-08-02T00:00:00.000Z");
+    assert.equal(migrated[3]?.["claimedAt"], "");
   });
 
   it("leaves the table immediately claimable on the new columns", async () => {
@@ -195,6 +281,7 @@ describe("migrating a legacy pending_operations table", () => {
         claimToken: "",
         claimedAt: "",
         resolvedAt: "",
+        approvedVia: "",
       },
     ]);
     const all = await rows(pendingOperationsTable);
@@ -364,7 +451,9 @@ describe("a table shape with no declared default", () => {
     );
     const row = legacyPendingRow("op-1", "applied");
     delete row["status"];
-    await table.add([{ ...row, claimToken: "", claimedAt: "", resolvedAt: "" }]);
+    await table.add([
+      { ...row, claimToken: "", claimedAt: "", resolvedAt: "", approvedVia: "" },
+    ]);
 
     await assert.rejects(
       migrateSchema(conn),

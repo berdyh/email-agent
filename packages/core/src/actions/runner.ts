@@ -255,7 +255,7 @@ export class ActionRunner {
           try {
             if (autoApply) {
               result.applyResult =
-                await applyPendingOperationsByIds(queuedIds);
+                await applyPendingOperationsByIds(queuedIds, "auto-apply");
               // Set only after the apply resolves, so `autoApplied` never
               // claims a batch was applied when the attempt threw.
               result.autoApplied = true;

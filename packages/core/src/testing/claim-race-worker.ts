@@ -94,7 +94,7 @@ async function runRaw(ids: string[], token: string): Promise<string[]> {
 }
 
 async function runClaim(ids: string[], token: string): Promise<string[]> {
-  const won = await claimPendingOperations(ids, token, "applying");
+  const won = await claimPendingOperations(ids, token, "applying", "cli");
   return won.map((row) => row.id);
 }
 

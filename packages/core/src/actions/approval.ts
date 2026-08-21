@@ -9,7 +9,7 @@ import {
   STALE_APPLYING_THRESHOLD_MS,
   type PendingOperationOutcome,
 } from "../db/pending-operations.js";
-import type { PendingOperationRecord } from "../db/schema.js";
+import type { ApprovedVia, PendingOperationRecord } from "../db/schema.js";
 import { loadSettings } from "../config/settings.js";
 import { applyOperations } from "./apply.js";
 import type {
@@ -55,6 +55,9 @@ export function toPendingOperationRecords(
     createdAt,
     claimedAt: "",
     resolvedAt: "",
+    // Unclaimed, so no surface has approved it yet. Same sentinel a migrated
+    // row carries, which is why "" must never be read as a surface.
+    approvedVia: "",
   }));
 }
 
@@ -513,9 +516,15 @@ export async function applyClaimedOperationsInChunks(
  * Applies queued operations the user approved, by queue row id.
  * Only rows still in "pending" state are applied; each row is marked
  * applied/failed afterwards. Returns the aggregate apply result.
+ *
+ * `approvedVia` records WHICH SURFACE is applying, for the audit trail only. It
+ * is required rather than defaulted because "" already means "unclaimed, or
+ * older than the column"; every caller knows its own surface statically, so
+ * there is nothing to infer.
  */
 export async function applyPendingOperationsByIds(
   ids: string[],
+  approvedVia: ApprovedVia,
 ): Promise<ActionApplyResult> {
   if (ids.length === 0) {
     return { applied: 0, failed: 0, errors: [], outcomes: [] };
@@ -524,7 +533,7 @@ export async function applyPendingOperationsByIds(
   const result = await applyClaimedOperationsInChunks(ids, {
     newToken: randomUUID,
     claim: (chunkIds, token) =>
-      claimPendingOperations(chunkIds, token, "applying"),
+      claimPendingOperations(chunkIds, token, "applying", approvedVia),
     apply: applyOperations,
     resolve: (outcomes, token) =>
       resolveClaimedOperations(outcomes, token, new Date().toISOString()),
@@ -609,6 +618,11 @@ export async function adjudicateStrandedOperations(
           error: "",
           resolvedAt: "",
           claimedAt: "",
+          // Back to unclaimed, so the attribution goes too: the user has just
+          // reported that the apply this row records never reached Gmail. The
+          // `applied` branch above deliberately does NOT clear it — there the
+          // surface that initiated the crashed apply is the useful record.
+          approvedVia: "",
         });
 
   return resolved.length;
@@ -620,6 +634,7 @@ export async function adjudicateStrandedOperations(
  */
 export async function rejectPendingOperationsByIds(
   ids: string[],
+  approvedVia: ApprovedVia,
 ): Promise<number> {
   // Same claim discipline: only rows still `pending` are rejected, and the
   // count is the number actually won — never a pre-read count that might
@@ -630,6 +645,9 @@ export async function rejectPendingOperationsByIds(
     ids,
     randomUUID(),
     "rejected",
+    approvedVia,
+    // resolvedAt — a rejection resolves the row immediately. NOTE this argument
+    // moved one position right when `approvedVia` was inserted before it.
     new Date().toISOString(),
   );
   await pruneResolvedOperationsQuietly();

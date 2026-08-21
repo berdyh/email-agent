@@ -49,7 +49,7 @@ describe("adjudicating a row an apply is still working on", () => {
     // apply's own write-back then matched nothing.
     const id = "op-fresh";
     await seedPending(id);
-    const claimed = await claimPendingOperations([id], "token-A", "applying");
+    const claimed = await claimPendingOperations([id], "token-A", "applying", "cli");
     assert.equal(claimed.length, 1);
 
     const resolved = await adjudicateStrandedOperations([id], "notApplied");
@@ -81,7 +81,7 @@ describe("adjudicating a row an apply is still working on", () => {
     // Gmail twice) and pins that we NOTICE, which is the part that was silent.
     const id = "op-hung";
     await seedPending(id);
-    await claimPendingOperations([id], "token-A", "applying");
+    await claimPendingOperations([id], "token-A", "applying", "cli");
     await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
 
     const resolved = await adjudicateStrandedOperations([id], "notApplied");
@@ -113,7 +113,7 @@ describe("adjudicating a row an apply is still working on", () => {
   it("records a genuinely stranded row on the user's word", async () => {
     const id = "op-stranded";
     await seedPending(id);
-    await claimPendingOperations([id], "token-A", "applying");
+    await claimPendingOperations([id], "token-A", "applying", "cli");
     await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
 
     assert.equal(await adjudicateStrandedOperations([id], "applied"), 1);
@@ -134,7 +134,7 @@ describe("two adjudications racing over one stranded row", () => {
     // applied" for a row B had put back in the queue.
     const id = "op-race";
     await seedPending(id);
-    await claimPendingOperations([id], "token-A", "applying");
+    await claimPendingOperations([id], "token-A", "applying", "cli");
     await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
 
     const cutoffIso = new Date(
@@ -176,7 +176,7 @@ describe("two adjudications racing over one stranded row", () => {
     // The other half of the contract: the count is not simply pessimistic.
     const id = "op-uncontested";
     await seedPending(id);
-    await claimPendingOperations([id], "token-A", "applying");
+    await claimPendingOperations([id], "token-A", "applying", "cli");
     await backdateClaim(id, STALE_APPLYING_THRESHOLD_MS + 60_000);
 
     const cutoffIso = new Date(

@@ -119,6 +119,14 @@ export const pendingOperationSchema = new Schema([
   new Field("createdAt", new Utf8()),
   new Field("claimedAt", new Utf8()),
   new Field("resolvedAt", new Utf8()),
+  // Which SURFACE claimed this row: "web", "cli", "auto-apply", or "" while
+  // unclaimed (and on any row migrated in from before this column existed).
+  // ATTRIBUTION ONLY — it sets no security property and prevents nothing. There
+  // is no unforgeable in-process caller identity to derive it from: ESM module
+  // identity is process-global, so anything reaching `claimPendingOperations`
+  // could pass any of these values. It answers "who approved this?" for a human
+  // reading the audit trail, and nothing else.
+  new Field("approvedVia", new Utf8()),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -154,6 +162,12 @@ const pendingOperationColumnDefaults: Record<string, string> = {
   claimToken: "CAST('' AS STRING)",
   claimedAt: "CAST('' AS STRING)",
   resolvedAt: "CAST('' AS STRING)",
+  // "" is the honest answer for every pre-existing row, INCLUDING one already
+  // sitting in `applying`/`applied`: the table never recorded which surface
+  // claimed it, and a sentinel that guessed (say "web") would manufacture an
+  // audit record nothing observed. Unattributed and unclaimed are deliberately
+  // spelled the same, because for a legacy row they are indistinguishable.
+  approvedVia: "CAST('' AS STRING)",
 };
 
 let initPromise: Promise<void> | null = null;

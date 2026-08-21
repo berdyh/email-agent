@@ -120,6 +120,7 @@ function applyingRow(
     createdAt: "2026-08-01T00:00:00.000Z",
     claimedAt: "2026-08-07T10:00:00.000Z",
     resolvedAt: "",
+    approvedVia: "",
     ...overrides,
   };
 }

@@ -128,6 +128,7 @@ export function pendingOperation(
     createdAt: "2026-08-01T00:00:00.000Z",
     claimedAt: "",
     resolvedAt: "",
+    approvedVia: "",
     ...overrides,
   };
 }

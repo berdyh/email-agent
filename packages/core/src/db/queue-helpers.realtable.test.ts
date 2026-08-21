@@ -211,7 +211,7 @@ describe("enqueueOperationsDetailed against a real table", () => {
       actionName: "Junk",
       operations: [op],
     });
-    assert.equal(await rejectPendingOperationsByIds(first.ids), 1);
+    assert.equal(await rejectPendingOperationsByIds(first.ids, "cli"), 1);
 
     const again = await enqueueOperationsDetailed({
       batchId: "enq-batch-4",
@@ -262,7 +262,7 @@ describe("the chunked apply's claim/resolve state on disk", () => {
       {
         newToken: () => `tok-${String(snapshots.length)}`,
         claim: (chunkIds, token) =>
-          claimPendingOperations(chunkIds, token, "applying"),
+          claimPendingOperations(chunkIds, token, "applying", "cli"),
         apply: async (operations) => {
           const rows = await readAllPendingOperations();
           const byStatus: Record<string, string> = {};
@@ -327,10 +327,58 @@ describe("the chunked apply's claim/resolve state on disk", () => {
       ["claim-a", "claim-b"],
       "tok-claim",
       "applying",
+      "cli",
     );
     assert.deepEqual(won.map((row) => row.id), ["claim-a"]);
     assert.equal((await readPendingOperation("claim-b")).status, "rejected");
     assert.equal((await readPendingOperation("claim-b")).claimToken, "");
+  });
+
+  it("stamps the claiming SURFACE onto the row it wins, and only that row", async () => {
+    // `approvedVia` is attribution, so the one thing it must get right is that
+    // the value written is the one the caller passed — and that a row the claim
+    // did NOT win keeps its own (here: still-unattributed) value rather than
+    // inheriting the claimer's.
+    const [a, b] = await seedPendingOperations([
+      { id: "via-a", status: "pending" },
+      { id: "via-b", status: "pending" },
+    ]);
+    assert.ok(a && b);
+    assert.equal((await readPendingOperation("via-a")).approvedVia, "");
+
+    const won = await claimPendingOperations(["via-a"], "tok-via", "applying", "web");
+
+    assert.deepEqual(won.map((row) => row.id), ["via-a"]);
+    // Read back off the table, not off the returned rows: the point is what was
+    // WRITTEN, not what the call happened to return.
+    assert.equal((await readPendingOperation("via-a")).approvedVia, "web");
+    assert.equal((await readPendingOperation("via-a")).status, "applying");
+    assert.equal((await readPendingOperation("via-b")).approvedVia, "");
+    assert.equal((await readPendingOperation("via-b")).status, "pending");
+  });
+
+  it("records the CLI and auto-apply surfaces the same way the web one is recorded", async () => {
+    // The two literals that reach `claimPendingOperations` from outside the web
+    // routes. Both go through the product's own reject/apply entry points, so
+    // this also pins that `rejectPendingOperationsByIds` still passes its
+    // `resolvedAt` in the right POSITION — `approvedVia` was inserted before it,
+    // and a silent positional shift would have stamped a timestamp into the
+    // attribution column.
+    const { rejectPendingOperationsByIds } = await import("../actions/approval.js");
+    await seedPendingOperations([
+      { id: "via-cli", status: "pending" },
+      { id: "via-auto", status: "pending" },
+    ]);
+
+    assert.equal(await rejectPendingOperationsByIds(["via-cli"], "cli"), 1);
+    const rejected = await readPendingOperation("via-cli");
+    assert.equal(rejected.approvedVia, "cli");
+    assert.equal(rejected.status, "rejected");
+    assert.notEqual(rejected.resolvedAt, "", "resolvedAt must still be a timestamp");
+    assert.equal(rejected.claimToken.length > 0, true);
+
+    await claimPendingOperations(["via-auto"], "tok-auto", "applying", "auto-apply");
+    assert.equal((await readPendingOperation("via-auto")).approvedVia, "auto-apply");
   });
 
   it("a resolve only ever writes rows carrying its own token", async () => {
@@ -338,8 +386,8 @@ describe("the chunked apply's claim/resolve state on disk", () => {
       { id: "res-mine", status: "pending" },
       { id: "res-theirs", status: "pending" },
     ]);
-    await claimPendingOperations(["res-mine"], "tok-mine", "applying");
-    await claimPendingOperations(["res-theirs"], "tok-theirs", "applying");
+    await claimPendingOperations(["res-mine"], "tok-mine", "applying", "cli");
+    await claimPendingOperations(["res-theirs"], "tok-theirs", "applying", "cli");
 
     const outcome = await resolveClaimedOperations(
       [
