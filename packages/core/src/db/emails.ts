@@ -213,6 +213,23 @@ async function openEmailsTable(): Promise<EmailLookupTable> {
 }
 
 /**
+ * Strictly-newer test for two rows claiming the same (`accountId`, `id`).
+ *
+ * `Date.parse` rather than a string compare: `EmailRecord.date` is the raw
+ * RFC-2822 `Date:` header, where lexical and chronological order disagree.
+ * An unparseable header is `-Infinity`, so any real timestamp beats it, two
+ * unparseable rows compare equal, and equality keeps the incumbent.
+ */
+function isNewerEmailRow(candidate: EmailRecord, incumbent: EmailRecord): boolean {
+  return emailDateValue(candidate) > emailDateValue(incumbent);
+}
+
+function emailDateValue(row: EmailRecord): number {
+  const parsed = Date.parse(row.date);
+  return Number.isNaN(parsed) ? -Infinity : parsed;
+}
+
+/**
  * Batched replacement for one `getEmailById` per queued row.
  *
  * ONE COPY, IN CORE. This lived in `packages/web/src/modules/api/email-lookup.ts`
@@ -237,9 +254,24 @@ async function openEmailsTable(): Promise<EmailLookupTable> {
  * which the UI renders as "not in local DB" for an email sitting right there. No
  * limit at all is ten rows (verified on a real 25-row table against
  * `@lancedb/lancedb` 0.15.0, 2026-08-07). So the scan is explicitly unbounded
- * and the predicate is what bounds it. If the table does hold two rows for one
- * pair the last one scanned wins; the property that matters is that neither a
- * duplicate nor a default can displace another pair's row.
+ * and the predicate is what bounds it.
+ *
+ * IF THE TABLE DOES HOLD TWO ROWS FOR ONE PAIR, THE NEWEST `date` WINS. One row
+ * per (`accountId`, `id`) is the invariant (stated at `emailSchema` in
+ * `db/connection.ts`) and `upsertEmails` is the only writer that upholds it, but
+ * LanceDB enforces nothing, so this read must still be deterministic. It used to
+ * be "the last row the scan reached", which is a property of a scan rather than
+ * of the data: the same table could answer differently on two calls, and the
+ * approval surfaces would show a different subject for the same queued change.
+ *
+ * `date` is the RAW `Date:` HEADER off the message (see `gmail/fetcher.ts`), so
+ * it is RFC-2822 in practice and NOT sortable as a string — "Fri, 1 Jan 2027"
+ * sorts before "Mon, 2 Feb 2026". It has to be parsed, never compared as text.
+ * A header that will not parse is treated as the oldest possible row so a real
+ * timestamp always beats it, and if both rows are unparseable or equal the first
+ * one scanned is kept. That last case is arbitrary — nothing in two rows sharing
+ * an (`accountId`, `id`) and a `date` distinguishes them — and is not promised
+ * to be anything more than stable within one scan.
  */
 export async function getEmailsByIds(
   refs: ReadonlyArray<EmailRef>,
@@ -257,7 +289,9 @@ export async function getEmailsByIds(
     .toArray()) as EmailRecord[];
 
   for (const row of rows) {
-    found.set(emailRefKey(row.accountId, row.id), row);
+    const key = emailRefKey(row.accountId, row.id);
+    const incumbent = found.get(key);
+    if (!incumbent || isNewerEmailRow(row, incumbent)) found.set(key, row);
   }
   return found;
 }

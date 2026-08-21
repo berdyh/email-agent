@@ -26,7 +26,12 @@ import {
   type EmailLookupTable,
 } from "./emails.js";
 
-function emailRow(accountId: string, id: string, subject: string) {
+function emailRow(
+  accountId: string,
+  id: string,
+  subject: string,
+  date = "2026-08-07T00:00:00.000Z",
+) {
   return {
     id,
     accountId,
@@ -34,7 +39,7 @@ function emailRow(accountId: string, id: string, subject: string) {
     from: `sender@${accountId}`,
     to: accountId,
     subject,
-    date: "2026-08-07T00:00:00.000Z",
+    date,
     bodyText: "",
     bodyHtml: "",
     labels: "[]",
@@ -138,6 +143,99 @@ describe("getEmailsByIds against a real table", () => {
         // c@x.com shares the Gmail id but was not asked for: the predicate is
         // grouped per account, so it must not leak into another account's result.
         assert.equal(found.has(emailRefKey("c@x.com", "id1")), false);
+      },
+    );
+  });
+
+  it("picks the NEWEST duplicate by date, not the last row scanned", async () => {
+    // The old rule was "last row scanned wins", which is a property of the scan
+    // and not of the data: the same table could answer differently on two calls,
+    // and the approval surfaces would show a different subject for the same
+    // queued change.
+    //
+    // The dates are deliberately RFC-2822 and deliberately chosen so LEXICAL and
+    // CHRONOLOGICAL order disagree — "Fri, 1 Jan 2027" sorts BEFORE "Mon, 2 Feb
+    // 2026" as a string. `EmailRecord.date` is the raw `Date:` header off the
+    // message, so a string comparison here would be wrong on real data; this
+    // case fails against one.
+    //
+    // The newer row is inserted FIRST, so "last scanned wins" picks the older
+    // one. That is the pre-fix failure.
+    await withTable(
+      [
+        emailRow("a@x.com", "id1", "Newest", "Fri, 1 Jan 2027 09:00:00 +0000"),
+        emailRow("a@x.com", "id1", "Oldest", "Mon, 2 Feb 2026 09:00:00 +0000"),
+      ],
+      async (open) => {
+        const found = await getEmailsByIds([{ accountId: "a@x.com", id: "id1" }], open);
+        assert.equal(found.size, 1);
+        assert.equal(found.get(emailRefKey("a@x.com", "id1"))?.subject, "Newest");
+      },
+    );
+  });
+
+  it("picks the same duplicate whichever order the rows are scanned in", async () => {
+    // Determinism is the whole point, so the answer must not depend on insertion
+    // order. Same two rows, reversed.
+    await withTable(
+      [
+        emailRow("a@x.com", "id1", "Oldest", "Mon, 2 Feb 2026 09:00:00 +0000"),
+        emailRow("a@x.com", "id1", "Newest", "Fri, 1 Jan 2027 09:00:00 +0000"),
+      ],
+      async (open) => {
+        const found = await getEmailsByIds([{ accountId: "a@x.com", id: "id1" }], open);
+        assert.equal(found.get(emailRefKey("a@x.com", "id1"))?.subject, "Newest");
+      },
+    );
+  });
+
+  it("prefers a parseable date over an unparseable one, in both orders", async () => {
+    // A `Date:` header can be missing or malformed — `extractHeader` yields ""
+    // when the header is absent. An unparseable value must never outrank a real
+    // timestamp just by being scanned later.
+    for (const rows of [
+      [
+        emailRow("a@x.com", "id1", "Real date", "Mon, 2 Feb 2026 09:00:00 +0000"),
+        emailRow("a@x.com", "id1", "No date", ""),
+      ],
+      [
+        emailRow("a@x.com", "id1", "No date", ""),
+        emailRow("a@x.com", "id1", "Real date", "Mon, 2 Feb 2026 09:00:00 +0000"),
+      ],
+    ]) {
+      await withTable(rows, async (open) => {
+        const found = await getEmailsByIds([{ accountId: "a@x.com", id: "id1" }], open);
+        assert.equal(found.get(emailRefKey("a@x.com", "id1"))?.subject, "Real date");
+      });
+    }
+  });
+
+  it("still returns one entry per pair when two rows are indistinguishable", async () => {
+    // Two rows sharing a pair AND a date have nothing to choose between them, so
+    // the winner is arbitrary — but there must still be exactly one entry, and
+    // the other requested pair must be untouched. Nothing here promises WHICH of
+    // the two tied rows wins; only that the Map is complete.
+    await withTable(
+      [
+        emailRow("a@x.com", "id1", "Tie A", ""),
+        emailRow("a@x.com", "id1", "Tie B", ""),
+        emailRow("b@x.com", "id2", "Other account"),
+      ],
+      async (open) => {
+        const found = await getEmailsByIds(
+          [
+            { accountId: "a@x.com", id: "id1" },
+            { accountId: "b@x.com", id: "id2" },
+          ],
+          open,
+        );
+        assert.equal(found.size, 2);
+        assert.equal(found.get(emailRefKey("b@x.com", "id2"))?.subject, "Other account");
+        assert.ok(
+          ["Tie A", "Tie B"].includes(
+            String(found.get(emailRefKey("a@x.com", "id1"))?.subject),
+          ),
+        );
       },
     );
   });

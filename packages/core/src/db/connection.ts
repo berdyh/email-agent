@@ -44,6 +44,29 @@ function vectorField(name: string): Field {
   );
 }
 
+// ---------------------------------------------------------------------------
+// emails — ROW IDENTITY IS THE PAIR (`accountId`, `id`), AND EXACTLY ONE ROW
+// PER PAIR IS EXPECTED.
+//
+// Written down here because it is NOT ENFORCED and cannot be: LanceDB has no
+// primary key and no unique constraint, so nothing in the storage layer would
+// reject a second row for a pair. The invariant is upheld by ONE writer —
+// `upsertEmails` in `db/emails.ts`, which DELETES the pairs it is about to write
+// (grouped by account, since `accountId IN (…) AND id IN (…)` is a cross product
+// that would delete pairs the batch never named) and then appends. It does not
+// merge; `mergeInsert` is measured broken on these tables twice over.
+//
+// `id` alone is NOT the identity. Gmail message ids are per-mailbox, so two
+// accounts can legitimately hold the same id, and `accountId: ""` is the
+// legacy/gcloud-ADC sentinel — a real value, not "unset".
+//
+// Anything that appends to this table WITHOUT deleting the pair first breaks the
+// invariant silently, because no read will error: a duplicate just makes one row
+// win. `getEmailsByIds` therefore does not assume uniqueness — it picks the
+// newest `date` deterministically rather than whichever row the scan reached
+// last. Keep those two facts together: this note says duplicates should not
+// exist, the lookup says what happens if one does anyway.
+// ---------------------------------------------------------------------------
 const emailSchema = new Schema([
   new Field("id", new Utf8()),
   new Field("accountId", new Utf8()),
