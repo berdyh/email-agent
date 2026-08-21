@@ -260,59 +260,15 @@ Found by: wave 1 (feature/todos-w1-queue, 2026-08-07); scope corrected after
 the codex (gpt-5.6-sol xhigh) review of PR #8, 2026-08-07, which found the
 branch describing these as fixed.
 
-### Verify a stranded apply against Gmail instead of asking the user
-**Priority:** P2
-**Decision taken 2026-08-20 by the repo owner: the app should check Gmail
-itself.** The original design asked the user, on the reasoning that "only a
-person can know whether the change actually reached Gmail". That is true in
-general and **false for this application's operation set** — which is what makes
-this work rather than a nicety.
-
-**Why verification is possible here.** Every operation this app performs is an
-idempotent label state, readable back from `messages.get(id, format=minimal)`:
-
-| operation | intended end state |
-|---|---|
-| `markRead` / `markUnread` | `UNREAD` absent / present |
-| `trash` | `TRASH` present |
-| `spam` | `SPAM` present |
-| `addLabels` / `removeLabels` | the label ids present / absent |
-
-There is no send, no permanent delete (`batchDelete` is rejected — see
-"Concurrency for applying operations"), and no counter. Nothing in this set is
-dangerous to repeat, which is what makes both the check and a re-apply safe.
-
-**What to build.**
-1. For each row stale in `applying`, read the message back and compare its
-   labels to the intended end state. Resolve `applied`, or return it to
-   `pending`, without involving the user.
-2. **Notify.** Today a stranded row is invisible unless someone navigates to it,
-   which is the real gap — the notifications module was removed as dead code in
-   an earlier cleanup, so this is a small re-add, or simply a line printed by
-   `serve` and `fetch`.
-3. Keep the human path for the cases the API genuinely cannot answer: the
-   message 404s because it was deleted outright, the credentials for that
-   account no longer work, or the verification call itself fails.
-4. **Record the evidence separately.** `verified-by-api` and `user-confirmed`
-   are not the same claim, and the audit trail should not merge them.
-
-**Two limits to write down rather than smooth over.** The check reads the state
-*now*; it cannot prove this app's call caused it, so a message you archived
-yourself on your phone will be credited to the app. The end state is right and
-the attribution is not. And a row queued under the `""` ADC sentinel is
-verified against whatever identity is ambient at check time — the same trap as
-applying it, so the same caveat applies.
-
-**What this replaces.** The previously-documented residual: an apply that
-claims a row, calls Gmail, hangs past `STALE_APPLYING_THRESHOLD_MS` (15 min)
-and then succeeds would have its outcome discarded by the user's adjudication,
-returning the row to `pending` with an audit trail saying it never happened.
-That window closes for every operation the check can answer, and shrinks to the
-404 / broken-credentials cases for the rest.
-
 ### The adjudication count can undercount (the stale-handle half is closed)
 **Priority:** P3 for the undercount; the stale-handle half closed on feature/todos-w10-cleanup (2026-08-07)
-**Found while fixing the above:** a LanceDB `Table` handle is PINNED to the
+**Unchanged by "Verify a stranded apply against Gmail" (Completed, feature/todos-w11-bugfixes, 2026-08-21):**
+`verifyStrandedApplyingOperations()` writes through this exact same
+`resolveStrandedApplyingOperations`/`adjudicateStrandedOperations` path — it is
+not a second writer with its own count — so the undercount property below
+applies identically whether the evidence is `"user-confirmed"` or
+`"verified-api"`.
+**Found while fixing stranded adjudication:** a LanceDB `Table` handle is PINNED to the
 version it was opened at. A handle another writer has moved past reads OLD rows
 with no error and THROWS `Commit conflict for version N` on write;
 `checkoutLatest()` refreshes it in place. Verified on a real table against
@@ -886,6 +842,19 @@ currently DB-only, and whose failure means the proposal is never recorded at
 all), and re-resolving at apply time to compare (same cost, and it can only
 report the mismatch after the row has already been claimed).
 
+**The stranded-verification read-back (feature/todos-w11-bugfixes, 2026-08-21)
+inherits this exact trap, one call earlier in a row's life.** A `""`-sentinel
+row stranded in `applying` is now also checked via `createGmailClient("")` —
+resolved at whatever moment `verifyStrandedApplyingOperations()` runs, not at
+the moment the row was queued or claimed. Unlike the apply path above, the
+read path is NOT symmetric: a wrong-mailbox 404 costs nothing (a
+`message-missing` residual), but a wrong-mailbox message that happened to
+carry the same id and already-matching labels would return a positive
+verdict — so this pass may read and requeue a `""` row, but it is barred from
+ever recording one `applied` on that evidence (see "Verify a stranded apply
+against Gmail instead of asking the user", Completed). Named-account rows are
+unaffected here too.
+
 ## Testing
 
 ### The integration harness exists; React rendering is what it does not cover
@@ -946,6 +915,17 @@ setup DELIBERATELY, noted here so nobody reads them as missed:
     per-operation failure, because there is no linked account. The claim, the
     resolution, the reporting and the exit codes are covered; "the trash really
     reached Gmail" is not, and cannot be from here.
+  - **A real Gmail `messages.get` READ, new as of the stranded-verification
+    wave (feature/todos-w11-bugfixes, 2026-08-21).** The same "no linked
+    account" limit applies to the read side, not just the write side above:
+    neither the web route harness nor the CLI e2e harness has a linked Gmail
+    account, so `createGmailClient` throws before any request reaches Gmail and
+    every verify call in both lands on the `credentials` residual. The
+    `applied`/`notApplied` VERDICT branches (a genuine label match or mismatch
+    reaching `verdictFromLabels`) are unreachable from either surface's test
+    harness and are covered only by core's own injected-reader tests
+    (`verify-stranded.test.ts`, 19 cases). The 404's three-way meaning and
+    Gmail's purge-from-Trash behaviour are documented, not observed.
   - **A REAL MODEL.** Narrowed on feature/todos-w10-cleanup (2026-08-07): `run-action` IS now
     driven end to end — prompt construction, the HTTP call, `parseActionOutput`,
     `mapResultToOperations`, the queue write, the approval prompt and the exit
@@ -1286,6 +1266,102 @@ passes — proof the route-level wiring is independently covered, not just the
 shared helper.
 Landed in `57f5d03`.
 Found by: writing the route tests, 2026-08-07.
+
+### Verify a stranded apply against Gmail instead of asking the user
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+The app now checks a stranded row against Gmail itself before a human ever
+sees it, per the owner's decision of 2026-08-20.
+`verifyStrandedApplyingOperations()` (`packages/core/src/actions/verify-
+stranded.ts`) reads `getStaleApplyingOperations()` first as a cheap DB-only
+gate — zero stale rows means zero Gmail calls and zero output — then reads
+each stale row's current labels back (`gmail/read.ts`'s barrel-private
+`readMessageLabels`, `users.messages.get` with `format: "minimal"`) and
+compares them to the operation's intended end state via `verdictFromLabels`:
+`spam` needs SPAM present AND INBOX absent (`markAsSpam` is one atomic
+`modify` carrying both, so that pair IS the end state — the predicate table
+originally drafted in this entry said "SPAM present" alone and was wrong);
+`trash` needs TRASH present alone (Gmail drops INBOX implicitly; requiring it
+would manufacture false negatives). It resolves what it can WITHOUT the user
+and hands the rest to a person with WHICH of five specific reasons it hit —
+`message-missing`, `credentials`, `check-failed`, `unverifiable-operation`, or
+`unscoped-account` — never a blanket "could not check."
+
+Runs automatically, gated on the same cheap read, at `email-agent fetch` and
+at `email-agent serve` startup (owner's decision D1; `serve` previously had no
+`@email-agent/core` dependency at all, so this is a genuinely new cost for
+that command). The same check also fires on demand at `POST
+/api/approvals/stranded/verify` (mutation-guarded) and inline at the top of
+`email-agent approvals stranded [--review]`. A new `resolutionEvidence` column
+(`"user-confirmed"` | `"verified-api"` | `""`) records which of those two
+sources closed a row out, answering item 4's ask that the two claims not be
+merged. The surfaces — `StrandedOperationsPanel`, `approvals stranded`, and
+the `fetch`/`serve` notify line — all shipped in this same wave, on this same
+branch; this was not left as a follow-up.
+
+**What this does NOT do — three limits, written down rather than smoothed
+over:**
+
+LIMIT 1 (causation, not correctness): The check reads the message's state NOW
+and compares it to the intended end state; it does not and cannot prove THIS
+APP'S CALL caused that state. A message you archived yourself, from your
+phone, five minutes before the check ran, will be credited to Email Agent —
+the end state is right and the attribution is wrong. A verified-applied row is
+proof only that the mailbox is now in the state the app wanted, never proof
+that the app's own call produced it.
+
+LIMIT 2 (the mirror, and the dangerous direction): the check is equally blind
+to a REVERSAL. An apply that really landed and was then undone by the user —
+un-archived, re-marked unread, restored from Trash — verifies `notApplied` and
+is RE-PROPOSED as an ordinary pending row needing an explicit approval again.
+Nothing mutates unasked, but this is the direction that can produce a SECOND
+mutation, and approving it a second time would undo the user's own later
+action. The operation set is idempotent (no send, no permanent delete, no
+counter), so the honest sentence is: idempotent, therefore it cannot destroy
+anything; it can still undo something the user did in between.
+
+LIMIT 3 (the ADC sentinel replays at check time too): a row queued under the
+`""` gcloud-ADC sentinel is verified through `createGmailClient("")`, which
+resolves to whatever account is ambient AT THE MOMENT THE CHECK RUNS — a third
+moment ADC can have moved, after queue time and approval time. The asymmetry
+is free: a wrong-mailbox `notApplied` costs nothing (an ordinary requeue that
+needs approval again), but a wrong-mailbox `applied` would retire the row
+silently on evidence from a different account — so such a row may be READ and
+REQUEUED, but this pass never records it `applied`. Only a person can close it
+out. Named-account rows are unaffected.
+
+**What this replaces, and what it does not close.** The residual documented in
+"The adjudication count can undercount" — an apply that claims a row, calls Gmail, hangs past
+`STALE_APPLYING_THRESHOLD_MS` (15 min) and then succeeds, with its outcome
+discarded by an adjudication answering "it didn't happen" — DOES NOT CLOSE.
+Verification narrows WHICH rows reach that window (only the ones neither the
+API check nor a person has yet resolved); it does not close the window
+itself, and a regression test pins exactly that the window still exists. What
+improved is the quality of the answer that beats it when the window is open —
+the app checks Gmail before asking, rather than only ever asking.
+
+**D3, checked against the code rather than assumed.** A row this pass
+requeues to `pending` is an ordinary pending row with no special-case guard
+against `gmail.autoApplyActions`. In practice it is never reached by that same
+run's auto-apply, because `enqueueOperationsDetailed()` makes a best-effort
+skip of proposals identical to a row already `pending`, and the requeued row
+is exactly that — so a re-proposal is deduped away before it can be applied.
+This is a property of the pre-existing dedupe, not new engineering built to
+prevent it, and the dedupe's own pre-existing caveat still applies unchanged:
+it is check-then-insert, so two CONCURRENT runs can each insert a fresh
+duplicate before either sees the other's row, and with `gmail.autoApplyActions`
+on, one of those new rows can be auto-applied — the requeued row itself still
+needs an explicit approval regardless.
+
+**Not claimed.** No linked Gmail account exists on this machine, so the
+`applied`/`notApplied` verdict branches are exercised only through core's
+injected reader (`verify-stranded.test.ts`, 19 cases); neither the web route
+harness nor the CLI e2e harness can reach `verdictFromLabels` at all, because
+both lack credentials and every verify call there lands on the `credentials`
+residual first. A real `users.messages.get` response, the 404's three-way
+meaning, and Gmail's purge-from-Trash behaviour are documented, not observed.
+React component rendering (`StrandedOperationsPanel` firing the check once per
+mount, the toast, the per-row reason) remains untested — no component testing
+library exists in this repo.
 
 ### The chained-`.where()` fix has no regression test
 **Completed:** feature/todos-w3-tests (2026-08-07)
