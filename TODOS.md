@@ -151,27 +151,6 @@ also asserts that `GET` still LISTS the unloadable file, without which the id in
 the 422 would not be something the user can act on.
 Found by: codex (gpt-5.6-sol xhigh) adversarial pass, round 2 (2026-08-07).
 
-### Record which surface approved an operation
-**Priority:** P3
-**No longer blocked** (2026-08-07).
-Add an `approvedVia` column to `pending_operations` — `web` | `cli` |
-`auto-apply` — written when a row is claimed. This is **attribution only, zero
-prevention**: as the residual above explains, the value is set by whichever
-in-process caller performs the apply and proves nothing about who asked for it.
-It is worth having anyway, because "was this batch applied by a person or by
-the auto-apply setting?" is currently unanswerable from the table, which is the
-one question an audit trail exists to answer.
-The block is gone, and the sentence that created it was false: it read "LanceDB
-has no ALTER TABLE, so adding a column means drop+recreate, and the migration
-that would do it currently discards resolved rows". `@lancedb/lancedb` 0.15.0 has
-`Table.addColumns`, no migration drops anything any more, and `ensureTableColumns`
-adds a column in place with a per-table sentinel. Adding `approvedVia` is now a
-field in `pendingOperationSchema` plus an entry in
-`pendingOperationColumnDefaults` — see "The `pending_operations`/`action_results`
-/`emails` migrations…" in Completed, whose closing lesson is exactly this: a
-capability claim about a dependency is a fact with a version attached, and this
-entry inherited the wrong one.
-
 ### If `EmailAction` ever gains an executable field, extraction stops being enough
 **Priority:** P3 (conditional — no work until the trigger)
 Pure-data extraction works because `EmailAction` is five strings and two
@@ -497,7 +476,24 @@ cannot be produced through `upsertEmails`, which replaces that pair.
 `no-chained-where.test.ts` loses both allowlist entries, so its sweep now proves
 there is no LanceDB query surface outside `db/` other than the two test helpers.
 
-Still open, and carried forward here rather than lost:
+**The P4 sub-bullet below is now CLOSED — feature/todos-w11-bugfixes
+(2026-08-21).** `emailSchema` in `db/connection.ts` now states the invariant
+where the schema is defined: row identity is the pair (`accountId`, `id`),
+exactly one row per pair is expected, and it is upheld by ONE writer
+(`upsertEmails` deleting the pair before appending) rather than enforced —
+LanceDB has no primary key or unique constraint, so nothing rejects a second
+row. `getEmailsByIds` no longer picks "last row scanned wins": it picks the
+newest `date` deterministically, via `Date.parse` rather than a string
+compare — `EmailRecord.date` is the raw RFC-2822 `Date:` header off the
+message, and lexical and chronological order disagree on it (`"Fri, 1 Jan
+2027"` sorts before `"Mon, 2 Feb 2026"` as a string). An unparseable date
+ranks below any real timestamp, and a genuine tie keeps the incumbent — two
+rows sharing a pair and a date have nothing to distinguish them, so which one
+wins is documented as arbitrary. `db/email-lookup.test.ts` covers newest-wins,
+order-independence, parseable-beats-unparseable in both scan orders, and the
+tie case. Landed in 2032a46.
+
+Original text, superseded above:
   - The duplicate-row case the `.limit()` fix now tolerates would be better
     prevented: nothing enforces one row per `(accountId, id)` in the `emails`
     table. `upsertEmails` deletes that pair before appending it (it no longer
@@ -665,76 +661,6 @@ unchanged — which is the check that the two bodies really were identical.
 
 ## Web
 
-### The regex action-id reader is still alive in web, and skips the collision check
-**Priority:** P3
-Found 2026-08-20 while writing the product explainer. Still live.
-
-`actions/MODULE.md` states that the regex reader of an action's id was
-eliminated so a file has ONE identity — "a second reader is how a file came to
-list under one id and load under another". That is true **inside core**:
-`readUserActionFiles()` is the sole reader there.
-
-It is not true of web. `packages/web/src/lib/action-id.ts` still matches the id
-out of the raw source with a regular expression:
-
-```js
-source.match(/id:\s*["'`]([^"'`]+)["'`]/)
-```
-
-and `POST /api/actions/user` (`route.ts:57-66`) uses its result to gate the
-built-in-id conflict check, returning 409 when the id collides with `junk`,
-`priority` or `subscription`.
-
-The regex only sees an id written as a literal on the `id:` line. An action
-written as
-
-```ts
-const ID = "junk";
-export default { id: ID, name: "…", prompt: "…" };
-```
-
-is accepted by the AST evaluator (a name bound to a literal earlier in the file
-resolves — that is deliberate, it is what allows `const PROMPT = "…"`), but
-`extractActionId` returns `null`, so `actionId` is falsy and the whole conflict
-block is skipped. The file saves, and now shadows a built-in.
-
-`use-action-chat.ts:3` uses the same helper to derive a filename, so the same
-shape also produces a filename that does not match the action's real id.
-
-Fix: have the route ask core for the parsed id (`extractActionData` already
-returns it, and already proves it is a non-empty string) instead of re-deriving
-it from text. That deletes the second reader rather than repairing it, which is
-what the module card already claims happened.
-
-### The web settings form stores a Google client secret that nothing ever reads
-**Priority:** P3
-Found 2026-08-20 while writing the product explainer. Still live.
-
-`PUT /api/settings` accepts an `oauth` block and requires both fields
-(`modules/api/validation.ts:538-544`), `normalizeSettings` persists it
-(`config/settings.ts:164`), and it is correctly kept out of responses
-(`SanitizedSettings` omits `oauth`), so it never leaks back to a client.
-
-But **no code path reads it for authentication.** `getOAuthCredentials()`
-(`gmail/account-manager.ts:35`) reads `~/.email-agent/oauth.json` and nothing
-else, and it is the only source `addAccount` consults.
-
-Net effect for a user who finds the field in Settings and fills it in: their
-Google **client secret** is written to `~/.email-agent/settings.json` in
-plaintext, and the OAuth flow still fails with "OAuth credentials not
-configured". Two defects in one — a dead end that reads as the configuration
-step, and an unnecessary secret at rest.
-
-Decide which way it goes and make the code say so:
-- **wire it up** — have `getOAuthCredentials()` fall back to `settings.oauth`
-  when `oauth.json` is absent, and the field becomes real; or
-- **remove it** — drop the block from the validator and the settings type, and
-  point the UI at `setup.sh` / `oauth.json`, which is where the credentials
-  actually have to live.
-Removing is the smaller surface and does not add a second place a secret can
-sit. Either way, a field that silently does nothing with a secret is the worst
-of the three options.
-
 ### Unlock the local UI with a one-time token, then a session cookie
 **Priority:** P2
 **Decision taken 2026-08-20 by the repo owner: build the token flow.** This
@@ -816,17 +742,6 @@ Google's own `state` echo, the browser's cookie handling across the redirect and
 `exchangeCode` itself are verified by reading only. Do not call this control
 end-to-end verified until someone links a real account.
 
-### OAuth redirect URI is now origin-derived
-**Priority:** P3
-`getOAuthRedirectUri(request)` builds the callback from
-`request.nextUrl.origin` so `serve --port N` works, which means **every origin
-the app is served on must be registered as an authorized redirect URI in the
-Google Cloud console** — previously only `localhost:3847` had to be. Also: two
-add-account flows started concurrently in one browser share the single state
-cookie, so the second overwrites the first and the first callback 403s. Both are
-acceptable today; document them in the setup guide rather than let a user
-discover them at the consent screen.
-
 ## CLI
 
 ### `actions snapshots` list/restore are only covered by their filename parser
@@ -868,37 +783,6 @@ found by mutation-checking, not by design: the first version of the test passed
 against the unguarded setter.
 
 ## Core Gmail
-
-### `listAccounts()` fails open, and can route writes to a different mailbox
-**Priority:** P2
-Found 2026-08-20 while writing the product explainer, by checking prose against
-source. Still live.
-
-`listAccounts()` (`gmail/account-manager.ts:129-137`) wraps `loadSettings()` in
-`try { … } catch { return [] }`. That catch swallows **every** error, including
-the deliberate fail-closed throw the config layer documents at length: only
-ENOENT means "no settings file, use defaults"; every other errno and an
-unparsable file THROW, precisely so that absence of information is never read as
-permission.
-
-The catch converts that throw into "this user has no accounts configured", and
-an empty account list is exactly the input that sends `createGmailClient()` down
-the ambient-credentials branch. So a settings file that is momentarily
-unreadable — a permissions change, a partial write, a disk error — does not
-fail. It silently redirects Gmail **writes** to whatever identity `gcloud` is
-signed in as.
-
-That is the same class of harm the credential router's deliberate refusal
-exists to prevent (a named account with missing tokens THROWS rather than
-falling back). One function undoes it for the whole-list case. Note the
-observable symptom is not an error: Gmail message ids are per-mailbox, so the
-call against the wrong account 404s and the queue row resolves `failed` — a
-dropped approved change, attributed to nothing.
-
-Fix: catch ENOENT only, and let every other error propagate, matching
-`loadSettingsFromPath`. Check the one in-module caller
-(`account-manager.ts:194`) and every barrel consumer for a path that relied on
-the swallow.
 
 ### Concurrency for applying operations (batchModify is rejected)
 **Priority:** P4 (deferred with preconditions, 2026-08-07)
@@ -1113,16 +997,6 @@ literal reorders numeric-looking ids and a key sort discards the server's
 ordering), and the classification's are about the DEFAULT (anything
 unrecognised, including `"yes"`, keeps the change queued).
 
-### `validationResponse` does not recognise a malformed JSON body
-**Priority:** P4
-`await request.json()` throws a `SyntaxError` that `validationResponse` does not
-match, so every mutating route answers **500** — with a stack trace logged — for
-a body that is simply not JSON. A well-formed body with a bad shape is correctly
-a 400. Found while writing the route tests; pinned as-is in
-`approvals.route.test.ts` with a comment saying it is a wart rather than a
-contract, so the behaviour cannot drift unnoticed. When it becomes a 400, change
-that assertion in the same commit.
-
 ### The two instruction files were separate, and the drift caused defects
 **Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 `CLAUDE.md` and `AGENTS.md` were two files with heavily overlapping content,
@@ -1202,6 +1076,216 @@ disagree — set-for-set on the deep paths and target-for-target on each. No
 existing import needed the fallback.
 
 ## Completed
+
+### `listAccounts()` fails open, and can route writes to a different mailbox
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+`listAccounts()` (`gmail/account-manager.ts`) no longer wraps `loadSettings()`
+in `try { … } catch { return [] }` — the try/catch is gone entirely, and so is
+the `?? []` that followed it (`AppConfig.accounts` is a required array that
+`normalizeSettings()` always produces, so it was unreachable). The function now
+just calls `loadSettings()` and returns `settings.accounts`.
+
+**The originally proposed fix is SUPERSEDED, not done as written.** The entry
+said "catch ENOENT only, and let every other error propagate." What shipped
+instead is no catch at all, and that is deliberate, not an oversight:
+`loadSettings()` already owns the whole "what does an unusable settings file
+mean?" policy (ENOENT → defaults; every other errno, and a file that exists but
+does not parse → throw), and a narrowed catch here would have been a second
+copy of that policy. It could not have worked anyway — the non-ENOENT failures
+`loadSettings()` throws are plain `Error`s with the errno interpolated into the
+*message*, not a `.code` a catch could branch on.
+
+**The harm chain is corrected too.** The original entry's last paragraph said
+the observable symptom is a wrong-account write 404ing and the queue row
+resolving `failed`. That is only the sub-case where ADC was re-pointed *between*
+the fetch and the apply. The actual chain is fetch-time poisoning, and the worse
+case succeeds silently: an unreadable/corrupt `settings.json` during a fetch →
+`resolveAccountEmail(undefined)` resolves to `""` → `syncEmails` uses that both
+as the fetch identity and as the stored `accountId`, so the whole sync runs
+against gcloud ADC and every row lands under the legacy `""` sentinel → a later
+action run queues `pending_operations` rows with `accountId: ""` → at approval,
+`createGmailClient("")` resolves ADC again and the write **succeeds** against
+the ADC mailbox, because the message ids came from it, and is recorded as
+`applied`. `email-agent cron setup` is where this bit hardest: an unattended
+crontab fetch used to silently sync the wrong mailbox; it now exits 1 with the
+repair instruction instead.
+
+Both callers already handled the throw and needed no change: CLI `accounts
+list` prints the error text and exits 1, `GET /api/accounts` answers 500 and
+logs.
+
+**Tests:** `packages/core/src/gmail/account-manager.settings-failure.test.ts`
+(a new file — `account-manager.test.ts` statically imports the module, fixing
+`SETTINGS_PATH` against the real `$HOME` before `useTempHome()` could redirect
+it): returns `[]` on genuine ENOENT; throws rather than returning `[]` on
+invalid JSON; propagates through `getDefaultAccount()`; throws on an unreadable
+file (`chmod 000`). Mutation-checked: restoring the original
+`try { … } catch { return [] }` fails 3 of 4 cases (the ENOENT case passes in
+both states by design — it is the guard against over-correcting into "throw on
+a fresh install").
+
+**Does NOT cover:** there is still no direct Gmail write path through the old
+swallow — every write already carries an explicit `accountId` — so this closes
+the poisoning-at-fetch-time vector, not a write-time one.
+Found by: product explainer pass, 2026-08-20, by checking prose against source.
+
+### Record which surface approved an operation
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+`pending_operations` gains an `approvedVia` column (`"web"` | `"cli"` |
+`"auto-apply"` | `""`), written wherever a row leaves `pending`. **Attribution
+only, exactly as scoped when this was opened**: it gates nothing and proves
+nothing, because there is no unforgeable in-process caller identity to derive
+it from (ESM module identity is process-global) — the value is a literal each
+caller binds statically about itself.
+
+`claimPendingOperations()` takes it as a REQUIRED parameter with no default:
+`""` is reserved for unclaimed-or-legacy, so a claim that omitted a surface
+would be indistinguishable from a pre-column row in the audit trail. It is a
+`values`-only field and never enters a `where` predicate, so the claim's atomic
+write predicate is unchanged. The migration sentinel is `CAST('' AS STRING)` —
+a legacy row already `applying` or `applied` genuinely has no recorded surface,
+and filling in a plausible `"web"` would fabricate an audit record nobody
+observed. `adjudicateStrandedOperations` clears it back to `""` only on a
+`notApplied` answer (the row is genuinely unclaimed again); the `applied`
+branch deliberately leaves it, so a stranded row keeps recording which surface
+initiated the crashed apply — the one case where the field stays informative.
+
+**Forced cross-package edits**, the required parameter breaking assignability:
+web's apply/reject routes pass `"web"`; the CLI binds `"cli"` in the
+`deps.apply`/`deps.reject` fallbacks rather than widening `ApplyDeps`/
+`RejectDeps` (a 2-arg function cannot satisfy a 1-arg type, and every injected
+test double would have had to change); `rejectPendingOperationsByIds`'
+`resolvedAt` argument moved one position right when `approvedVia` was inserted
+before it, pinned by a test that reads it back off the table rather than off
+the returned rows.
+
+**Tests:** a real-table claim-path case; a case covering the `"cli"` and
+`"auto-apply"` literals through the product's own apply/reject entry points; a
+migration case over the realistic intermediate shape (claim columns present,
+only this one missing, rows already claimed) proving they come back
+unattributed with their claim state untouched; stranded-adjudication
+assertions for both the `notApplied`-clears and `applied`-keeps directions
+(`936f9a2`). Mutation-checked: dropping `approvedVia` from the claim's
+`values` object fails the claim-path cases; changing the sentinel to
+`CAST('web' AS STRING)` fails both migration cases; removing the `notApplied`
+clear, or adding the same clear to the `applied` branch, each fail their
+respective case.
+
+**Does NOT cover:** displaying the value anywhere in the CLI or web UI — left
+to whoever owns those surfaces next.
+Landed in `02427f7`, `936f9a2`.
+
+### The regex action-id reader is still alive in web, and skips the collision check
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+`packages/web/src/app/api/actions/user/route.ts`'s built-in-conflict check now
+calls `extractActionData()` (already exported from the `@email-agent/core/actions`
+barrel) instead of the deleted `packages/web/src/lib/action-id.ts` regex. A
+const-bound id (`const ID = "junk"; export default { id: ID, ... }`) resolves
+correctly through the AST evaluator, exactly as it does at load time — the
+regex only matched a literal on the `id:` line, so such a file used to save to
+disk shadowing a built-in action without tripping the conflict check.
+`UnsafeActionSourceError` is allowed to propagate to the existing 422 handler
+rather than being caught separately, so a file that is both unsafe *and*
+colliding is reported for the guard violation first — the more fundamental
+problem, and the one the chat UI needs `.violations` to fix.
+
+`use-action-chat.ts`'s `deriveFilename()` keeps a private `bestEffortIdGuess()`
+regex helper, explicitly commented as cosmetic-only: it seeds an editable
+filename `<Input>` the user can retype before Save, never an identity or
+security decision, and must not be re-exported as `extractActionId` or rewired
+into a decision again.
+
+**Tests:** `packages/web/src/modules/api/user-actions.route.test.ts` — first
+coverage of `POST /api/actions/user` at all. Five cases: const-bound shadowing
+id (the bug — pre-fix it returned 200 and actually wrote the shadowing file to
+disk), literal-id shadowing (baseline), non-conflicting const-bound id (happy
+path), guard-violation+collision overlap (precedence pin: 422, not 409 — the
+old regex saw the literal `"junk"` and won the race before the safety guard
+ever ran), and the mutation guard. Mutation-checked: restoring the regex path
+inline fails exactly the two pre-fix cases (const-bound shadow, precedence
+pin), confirming the tests are pinned to the fix rather than incidentally
+green.
+
+**Does NOT cover:** a second mutation — wrapping `extractActionData()` in a
+try/catch that swallows `UnsafeActionSourceError` — did not kill any test,
+because `saveUserAction()` independently re-validates via its own
+`assertSafeActionSource()` call (a deliberate, accepted double-parse); this is
+a property of that design, not a coverage gap.
+Landed in `f82d678`.
+Found by: product explainer pass, 2026-08-20.
+
+### The web settings form stores a Google client secret that nothing ever reads
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+Resolved by removal, the smaller of the two options the entry named.
+`OAuthConfig` and `AppConfig.oauth` are deleted from `packages/core/src/config/
+types.ts`; `normalizeSettings` no longer round-trips an `oauth` block.
+`PUT /api/settings` now refuses the key outright — `Unknown setting: oauth`
+(400) — instead of accepting and persisting a plaintext client secret nothing
+ever read (`getOAuthCredentials()` reads only `~/.email-agent/oauth.json`).
+`GET /api/accounts`'s 400 and the Settings page both now point at `setup.sh` /
+`~/.email-agent/oauth.json` instead of a vague "run setup first."
+
+**A settings file already carrying the field from a pre-removal build is not
+silently left unexplained.** `hasLegacyOauthKey`/`legacyOauthNotice`
+(mirroring the existing `gmail.syncActions` pattern) warn once per `(path,
+kind)` on the load that drops it — the notice cache was widened from a
+bare-path key to a composite one specifically because two legacy keys
+(`syncActions`, `oauth`) can be present in the same file on the same cache
+miss, and a bare-path key would let whichever check runs first suppress the
+other's notice.
+
+**Tests:** core: a settings.json carrying a well-formed `oauth` block is
+dropped (the old test only covered a malformed one); the paired-notice
+behaviour (both present → 2 notices, neither suppressing the other). Web: unit
+coverage for the 400; a new `settings.route.test.ts` seeds a settings.json with
+a pre-removal `oauth` block on disk, PUTs an unrelated update, and reads the
+file back to prove the plaintext secret is gone — empirical, not just
+inspection. Mutation-checked (3): reverting the notice key to bare-path fails
+the paired-notice test; re-adding `"oauth"` to the accepted key set fails both
+the unit and route-level rejection tests; reintroducing the round-trip write
+fails the drop test, the syncActions-notice ordering test, and the on-disk
+purge test.
+
+**Does NOT cover:** an on-disk `oauth` block written by a pre-removal build
+survives in plaintext until the *next* save — there is no read-path
+self-repair, matching the `gmail.syncActions` precedent. The Settings-page
+one-liner and the reworded `accounts` route message are type-checked only; no
+component-rendering test exists in this repo, and no test pins the accounts
+message text. `email-agent config set oauth.clientSecret <value>` now silently
+degrades to the same generic "unknown key, dropped on save" no-op every other
+removed key already gets.
+Landed in `cc6cd40`.
+Found by: product explainer pass, 2026-08-20.
+
+### `validationResponse` does not recognise a malformed JSON body
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
+`parseJsonBody(request)` (`modules/api/validation.ts`) is now the ONE place any
+route parses a request body — every one of the 12 route files that previously
+called `await request.json()` inline (14 call sites) calls `parseJsonBody`
+instead. It catches only `SyntaxError` and rethrows it as
+`RequestValidationError("Request body must be valid JSON")`, which
+`validationResponse` already maps to 400. Deliberately narrow: catching every
+`SyntaxError` a route's try block might raise would misclassify one thrown
+elsewhere in that block as "the client sent a bad body" — this scopes the
+reclassification to the one call site that can genuinely produce it for that
+reason. Anything else `.json()` throws (a body already consumed, a stream
+error) is a real 500 and is rethrown unchanged.
+
+The pinned assertion in `approvals.route.test.ts` — the "MALFORMED JSON IS A
+500 TODAY" comment and `assert.equal(malformed.status, 500)` — was flipped to
+400 in the same commit, exactly as this entry required.
+
+**Tests:** the route-test flip above; a new unit test in `validation.test.ts`
+covering `parseJsonBody` directly (malformed → `RequestValidationError`;
+well-formed → transparent pass-through; an already-consumed body's `TypeError`
+rethrown as itself, not misclassified). Mutation-checked (2): making
+`parseJsonBody` a bare passthrough kills both the new unit test and the pinned
+route test; reverting one route (`approvals/stranded`) back to raw
+`request.json()` kills only the pinned route test while the unit test still
+passes — proof the route-level wiring is independently covered, not just the
+shared helper.
+Landed in `57f5d03`.
+Found by: writing the route tests, 2026-08-07.
 
 ### The chained-`.where()` fix has no regression test
 **Completed:** feature/todos-w3-tests (2026-08-07)
