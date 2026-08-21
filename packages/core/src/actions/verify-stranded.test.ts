@@ -132,10 +132,19 @@ interface Recorder {
   maxConcurrentReads: number;
 }
 
+/**
+ * A stub read. An ARRAY is a per-call SEQUENCE — element 0 answers the first
+ * read of that message, element 1 the second, and the last element repeats
+ * from then on. That is what makes the re-read pass testable without timing:
+ * "Gmail changed between the two reads" is expressed as two literal values.
+ */
+type StubRead = MessageLabelRead | MessageLabelRead[] | (() => MessageLabelRead);
+
 function recorder(
   rows: PendingOperationRecord[],
-  reads: Record<string, MessageLabelRead>,
+  reads: Record<string, StubRead>,
 ): Recorder {
+  const callsPerMessage = new Map<string, number>();
   const state: Recorder = {
     readCalls: [],
     adjudications: [],
@@ -152,9 +161,15 @@ function recorder(
         );
         await Promise.resolve();
         state.inFlightReads -= 1;
-        return (
-          reads[messageId] ?? { kind: "error", message: "no stub configured" }
-        );
+        const nth = callsPerMessage.get(messageId) ?? 0;
+        callsPerMessage.set(messageId, nth + 1);
+        const stub = reads[messageId];
+        if (stub === undefined) {
+          return { kind: "error", message: "no stub configured" };
+        }
+        if (typeof stub === "function") return stub();
+        if (!Array.isArray(stub)) return stub;
+        return stub[Math.min(nth, stub.length - 1)] as MessageLabelRead;
       },
       adjudicate: async (ids, decision, evidence) => {
         state.adjudications.push({ ids: [...ids], decision, evidence });
@@ -281,11 +296,168 @@ describe("verifying stranded rows", () => {
     );
     // The row IS checked, rather than skipped: skipping it would leave the user
     // no better off than before the verifier existed.
+    //
+    // `msg-adc-no` appears TWICE and last: it is the only requeue candidate, so
+    // the second pass re-reads it immediately before the write. Both of its
+    // reads carry "" verbatim — a `""` row is never checked against the
+    // configured default account, on either pass.
     assert.deepEqual(state.readCalls, [
       ["msg-adc-yes", ""],
       ["msg-adc-no", ""],
       ["msg-named", "me@example.com"],
+      ["msg-adc-no", ""],
     ]);
+  });
+
+  it("re-reads a requeue candidate and records the flip as applied", async () => {
+    // THE READ-BEFORE-WRITE WINDOW, NARROWED. Pass one reads UNREAD present ->
+    // notApplied. The hung apply then lands. Without the second read the row
+    // would be requeued on stale evidence, its audit trail would say the change
+    // never happened, and a later approval could send it to Gmail again.
+    const rows = [row({ id: "flip", type: "markRead" })];
+    const state = recorder(rows, {
+      "msg-flip": [
+        { kind: "labels", labelIds: ["INBOX", "UNREAD"] },
+        { kind: "labels", labelIds: ["INBOX"] },
+      ],
+    });
+
+    const result = await verifyStrandedApplyingOperations(state.deps);
+
+    assert.deepEqual(result.appliedIds, ["flip"]);
+    assert.deepEqual(result.requeuedIds, [], "the stale verdict is discarded");
+    assert.deepEqual(result.unresolved, []);
+    assert.deepEqual(state.adjudications, [
+      // The flip is a full `applied` resolution, with the SAME evidence value
+      // as any other API-established one — it is a Gmail label read either way.
+      { ids: ["flip"], decision: "applied", evidence: "verified-api" },
+    ]);
+    assert.equal(state.readCalls.length, 2);
+  });
+
+  it("re-reads ONLY the requeue candidates, never the applied or residual ones", async () => {
+    // Requirement stated positively, as a call count. Re-reading an `applied`
+    // row buys nothing — the labels it saw WERE present, so an apply landing
+    // late agrees with the record about to be written — and costs 20 quota
+    // units per row. Residual rows are not being written at all.
+    const rows = [
+      row({ id: "yes", type: "markRead" }),
+      row({ id: "no", type: "markRead" }),
+      row({ id: "gone", type: "markRead" }),
+      row({ id: "odd", type: "addLabels", labelIds: "[]" }),
+    ];
+    const state = recorder(rows, {
+      "msg-yes": { kind: "labels", labelIds: ["INBOX"] },
+      "msg-no": { kind: "labels", labelIds: ["INBOX", "UNREAD"] },
+      "msg-gone": { kind: "notFound" },
+      "msg-odd": { kind: "labels", labelIds: ["INBOX"] },
+    });
+
+    await verifyStrandedApplyingOperations(state.deps);
+
+    const perMessage = new Map<string, number>();
+    for (const [messageId] of state.readCalls) {
+      perMessage.set(messageId, (perMessage.get(messageId) ?? 0) + 1);
+    }
+    assert.deepEqual(
+      Object.fromEntries(perMessage),
+      { "msg-yes": 1, "msg-no": 2, "msg-gone": 1, "msg-odd": 1 },
+      "only the requeue candidate is read twice",
+    );
+  });
+
+  it("turns a FAILED re-read into a residual and never falls back to the first read", async () => {
+    // No verdict on evidence we could not refresh. The first read said
+    // notApplied; that answer is now unusable, so the row stays `applying` for
+    // a human rather than being requeued on it. Both shapes of failure are
+    // covered: a classified `error` outcome, and a reader that literally
+    // throws (the production reader classifies instead, so this is the belt).
+    const rows = [
+      row({ id: "flaky", type: "markRead" }),
+      row({ id: "thrower", type: "markRead" }),
+    ];
+    let throwerReads = 0;
+    const state = recorder(rows, {
+      "msg-flaky": [
+        { kind: "labels", labelIds: ["INBOX", "UNREAD"] },
+        { kind: "error", message: "429 Too Many Requests" },
+      ],
+      "msg-thrower": () => {
+        throwerReads += 1;
+        if (throwerReads === 1) {
+          return { kind: "labels", labelIds: ["INBOX", "UNREAD"] };
+        }
+        throw new Error("socket hang up");
+      },
+    });
+
+    const result = await verifyStrandedApplyingOperations(state.deps);
+
+    assert.deepEqual(result.requeuedIds, [], "nothing may be requeued");
+    assert.deepEqual(result.appliedIds, []);
+    assert.deepEqual(state.adjudications, [], "and nothing may be written");
+    assert.deepEqual(
+      result.unresolved.map((entry) => `${entry.id}:${entry.reason}`),
+      ["flaky:check-failed", "thrower:check-failed"],
+    );
+    assert.equal(result.unresolved[0]?.detail, "429 Too Many Requests");
+    assert.equal(result.unresolved[1]?.detail, "socket hang up");
+  });
+
+  it("refuses an unscoped ADC row that flips to applied on the RE-READ too", async () => {
+    // THE PLACE A HASTY FIX REOPENS THE ADC HOLE. The re-read is a second route
+    // to an `applied` write, and it goes through the same `recordApplied`
+    // guard, so `createGmailClient("")`'s ambient identity can no more retire a
+    // row here than it can on the first pass.
+    //
+    // Behaviour change, and it is the right one: before the re-read existed
+    // this row was REQUEUED. Now the labels match, so re-proposing the change
+    // would re-propose something already in effect; it goes to a human instead.
+    const rows = [row({ id: "adc-flip", accountId: "", type: "markRead" })];
+    const state = recorder(rows, {
+      "msg-adc-flip": [
+        { kind: "labels", labelIds: ["INBOX", "UNREAD"] },
+        { kind: "labels", labelIds: ["INBOX"] },
+      ],
+    });
+
+    const result = await verifyStrandedApplyingOperations(state.deps);
+
+    assert.deepEqual(result.appliedIds, [], "no '' row may be applied, ever");
+    assert.deepEqual(result.requeuedIds, []);
+    assert.deepEqual(state.adjudications, []);
+    assert.deepEqual(
+      result.unresolved.map((entry) => `${entry.id}:${entry.reason}`),
+      ["adc-flip:unscoped-account"],
+    );
+    assert.deepEqual(state.readCalls, [
+      ["msg-adc-flip", ""],
+      ["msg-adc-flip", ""],
+    ]);
+  });
+
+  it("keeps the re-reads serial and after every first read", async () => {
+    // The 429 argument applies to the second pass exactly as it does to the
+    // first, and a `Promise.all` over the candidates is the tempting rewrite.
+    const rows = [
+      row({ id: "a", type: "markUnread" }),
+      row({ id: "b", type: "markUnread" }),
+      row({ id: "c", type: "markUnread" }),
+    ];
+    const state = recorder(rows, {
+      "msg-a": { kind: "labels", labelIds: ["INBOX"] },
+      "msg-b": { kind: "labels", labelIds: ["INBOX"] },
+      "msg-c": { kind: "labels", labelIds: ["INBOX"] },
+    });
+
+    const result = await verifyStrandedApplyingOperations(state.deps);
+
+    assert.deepEqual(result.requeuedIds, ["a", "b", "c"]);
+    assert.equal(state.maxConcurrentReads, 1, "reads must not overlap");
+    assert.deepEqual(
+      state.readCalls.map(([id]) => id),
+      ["msg-a", "msg-b", "msg-c", "msg-a", "msg-b", "msg-c"],
+    );
   });
 
   it("reads one message at a time, in order", async () => {

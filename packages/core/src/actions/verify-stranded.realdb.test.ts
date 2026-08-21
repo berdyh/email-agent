@@ -154,6 +154,40 @@ describe("a verification pass over the real queue", () => {
     assert.equal(row.resolutionEvidence, "");
   });
 
+  it("never records an unscoped ADC row as applied when it FLIPS on the re-read", async () => {
+    // The re-read pass is a SECOND route to an `applied` write, and this drives
+    // it against the real table rather than trusting that it shares the guard.
+    // First read: UNREAD present, so pass one would requeue. Second read: the
+    // hung apply has landed. A named-account row would now be recorded
+    // `applied`; a `""` row must not be, because `createGmailClient("")`
+    // resolves whatever identity ADC points at NOW and the match may have come
+    // from a different mailbox entirely.
+    await seedStranded("v-adc-flip", { type: "markRead", accountId: "" });
+
+    let reads = 0;
+    const result = await verifyStrandedApplyingOperations({
+      listStranded: onlyStranded(["v-adc-flip"]),
+      readLabels: async () => {
+        reads += 1;
+        return reads === 1
+          ? { kind: "labels", labelIds: ["INBOX", "UNREAD"] }
+          : { kind: "labels", labelIds: ["INBOX"] };
+      },
+    });
+
+    assert.equal(reads, 2, "the requeue candidate is re-read before the write");
+    assert.deepEqual(
+      result.unresolved.map((entry) => `${entry.id}:${entry.reason}`),
+      ["v-adc-flip:unscoped-account"],
+    );
+    assert.equal(result.appliedRecorded, 0);
+    assert.equal(result.requeuedRecorded, 0, "the stale verdict is discarded");
+    const row = await readRow("v-adc-flip");
+    assert.equal(row.status, "applying", "left exactly as it was, for a human");
+    assert.equal(row.claimToken, "token-v-adc-flip");
+    assert.equal(row.resolutionEvidence, "");
+  });
+
   it("does not touch a row a healthy apply claimed a second ago", async () => {
     // This case exercises the FIRST guard only: the row is not in the stale
     // list, so `checked` is 0 and `adjudicateStrandedOperations` is never
@@ -232,11 +266,14 @@ describe("a verification pass over the real queue", () => {
     // trail saying it never happened.
     //
     // What this feature changes is NOT that direction — it is the QUALITY OF
-    // THE ANSWER THAT BEATS IT. Here the verifier's read says notApplied, which
-    // is what a person guessing could also have said; where the hung apply
-    // really succeeded, the read would have said applied instead, so the
-    // OUTCOME converges even though the WRITE is still discarded. Do not
-    // restate that as the window being closed.
+    // THE ANSWER THAT BEATS IT. Here BOTH reads say notApplied (the requeue
+    // candidate is re-read immediately before the write), which is what a
+    // person guessing could also have said; where the hung apply really
+    // succeeded, the re-read would have said applied instead, so the OUTCOME
+    // converges even though the WRITE is still discarded. Do not restate that
+    // as the window being closed: the re-read narrows how long the evidence can
+    // be stale, and Gmail landing between the re-read and the write is still
+    // possible.
     await seedStranded("v-hung", { type: "markRead" });
 
     const result = await verifyStrandedApplyingOperations({

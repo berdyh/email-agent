@@ -46,13 +46,30 @@ import {
  *    checked, may be requeued, and is otherwise handed to a human. Silent
  *    closure is the class of failure this repo refuses.
  *
- * 4. NEW INSTANCE OF THE DOCUMENTED RESIDUAL — the read-before-claim window.
- *    This reads Gmail, then writes. If a hung apply lands in between, the
- *    verdict was `notApplied` (the state was not there yet), the write
- *    requeues, and the change is now BOTH in Gmail and in the approval queue.
- *    It cannot be closed by claiming the row before reading: a crash between
- *    claim and release would re-stamp `claimedAt`, resetting the 15-minute
- *    staleness clock and hiding the row again, which is strictly worse.
+ * 4. THE READ-BEFORE-WRITE WINDOW — NARROWED, NEVER CLOSED. This reads Gmail,
+ *    then writes. If a hung apply lands in between, the verdict was
+ *    `notApplied` (the state was not there yet), the write requeues, and the
+ *    change is now BOTH in Gmail and in the approval queue on an audit trail
+ *    saying it never happened.
+ *
+ *    Only the `notApplied` direction can go wrong this way: labels the check
+ *    SAW present were present, so an `applied` verdict a late apply also lands
+ *    stays the right end-state record. So every requeue candidate — and ONLY
+ *    those — is RE-READ immediately before adjudication (`verifyStranded
+ *    ApplyingOperations`'s second pass). That collapses the exposure from
+ *    "the whole serial read pass plus both batch writes" (seconds to minutes,
+ *    since row 1's read is already minutes old when its claim lands) down to
+ *    one read and one write.
+ *
+ *    WHAT REMAINS, and it is irreducible: Gmail can still land between the
+ *    RE-READ and the write. You cannot atomically read an external system and
+ *    write a local database. NARROWED is the only word for this; never write
+ *    "closed".
+ *
+ *    It cannot be closed by claiming the row before reading either: a crash
+ *    between claim and release would re-stamp `claimedAt`, resetting the
+ *    15-minute staleness clock and hiding the row again, which is strictly
+ *    worse.
  *
  * NOT RECOVERY, and do not describe it as such. It re-applies nothing and rolls
  * nothing back; it records an end state, or it hands the row to a person.
@@ -216,6 +233,105 @@ export interface StrandedVerificationResult {
   unresolved: StrandedResidual[];
 }
 
+/** The 404 sentence, shared by both read passes so they cannot drift apart. */
+const MESSAGE_MISSING_DETAIL =
+  "Gmail has no message with this id in the mailbox we asked. That can mean it was deleted, that this change was queued without a named account and the Google identity has changed since, or — for a Trash or Spam change — that it worked and Gmail has since purged the message.";
+
+/** The ADC sentence, shared by both paths that can reach an `applied` verdict. */
+const UNSCOPED_ACCOUNT_DETAIL =
+  "The message's labels match this change, but it was queued without a named Google account, so we cannot be sure which mailbox we just read. Confirming this one is left to you.";
+
+/** What one label read means for one row, before any ADC or write consideration. */
+type RowOutcome =
+  | { kind: "applied" }
+  | { kind: "notApplied" }
+  | { kind: "residual"; reason: VerificationResidualReason; detail: string };
+
+/**
+ * PURE. The read outcome -> row outcome mapping, in ONE place because BOTH
+ * passes use it.
+ *
+ * A second copy for the re-read pass would be a second predicate table, and
+ * this repo has already learned what a duplicated allowlist does: it drifts,
+ * and the drift is the bypass. Every fail-closed case therefore holds
+ * identically on a re-read, including the 404's three-way ambiguity.
+ */
+function classifyRow(
+  row: PendingOperationRecord,
+  read: MessageLabelRead,
+): RowOutcome {
+  if (read.kind === "notFound") {
+    return {
+      kind: "residual",
+      reason: "message-missing",
+      detail: MESSAGE_MISSING_DETAIL,
+    };
+  }
+  if (read.kind === "noCredentials") {
+    return { kind: "residual", reason: "credentials", detail: read.message };
+  }
+  if (read.kind === "error") {
+    return { kind: "residual", reason: "check-failed", detail: read.message };
+  }
+
+  const verdict = verdictFromLabels(
+    row.type,
+    read.labelIds,
+    parseLabelIds(row.labelIds),
+  );
+  if (verdict.kind === "unknown") {
+    return {
+      kind: "residual",
+      reason: "unverifiable-operation",
+      detail: verdict.reason,
+    };
+  }
+  return verdict.kind === "applied" ? { kind: "applied" } : { kind: "notApplied" };
+}
+
+function pushResidual(
+  result: StrandedVerificationResult,
+  row: PendingOperationRecord,
+  reason: VerificationResidualReason,
+  detail: string,
+): void {
+  result.unresolved.push({
+    id: row.id,
+    emailId: row.emailId,
+    accountId: row.accountId,
+    reason,
+    detail,
+  });
+}
+
+/**
+ * THE ONE PLACE AN `applied` VERDICT MAY BECOME AN `applied` WRITE.
+ *
+ * Two paths now reach a positive verdict — the first-pass read and the
+ * second-pass re-read of a requeue candidate that flipped — and BOTH go
+ * through here rather than each testing `accountId` for itself. A duplicated
+ * check is how the second path silently loses the guard.
+ *
+ * The asymmetry it enforces is deliberate. "" is the gcloud ADC sentinel:
+ * `createGmailClient("")` resolves whatever identity ADC points at NOW, which
+ * is not necessarily the mailbox this message was read from. Recording
+ * `applied` on that evidence would retire the row silently on a reading
+ * possibly taken from a different account. A `notApplied` from the wrong
+ * mailbox costs nothing by comparison — it requeues a proposal the user must
+ * approve anyway — so only this direction is blocked. See point 3 in the
+ * module header.
+ */
+function recordApplied(
+  result: StrandedVerificationResult,
+  row: PendingOperationRecord,
+): void {
+  if (row.accountId === "") {
+    pushResidual(result, row, "unscoped-account", UNSCOPED_ACCOUNT_DETAIL);
+    return;
+  }
+  result.appliedIds.push(row.id);
+}
+
 const defaultDeps: StrandedVerificationDeps = {
   listStranded: () => getStaleApplyingOperations(),
   readLabels: (messageId, accountEmail) =>
@@ -238,7 +354,20 @@ const defaultDeps: StrandedVerificationDeps = {
  * here becomes an unresolved row a human has to answer — strictly worse than
  * being slow. The stale set is small by construction (at most one chunk per
  * crashed in-flight caller) and one `messages.get` costs 20 quota units against
- * a 6,000/min budget (Gmail quota reference, read 2026-08-21).
+ * a 6,000/min budget (Gmail quota reference, read 2026-08-21). A row headed for
+ * a requeue costs 40, because it is read TWICE (below); the budget swallows
+ * that at this set size, and the second read is what keeps a stale `notApplied`
+ * off the audit trail.
+ *
+ * TWO READ PASSES, AND THE SECOND ONE COVERS ONLY THE REQUEUE CANDIDATES.
+ * Pass one classifies every stale row. Pass two re-reads just the rows pass one
+ * would requeue, immediately before adjudicating them, because that is the one
+ * verdict a late-landing hung apply can falsify — see point 4 in the module
+ * header for what this narrows and what it leaves. A candidate that FLIPS to
+ * `applied` on the re-read is recorded applied through the very same
+ * `recordApplied` the first pass uses, so the `accountId: ""` refusal covers
+ * both routes; a re-read that FAILS becomes a residual for a human and never
+ * falls back to the first read.
  *
  * TWO ADJUDICATION CALLS, OVER DISJOINT ID SETS. It writes through
  * `adjudicateStrandedOperations` rather than a private DB path, and inherits
@@ -273,68 +402,69 @@ export async function verifyStrandedApplyingOperations(
   // immediately makes a pass over an empty queue call out.
   if (rows.length === 0) return result;
 
+  // PASS ONE. Every stale row, read once, in order.
+  const requeueCandidates: PendingOperationRecord[] = [];
   for (const row of rows) {
-    const residual = (
-      reason: VerificationResidualReason,
-      detail: string,
-    ): void => {
-      result.unresolved.push({
-        id: row.id,
-        emailId: row.emailId,
-        accountId: row.accountId,
-        reason,
-        detail,
-      });
-    };
+    const outcome = classifyRow(row, await readLabels(row.emailId, row.accountId));
+    if (outcome.kind === "residual") {
+      pushResidual(result, row, outcome.reason, outcome.detail);
+      continue;
+    }
+    if (outcome.kind === "applied") {
+      recordApplied(result, row);
+      continue;
+    }
+    // Not written down yet. A `notApplied` verdict is the ONE direction the
+    // read-before-write window can corrupt, so it has to be refreshed first.
+    requeueCandidates.push(row);
+  }
 
-    const read = await readLabels(row.emailId, row.accountId);
-    if (read.kind === "notFound") {
-      residual(
-        "message-missing",
-        "Gmail has no message with this id in the mailbox we asked. That can mean it was deleted, that this change was queued without a named account and the Google identity has changed since, or — for a Trash or Spam change — that it worked and Gmail has since purged the message.",
-      );
+  // PASS TWO. THE REQUEUE SET ONLY, re-read immediately before the write.
+  //
+  // WHY ONLY THIS SET. A stale `applied` is not a defect: the labels were
+  // present when we looked, so an apply landing late agrees with the record we
+  // are about to write. A stale `notApplied` IS a defect — it requeues a
+  // change that has now happened, on an audit trail saying it did not, and a
+  // later approval can send it to Gmail a second time. Re-reading the applied
+  // set would buy nothing and spend quota.
+  //
+  // WHY IT IS WORTH A SECOND ROUND TRIP. Pass one is deliberately serial and
+  // both writes are batched at the end, so row 1's evidence can be minutes old
+  // by the time its claim lands. This shrinks that to one read and one write.
+  //
+  // WHAT IT DOES NOT DO: close the window. Gmail can still land between this
+  // re-read and the write below — an external system and a local database
+  // cannot be read and written atomically. NARROWED, never closed.
+  //
+  // STILL SERIAL, deliberately: see the note above about 429s. No `Promise.all`.
+  for (const row of requeueCandidates) {
+    let reread: MessageLabelRead;
+    try {
+      reread = await readLabels(row.emailId, row.accountId);
+    } catch (err) {
+      // The production reader classifies rather than throws, so this is the
+      // belt to that braces. A re-read we could not take NEVER falls back to
+      // the first one: refusing to refresh evidence is refusing to have it.
+      reread = {
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    const outcome = classifyRow(row, reread);
+    if (outcome.kind === "residual") {
+      // No verdict on evidence we could not refresh. The row stays exactly as
+      // it was, `applying`, visible to every stranded surface, for a human.
+      pushResidual(result, row, outcome.reason, outcome.detail);
       continue;
     }
-    if (read.kind === "noCredentials") {
-      residual("credentials", read.message);
+    if (outcome.kind === "applied") {
+      // THE FLIP: the change landed between the two reads. Same guard as pass
+      // one — `recordApplied` owns the ADC check for both, so this new route
+      // to `applied` cannot bypass it.
+      recordApplied(result, row);
       continue;
     }
-    if (read.kind === "error") {
-      residual("check-failed", read.message);
-      continue;
-    }
-
-    const verdict = verdictFromLabels(
-      row.type,
-      read.labelIds,
-      parseLabelIds(row.labelIds),
-    );
-    if (verdict.kind === "unknown") {
-      residual("unverifiable-operation", verdict.reason);
-      continue;
-    }
-    if (verdict.kind === "notApplied") {
-      result.requeuedIds.push(row.id);
-      continue;
-    }
-    // verdict is `applied` from here.
-    //
-    // THE ONE ASYMMETRY IN THIS FUNCTION, and it is deliberate. "" is the
-    // gcloud ADC sentinel: `createGmailClient("")` resolves whatever identity
-    // ADC points at NOW, which is not necessarily the mailbox this message was
-    // read from. Recording `applied` on that evidence would retire the row
-    // silently on a reading possibly taken from a different account. A
-    // `notApplied` from the wrong mailbox costs nothing by comparison — it
-    // requeues a proposal the user must approve anyway — so only this
-    // direction is blocked. See point 3 in the module header.
-    if (row.accountId === "") {
-      residual(
-        "unscoped-account",
-        "The message's labels match this change, but it was queued without a named Google account, so we cannot be sure which mailbox we just read. Confirming this one is left to you.",
-      );
-      continue;
-    }
-    result.appliedIds.push(row.id);
+    result.requeuedIds.push(row.id);
   }
 
   if (result.appliedIds.length > 0) {
