@@ -111,6 +111,14 @@ describe("public barrel surface (approval-gate enforcement)", () => {
     assert.equal(typeof actionsBarrel.applyPendingOperationsByIds, "function");
     assert.equal(typeof actionsBarrel.rejectPendingOperationsByIds, "function");
     assert.equal(typeof actionsBarrel.mapResultToOperations, "function");
+    // The verification pass is the surfaces' entry point for checking a
+    // stranded apply against Gmail. Listed here so a barrel cleanup cannot
+    // strip it silently — the reader it uses stays private, this does not.
+    assert.equal(
+      typeof actionsBarrel.verifyStrandedApplyingOperations,
+      "function",
+    );
+    assert.equal(typeof actionsBarrel.verdictFromLabels, "function");
   });
 
   it("package exports map stays the pinned allowlist", async () => {

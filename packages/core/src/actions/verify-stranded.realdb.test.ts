@@ -20,7 +20,9 @@ await useTempDb("verify-stranded");
 
 const {
   claimPendingOperations,
+  describeLostClaimedOutcomes,
   getStaleApplyingOperations,
+  resolveClaimedOperations,
   STALE_APPLYING_THRESHOLD_MS,
 } = await import("../db/pending-operations.js");
 const {
@@ -31,8 +33,12 @@ const {
 const { verifyStrandedApplyingOperations } = await import(
   "./verify-stranded.js"
 );
-const { backdateClaim, readPendingOperation: readRow, seedPendingOperations } =
-  await import("../testing/lancedb-fixture.js");
+const {
+  backdateClaim,
+  capturingWarnings,
+  readPendingOperation: readRow,
+  seedPendingOperations,
+} = await import("../testing/lancedb-fixture.js");
 
 /** A row a crash left mid-apply: claimed, past the staleness threshold. */
 async function seedStranded(
@@ -206,5 +212,45 @@ describe("a verification pass over the real queue", () => {
     assert.equal(row.status, "applied");
     assert.equal(row.resolutionEvidence, "user-confirmed");
     assert.equal(row.error, STRANDED_APPLIED_NOTE);
+  });
+
+  it("still beats an apply hung past the threshold — and the outcome is still lost", async () => {
+    // THE WINDOW THAT REMAINS, UNCHANGED BY THIS FEATURE, and it must stay
+    // unchanged. An apply hung past STALE_APPLYING_THRESHOLD_MS that then
+    // returns from Gmail loses: its write-back is scoped to the token the
+    // adjudication overwrote, so it matches nothing, and after a `notApplied`
+    // answer the same change can reach Gmail a second time behind an audit
+    // trail saying it never happened.
+    //
+    // What this feature changes is NOT that direction — it is the QUALITY OF
+    // THE ANSWER THAT BEATS IT. Here the verifier's read says notApplied, which
+    // is what a person guessing could also have said; where the hung apply
+    // really succeeded, the read would have said applied instead, so the
+    // OUTCOME converges even though the WRITE is still discarded. Do not
+    // restate that as the window being closed.
+    await seedStranded("v-hung", { type: "markRead" });
+
+    const result = await verifyStrandedApplyingOperations({
+      listStranded: onlyStranded(["v-hung"]),
+      readLabels: async () => ({ kind: "labels", labelIds: ["INBOX", "UNREAD"] }),
+    });
+    assert.equal(result.requeuedRecorded, 1);
+    assert.equal((await readRow("v-hung")).status, "pending");
+
+    // The hung apply returns and records the truth. Nothing prevents the loss;
+    // we only notice it, which is the part that used to be silent.
+    const { value, warnings } = await capturingWarnings(() =>
+      resolveClaimedOperations(
+        [{ id: "v-hung", status: "applied" }],
+        "token-v-hung",
+        new Date().toISOString(),
+      ),
+    );
+    assert.equal(value.resolved, 0);
+    assert.deepEqual(value.lost, [{ id: "v-hung", status: "applied" }]);
+    assert.equal((await readRow("v-hung")).status, "pending");
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0], describeLostClaimedOutcomes(value.lost));
+    assert.match(String(warnings[0]), /a second time/);
   });
 });
