@@ -155,9 +155,18 @@ describe("a verification pass over the real queue", () => {
   });
 
   it("does not touch a row a healthy apply claimed a second ago", async () => {
-    // Two guards, both real: the row is not in the stale LIST, and even if it
-    // were, `adjudicateStrandedOperations` re-asserts the cutoff inside the
-    // same atomic write that stamps the token.
+    // This case exercises the FIRST guard only: the row is not in the stale
+    // list, so `checked` is 0 and `adjudicateStrandedOperations` is never
+    // reached. Say that rather than the tempting "two guards, both real" —
+    // mutation-checking the M1 wave showed this test still PASSES with the age
+    // clause deleted from `buildStrandedClaimFilter`, because the second guard
+    // is structurally unreachable from here.
+    //
+    // The second guard — the cutoff re-asserted inside the same atomic write
+    // that stamps the token — IS covered, by the two cases in
+    // `db/stranded-adjudication.race.test.ts`, which both fail under exactly
+    // that mutation. A comment asserting a property its own test does not check
+    // is how this repo has previously convinced itself a guard was covered.
     await seedPendingOperations([
       { id: "v-fresh", emailId: "msg-v-fresh", status: "pending", type: "markRead" },
     ]);
