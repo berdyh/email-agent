@@ -126,14 +126,42 @@ async function refreshAccessToken(
 
 // --- Account CRUD ---
 
+/**
+ * NO try/catch, and no `?? []`, DELIBERATELY.
+ *
+ * `loadSettings()` already owns the whole "what does an unusable settings file
+ * mean?" policy, and it is the only place that may: ENOENT alone means "first
+ * run", and it answers with defaults whose `accounts` is `[]`. Every other
+ * errno, and a file that exists but does not parse, THROW — see
+ * `readSettingsBytes` / `loadSettingsFromPath` in `config/settings.ts`.
+ *
+ * Swallowing that throw here turned "I cannot read your configuration" into
+ * "you have no accounts configured", and an empty account list is not an absence
+ * of information — it is a MAILBOX DECISION. `getDefaultAccount()` below answers
+ * `null` for it, and `gmail/client.ts` turns that `null` into the gcloud ADC
+ * branch of `createGmailClient()` and into `""` from `resolveAccountEmail()`.
+ * Since `syncEmails()` uses that same resolved value both as the fetch identity
+ * AND as the `accountId` it stores, a momentarily unreadable settings.json
+ * silently moved a whole fetch — and every row it wrote — onto whatever mailbox
+ * ADC happens to be signed in as, under the legacy `accountId: ""` sentinel.
+ *
+ * A narrowed `catch (err) { if (err.code !== "ENOENT") throw; return []; }` is
+ * not the fix either: it would be a second copy of a policy `loadSettings`
+ * already implements, and it could not work anyway — the non-ENOENT failures are
+ * re-thrown as plain `Error`s with the errno interpolated into the MESSAGE, so
+ * there is no `.code` for such a guard to test.
+ *
+ * `AppConfig.accounts` is a required `AccountConfig[]` and `normalizeSettings()`
+ * always produces an array, so `?? []` was unreachable — the same fail-open
+ * reflex in miniature.
+ *
+ * Callers already handle the throw: CLI `accounts list` prints the error text
+ * and exits 1, and `GET /api/accounts` answers 500.
+ */
 export async function listAccounts(): Promise<AccountConfig[]> {
-  try {
-    const { loadSettings } = await import("../config/settings.js");
-    const settings = await loadSettings();
-    return settings.accounts ?? [];
-  } catch {
-    return [];
-  }
+  const { loadSettings } = await import("../config/settings.js");
+  const settings = await loadSettings();
+  return settings.accounts;
 }
 
 export function upsertAccountEntry(
