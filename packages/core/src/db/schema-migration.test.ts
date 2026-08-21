@@ -66,9 +66,13 @@ async function columnsOf(table: string): Promise<string[]> {
 const legacyPendingSchema = new Schema(
   pendingOperationSchema.fields.filter(
     (field: { name: string }) =>
-      !["claimToken", "claimedAt", "resolvedAt", "approvedVia"].includes(
-        field.name,
-      ),
+      ![
+        "claimToken",
+        "claimedAt",
+        "resolvedAt",
+        "approvedVia",
+        "resolutionEvidence",
+      ].includes(field.name),
   ),
 );
 
@@ -81,7 +85,20 @@ const legacyPendingSchema = new Schema(
  */
 const preApprovedViaPendingSchema = new Schema(
   pendingOperationSchema.fields.filter(
-    (field: { name: string }) => field.name !== "approvedVia",
+    (field: { name: string }) =>
+      !["approvedVia", "resolutionEvidence"].includes(field.name),
+  ),
+);
+
+/**
+ * The shape AFTER `approvedVia` and BEFORE `resolutionEvidence` — the table an
+ * install that ran the previous release actually has on disk. It is the only
+ * shape that can carry rows already RESOLVED by the old stranded adjudication,
+ * which is the case `resolutionEvidence` must not invent a value for.
+ */
+const preResolutionEvidencePendingSchema = new Schema(
+  pendingOperationSchema.fields.filter(
+    (field: { name: string }) => field.name !== "resolutionEvidence",
   ),
 );
 
@@ -179,6 +196,11 @@ describe("migrating a legacy pending_operations table", () => {
       assert.equal(row["claimedAt"], "", `${String(row["id"])}.claimedAt`);
       assert.equal(row["resolvedAt"], "", `${String(row["id"])}.resolvedAt`);
       assert.equal(row["approvedVia"], "", `${String(row["id"])}.approvedVia`);
+      assert.equal(
+        row["resolutionEvidence"],
+        "",
+        `${String(row["id"])}.resolutionEvidence`,
+      );
     }
   });
 
@@ -268,6 +290,65 @@ describe("migrating a legacy pending_operations table", () => {
     assert.deepEqual(await rows(pendingOperationsTable), before);
   });
 
+  it("leaves an ALREADY-RESOLVED legacy row with NO evidence, never guessing one", async () => {
+    // The shape that matters for `resolutionEvidence`: a table already carrying
+    // `approvedVia`, whose rows were resolved by the old stranded adjudication
+    // — including one an actual person answered, whose `error` still carries
+    // STRANDED_APPLIED_NOTE.
+    //
+    // "" is the only honest answer for every one of them. A migration that
+    // stamped "user-confirmed" on the applied rows would look right and be a
+    // fabrication: nothing on disk records whether a human looked in Gmail, and
+    // "verified-api" would invent a check that did not exist in that build.
+    // Note "" is also what an unresolved row and a row its own apply resolved
+    // both carry — the three are deliberately indistinguishable.
+    const table = await conn.createEmptyTable(
+      pendingOperationsTable,
+      preResolutionEvidencePendingSchema,
+    );
+    await table.add([
+      {
+        ...claimedLegacyRow("op-1", "applied"),
+        approvedVia: "cli",
+        error:
+          "Recorded as applied by the user after a crash left it mid-apply. " +
+          "Email Agent did not verify this with Gmail.",
+      },
+      { ...claimedLegacyRow("op-2", "applying"), approvedVia: "web" },
+      { ...claimedLegacyRow("op-3", "rejected"), approvedVia: "web" },
+      { ...claimedLegacyRow("op-4", "failed"), approvedVia: "auto-apply" },
+      { ...legacyPendingRow2Unclaimed("op-5"), approvedVia: "" },
+    ]);
+
+    await migrateSchema(conn);
+
+    const migrated = await rows(pendingOperationsTable);
+    assert.equal(migrated.length, 5, "no row may be lost by a migration");
+    for (const row of migrated) {
+      assert.equal(
+        row["resolutionEvidence"],
+        "",
+        `${String(row["id"])}.resolutionEvidence must be unrecorded, not guessed`,
+      );
+    }
+    // Everything the rows already carried is untouched — the new column sits
+    // beside the old ones and is never derived from them, in particular not
+    // from the human-readable note on the applied row.
+    assert.deepEqual(
+      migrated.map(
+        (row) => `${row["id"]}:${row["status"]}:${row["approvedVia"]}`,
+      ),
+      [
+        "op-1:applied:cli",
+        "op-2:applying:web",
+        "op-3:rejected:web",
+        "op-4:failed:auto-apply",
+        "op-5:pending:",
+      ],
+    );
+    assert.match(String(migrated[0]?.["error"]), /did not verify this with Gmail/);
+  });
+
   it("accepts a normally-shaped insert afterwards", async () => {
     await seedLegacyPendingOperations();
     await migrateSchema(conn);
@@ -282,6 +363,7 @@ describe("migrating a legacy pending_operations table", () => {
         claimedAt: "",
         resolvedAt: "",
         approvedVia: "",
+        resolutionEvidence: "",
       },
     ]);
     const all = await rows(pendingOperationsTable);
@@ -452,7 +534,14 @@ describe("a table shape with no declared default", () => {
     const row = legacyPendingRow("op-1", "applied");
     delete row["status"];
     await table.add([
-      { ...row, claimToken: "", claimedAt: "", resolvedAt: "", approvedVia: "" },
+      {
+        ...row,
+        claimToken: "",
+        claimedAt: "",
+        resolvedAt: "",
+        approvedVia: "",
+        resolutionEvidence: "",
+      },
     ]);
 
     await assert.rejects(

@@ -98,6 +98,24 @@ export type PendingOperationStatus =
  */
 export type ApprovedVia = "web" | "cli" | "auto-apply";
 
+/**
+ * HOW a stranded row's final status came to be recorded — the resolve-time
+ * question ("how do we know?"), which is not the claim-time question
+ * `ApprovedVia` answers ("who initiated it?"). The two coexist on one row: the
+ * CLI can have initiated an apply that crashed, and a later Gmail read can be
+ * what confirmed the change landed.
+ *
+ * `"user-confirmed"` — a person told us they looked in Gmail and saw it.
+ * `"verified-api"`   — this app read the message's CURRENT labels back from
+ *                      Gmail and they match the operation's target state. That
+ *                      is an END STATE, not causation: nothing distinguishes
+ *                      "our call did this" from "it was already like that".
+ *
+ * Attribution/provenance only. Like `ApprovedVia` it gates nothing and is a
+ * literal bound at each call site.
+ */
+export type ResolutionEvidence = "user-confirmed" | "verified-api";
+
 export interface PendingOperationRecord {
   [key: string]: unknown;
   id: string;
@@ -150,6 +168,29 @@ export interface PendingOperationRecord {
    * Attribution only; see `ApprovedVia`.
    */
   approvedVia: string;
+  /**
+   * How this row's resolution was established — a `ResolutionEvidence` value,
+   * or "".
+   *
+   * "" MEANS THREE THINGS AND THEY ARE DELIBERATELY NOT DISTINGUISHED: the row
+   * is unresolved; or its own apply recorded its own outcome through the
+   * ordinary path (`resolveClaimedOperations` does not stamp this — an apply
+   * that wrote down what it did needs no evidence beyond having done it); or
+   * the row predates this column. Never render "" as "verified" or
+   * "confirmed", and never guess a value onto a migrated row: that would
+   * fabricate an audit record of an observation nobody made. Same
+   * honest-sentinel rule as `approvedVia`.
+   *
+   * Written in exactly two places, both on the stranded path:
+   * `adjudicateStrandedOperations`'s `applied` branch (`"user-confirmed"`, or
+   * `"verified-api"` when the verifier is the caller). CLEARED back to "" on a
+   * `notApplied` requeue, because a `pending` row has no resolution and so can
+   * carry no evidence of one.
+   *
+   * REQUIRED, matching the non-nullable Arrow column — see `claimedAt` for why
+   * an optional declaration on an always-present field is a trap.
+   */
+  resolutionEvidence: string;
 }
 
 export interface ClusterRecord {

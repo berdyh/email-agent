@@ -323,6 +323,7 @@ describe("chunked apply claims one chunk at a time", () => {
               claimedAt: "2026-08-07T00:00:00.000Z",
               resolvedAt: "",
               approvedVia: "cli",
+              resolutionEvidence: "",
             }) satisfies PendingOperationRecord,
         );
       },
@@ -481,6 +482,7 @@ describe("chunked apply claims one chunk at a time", () => {
                 claimedAt: "2026-08-07T00:00:00.000Z",
                 resolvedAt: "",
                 approvedVia: "cli",
+                resolutionEvidence: "",
               }) satisfies PendingOperationRecord,
           );
         },

@@ -129,6 +129,7 @@ export function pendingOperation(
     claimedAt: "",
     resolvedAt: "",
     approvedVia: "",
+    resolutionEvidence: "",
     ...overrides,
   };
 }

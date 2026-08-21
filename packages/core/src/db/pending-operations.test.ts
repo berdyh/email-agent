@@ -121,6 +121,7 @@ function applyingRow(
     claimedAt: "2026-08-07T10:00:00.000Z",
     resolvedAt: "",
     approvedVia: "",
+    resolutionEvidence: "",
     ...overrides,
   };
 }

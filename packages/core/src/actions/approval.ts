@@ -58,6 +58,9 @@ export function toPendingOperationRecords(
     // Unclaimed, so no surface has approved it yet. Same sentinel a migrated
     // row carries, which is why "" must never be read as a surface.
     approvedVia: "",
+    // Unresolved, so there is nothing to have evidence OF. Same sentinel a
+    // migrated row carries, and the same rule: never read "" as "verified".
+    resolutionEvidence: "",
   }));
 }
 

@@ -39,6 +39,9 @@ function record(
     claimedAt: "",
     resolvedAt: "",
     approvedVia: "",
+    // Required for the same reason: the Arrow column is non-nullable and an
+    // unresolved row really holds "", never `undefined`.
+    resolutionEvidence: "",
     ...overrides,
   };
 }

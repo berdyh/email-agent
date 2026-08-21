@@ -150,6 +150,13 @@ export const pendingOperationSchema = new Schema([
   // could pass any of these values. It answers "who approved this?" for a human
   // reading the audit trail, and nothing else.
   new Field("approvedVia", new Utf8()),
+  // HOW a stranded row's resolution was established: "user-confirmed",
+  // "verified-api", or "" (unresolved, resolved by its own apply, or written
+  // before this column existed — three cases deliberately spelled the same
+  // way). A different question from `approvedVia` above, asked at a different
+  // moment: that one records which surface CLAIMED the row, this one records
+  // what evidence closed it out. Provenance only; it gates nothing.
+  new Field("resolutionEvidence", new Utf8()),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -191,6 +198,11 @@ const pendingOperationColumnDefaults: Record<string, string> = {
   // audit record nothing observed. Unattributed and unclaimed are deliberately
   // spelled the same, because for a legacy row they are indistinguishable.
   approvedVia: "CAST('' AS STRING)",
+  // Same reasoning one step further on: a row that was resolved before this
+  // column existed has no recorded evidence, and "" says exactly that. Filling
+  // in "user-confirmed" would invent a person who looked at Gmail, and
+  // "verified-api" would invent a check that never ran.
+  resolutionEvidence: "CAST('' AS STRING)",
 };
 
 let initPromise: Promise<void> | null = null;
