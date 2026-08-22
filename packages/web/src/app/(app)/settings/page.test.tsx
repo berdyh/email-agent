@@ -142,6 +142,39 @@ describe("Settings — auto-apply consent card", () => {
     // never reach the UI, even transiently.
     expect(toggle).toHaveAttribute("aria-checked", "false");
   });
+
+  /**
+   * The "Auto-apply is currently ON" banner is driven by the SAVED setting,
+   * not by the local form state, and this is the only test that proves it.
+   *
+   * Flipping the switch off does NOT stop the server auto-applying — Save
+   * does. A banner sourced from `local` disappears the instant the switch
+   * moves, so the page stops warning about a mutation that is still live.
+   * That was a shipped bug; verified by mutation that reintroducing it
+   * (`settings?.gmail?.autoApplyActions` -> `local?.gmail?...`) left every
+   * other test in this file green.
+   */
+  it("keeps warning that auto-apply is live after the switch is flipped off but not yet saved", async () => {
+    const user = userEvent.setup();
+    stubApi(
+      baseSettings({ gmail: { autoApplyActions: true, autoApplyAcknowledged: true } }),
+    );
+    renderWithQuery(<SettingsPage />);
+    await openGmailTab(user);
+
+    const live = /auto-apply is currently on/i;
+    expect(await screen.findByText(live)).toBeInTheDocument();
+
+    const toggle = screen.getByRole("switch", {
+      name: /auto-apply action results to gmail/i,
+    });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    // Nothing has been saved, so Gmail is still being mutated unattended.
+    expect(screen.getByText(live)).toBeInTheDocument();
+    expect(screen.getByText(/unsaved change/i)).toBeInTheDocument();
+  });
 });
 
 describe("Settings — retention field", () => {

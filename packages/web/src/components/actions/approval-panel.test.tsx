@@ -379,4 +379,63 @@ describe("ApprovalPanel", () => {
 
     expect(calls.filter((c) => c.url === "/api/approvals/reject")).toEqual([]);
   });
+
+  /**
+   * Selection is default-DENY, and this is the only test that proves it.
+   *
+   * The first render of the queue arrives ticked, so the common case is one
+   * click — but a row that shows up LATER (a background refetch after another
+   * action run, a window-focus refetch) must arrive UNTICKED, or a bulk Apply
+   * reaches a Gmail change the user has never looked at. Verified by mutation:
+   * replacing the effect's `prev.has(id) || (isFirstLoad && !seen.has(id))`
+   * with an unconditional `next.add(id)` left every other test in this file
+   * green, which is why this one exists.
+   */
+  it("leaves a row that arrived on a background refetch UNTICKED, so a bulk apply cannot reach it", async () => {
+    let operations = [OP_TRASH, OP_READ];
+    const calls: FetchLog[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        calls.push({ url, method, body: init?.body as string | undefined });
+        if (url === "/api/approvals" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse({ operations, pendingCount: operations.length }),
+          );
+        }
+        throw new Error(`unexpected request: ${method} ${url}`);
+      }),
+    );
+
+    const { queryClient } = renderWithQuery(<ApprovalPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    });
+    expect(
+      screen.getByRole("button", { name: /Apply selected \(2\)/ }),
+    ).toBeInTheDocument();
+
+    // A third proposal arrives while the user is looking at the page.
+    operations = [OP_TRASH, OP_READ, OP_ARCHIVE];
+    await queryClient.refetchQueries({ queryKey: ["approvals"] });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    });
+    const arrived = screen.getByRole("checkbox", {
+      name: new RegExp(`Select Archive for ${OP_ARCHIVE.email!.subject}`),
+    });
+    expect(arrived).toHaveAttribute("aria-checked", "false");
+    // The two the user HAS seen keep their tick, and the count never grew.
+    expect(
+      screen.getByRole("checkbox", {
+        name: new RegExp(`Select Trash for ${OP_TRASH.email!.subject}`),
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("button", { name: /Apply selected \(2\)/ }),
+    ).toBeInTheDocument();
+  });
 });
