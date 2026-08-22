@@ -631,54 +631,6 @@ unchanged — which is the check that the two bodies really were identical.
 
 ## Web
 
-### Unlock the local UI with a one-time token, then a session cookie
-**Priority:** P2
-**Decision taken 2026-08-20 by the repo owner: build the token flow.** This
-entry is no longer a question; it is specified work. The scope note at the
-bottom is part of the spec, not a caveat bolted on.
-
-**Where the boundary actually is today.** The Host-header hole is closed at the
-layer that can close it — the listener binds `127.0.0.1`, so an off-box process
-cannot open the socket at all — and mutations require `Origin` or
-`Sec-Fetch-Site` to be present, which refuses the bare
-`curl -X POST -H 'Host: localhost:3847'` one-liner. Both are labelled honestly
-in the code: the bind is the boundary, the header checks are a speed bump. What
-neither covers is a process that CAN reach the port: another Unix user on this
-machine, a container, or a browser page that has DNS-rebound its own name to
-127.0.0.1.
-
-**What to build.**
-1. On start, `serve` mints a random one-time token and prints the URL it belongs
-   to — `http://127.0.0.1:3847/?token=…` — the way Jupyter does.
-2. A route exchanges that token for an `httpOnly`, `SameSite=Lax` session cookie
-   with a TTL of about a day, and **burns the token on use** so it is not a
-   reusable credential sitting in shell scrollback.
-3. A browser arriving without a valid cookie gets an unlock page, not a 403 —
-   a bare rejection is indistinguishable from the app being broken.
-4. Rate-limit the exchange endpoint and compare in constant time. Store only
-   what is needed to validate a session, never the token itself.
-5. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` keeps its current meaning and must
-   continue to bypass this, so the LAN path and automated runs are not broken by
-   a change whose whole point is the browser.
-
-**State the honest claim, in the code and in the README.** This does NOT stop
-code running as you on this machine: such code reads
-`~/.email-agent/accounts/{email}/token.json` and calls Gmail directly, never
-touching the app. What it buys is narrower and real — it raises the bar from
-"anything that can reach the port" to "anything that can read your home
-directory". Do not describe it as a security boundary against local malware.
-
-**Scope, deliberately.** This is the right shape *for the current product*: one
-person, one laptop, `serve` run from the same machine that reads the output.
-The token flow's weakest point is a second device — you cannot easily carry a
-printed URL to a phone — and that is acceptable precisely because that is not
-the supported mode today. **If this is ever deployed so several people use it,
-do not extend this design.** Multi-user needs real accounts, per-user
-authorization and per-user Gmail grants, which is a different system, not a
-bigger token. Treat that as a rewrite of this layer, and revisit
-"Ambiguous account identity for queued unscoped rows" at the same time, because
-a shared deployment makes the `""` ADC sentinel indefensible.
-
 ### Snapshot restore is reachable from the CLI but not the UI
 **Priority:** CLOSED — feature/todos-w10-cleanup (2026-08-07)
 A "Versions" control on each user-action card
@@ -1122,6 +1074,95 @@ a fresh install").
 swallow — every write already carries an explicit `accountId` — so this closes
 the poisoning-at-fetch-time vector, not a write-time one.
 Found by: product explainer pass, 2026-08-20, by checking prose against source.
+
+### Unlock the local UI with a one-time token, then a session cookie
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-22)
+
+**Decision taken 2026-08-20 by the repo owner: build the token flow.** All five
+numbered points shipped, plus two items the owner added beyond them (D1:
+`email-agent unlock`, a mint-only command for a server already running or a
+`npm run dev`/`npm run start` session that never mints anything on its own;
+D2: an automated real-browser test, not just a manual pass).
+
+**What shipped, in one paragraph.** `email-agent serve` mints a one-time token
+and prints `http://<bound host>:<port>/?token=…` before spawning the Next
+child (D4: the child inherits stdio, so the parent cannot watch it for a
+readiness line without switching to pipes — the printed block says the link
+works once the server reports ready instead). `POST /api/auth/unlock`
+(`packages/web/src/app/api/auth/unlock/route.ts`) exchanges it for an
+`httpOnly`, `SameSite=Lax`, `secure: false` session cookie, rate-limited and
+compared via a hash-then-`timingSafeEqual`, burning the token synchronously in
+the same tick it is read (no `await` between read and burn — pinned by a
+test). A browser with no valid cookie meets the unlock page at `/unlock`, not
+a bare 403 (`(app)/layout.tsx`'s redirect, UX; the API guards in
+`modules/api/validation.ts` are the actual enforcement, folded into BOTH
+`mutationGuardResponse` and `readGuardResponse` — reads are gated too, since
+an unauthenticated local browser could otherwise already read every message).
+`EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses the whole gate in the same
+place it already bypasses the header checks (D6). Storage is a file, not
+environment variables or a stateless signed cookie — `~/.email-agent/session
+.json`, `0600`, only sha256 digests ever persisted — because `email-agent
+unlock` has to mint a link an ALREADY-RUNNING server will accept, and no
+process can inject an env var into a running child; the full argument,
+including the tradeoffs stated rather than hidden, is in AGENTS.md's config
+bullet and `packages/core/src/config/session.ts`'s module header.
+
+**The honest claim, exactly as specified, checked against where the secret
+actually ended up:** this does NOT stop code running as you on this machine —
+such code reads `~/.email-agent/accounts/{email}/token.json` and calls Gmail
+directly, and it can also read `session.json` or `/proc/<pid>/environ`
+directly, never touching this app. What it buys is narrower and real: it
+raises the bar from "anything that can reach the port" to "anything that can
+read your home directory" — and that claim holds because only DIGESTS are
+ever persisted, so reading the store alone yields no usable credential. It is
+stated in `session.ts`'s module header, in README.md's "Unlocking the local
+UI" section, and on the unlock page itself. Not described as a boundary
+against local malware anywhere; the loopback bind remains the actual boundary
+and this sits behind it.
+
+**D2, the differentiator, genuinely ran here:**
+`packages/cli/src/commands/serve.browser.e2e.test.ts` adds `puppeteer-core`
+(never `puppeteer`, which downloads its own browser) as a CLI devDependency
+and drives the SYSTEM Chromium against a REALLY-spawned `email-agent serve` —
+a separate child process, on an OS-assigned free port, over a throwaway
+`$HOME`. It proves what no in-process test can: the token the CLI parent
+prints is the one the Next child process actually accepts; Chromium stores
+and returns the cookie with the exact documented attributes; a cookie-less
+browser lands on the unlock screen rather than a raw failure; and a fresh
+context replaying the already-burned link is refused. It self-skips with a
+named reason (`t.skip(...)`, suite still exits 0) when no Chromium is found,
+checked at `PUPPETEER_EXECUTABLE_PATH` and the common system install paths —
+it must never fail on a machine with none installed and never silently pass
+without having run. Adds roughly 15-25s to the suite on this machine, almost
+entirely `next dev`'s on-demand route compilation rather than Chromium
+itself. Mutation-checked against three independent breaks (the page-level
+redirect, the exchange always failing, the burn check disabled) — the first
+was caught by defense in depth (`apiFetch`'s own 401 redirect) rather than by
+the layout gate specifically, which is itself informative: the two mechanisms
+overlap exactly the way "the gate is UX, not enforcement" says they should.
+
+**Scope, preserved verbatim in spirit.** This is the right shape for one
+person, one laptop, `serve` run from the machine that reads the output. The
+weakest point is a second device — a printed URL cannot easily reach a phone
+— and that is accepted because it is not the supported mode. **If this is
+ever deployed so several people use it, this design must be REWRITTEN, not
+extended:** multi-user needs real accounts, per-user authorization and
+per-user Gmail grants, and "Ambiguous account identity for queued unscoped
+rows" (the `""` ADC sentinel) must be revisited at the same time, because a
+shared deployment makes that sentinel indefensible. Stated in `session.ts`'s
+header, in AGENTS.md, and in the unlock page's own copy.
+
+**Does NOT cover:** a second browser engine (Tier 2 drives exactly one — the
+`SameSite=Lax` argument for the OAuth callback's cross-site redirect is
+reasoned from spec, not observed in Safari/Firefox); the real 24-hour session
+TTL (proven only against an injected clock — nothing here sits for a day);
+`/proc/<pid>/environ` visibility claims (asserted from kernel behavior, not
+tested — no second Unix user exists in this environment); React component
+rendering in isolation (there is still no component testing library — the
+unlock components are read, and exercised for real only by the one browser
+test above); and, unchanged by any of this, a successful Gmail mutation (no
+linked account anywhere in the suite).
+Found by: repo owner, 2026-08-20 (decision to build); this closes it.
 
 ### Record which surface approved an operation
 **Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
