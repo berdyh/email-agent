@@ -7,6 +7,8 @@
  * are testable without spawning anything.
  */
 
+import { UNLOCK_GATE_DISABLED_LINES } from "@email-agent/core";
+
 /**
  * `http://<host>:<port>/?token=<token>`, with an IPv6 host bracketed.
  *
@@ -63,12 +65,21 @@ export function describeUnlockLines(
  * and turns the gate off along with the local-origin header checks. Printing a
  * token URL in that mode would misrepresent what is protecting the server —
  * nothing is.
+ *
+ * THE SENTENCES COME FROM CORE (`UNLOCK_GATE_DISABLED_LINES`), not from here,
+ * because the web process now announces the same state itself — from
+ * `instrumentation.ts` at startup and from the guard that reads the flag — so
+ * that `npm run dev` and `npm run start`, which never reach this command, stop
+ * disarming the gate in silence. Under `email-agent serve` the user therefore
+ * sees this block from the parent and the same block again from the child, and
+ * that is why they must be the SAME WORDS: one problem stated twice reads as
+ * one problem, whereas two hand-written descriptions of one flag read as two.
+ * The trailing line here says so outright.
  */
 export function describeUnlockDisabledLines(): string[] {
   return [
-    "The browser unlock gate is OFF for this run " +
-      "(EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1). Anything that can reach this port",
-    "can read your mail and approve queued Gmail changes without unlocking.",
+    ...UNLOCK_GATE_DISABLED_LINES,
+    "The web server repeats this once it starts — it is the same flag, not a second problem.",
     "",
   ];
 }

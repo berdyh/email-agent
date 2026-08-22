@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { UNLOCK_GATE_DISABLED_LINES } from "@email-agent/core";
 import {
   isLoopbackHost,
   resolveServeEnv,
@@ -144,5 +145,19 @@ describe("the unlock link serve prints", () => {
 
     assert.match(block, /OFF for this run/);
     assert.match(block, /EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1/);
+  });
+
+  it("uses core's wording, so the parent and the web child say the same thing", () => {
+    // The web process now announces a disarmed gate itself (that is what makes
+    // `npm run dev`/`npm run start` stop disarming it in silence), so under
+    // `email-agent serve` the user sees this block twice — once from here,
+    // once from the child. Two hand-written descriptions of one flag would
+    // read as two problems, so the sentences must come from ONE place.
+    const block = describeUnlockDisabledLines();
+
+    for (const line of UNLOCK_GATE_DISABLED_LINES) {
+      assert.ok(block.includes(line), `not core's wording: ${line}`);
+    }
+    assert.match(block.join("\n"), /same flag, not a second problem/);
   });
 });

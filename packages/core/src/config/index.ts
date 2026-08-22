@@ -40,6 +40,8 @@ export {
   type UnlockExchangeFailure,
   type UnlockExchangeResult,
   isUnlockGateEnabled,
+  UNLOCK_GATE_DISABLED_LINES,
+  warnIfUnlockGateDisabled,
   mintUnlockToken,
   exchangeUnlockToken,
   hasValidSession,
