@@ -8,7 +8,7 @@
 // would test nothing about the exchange itself.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
@@ -30,6 +30,15 @@ const {
 
 type Handler = (request: import("next/server").NextRequest) => Promise<Response>;
 const unlock = await harness.load<{ POST: Handler }>("app/api/auth/unlock/route.js");
+
+// Dynamic, and only reachable AFTER `startRouteHarness` has registered the
+// alias hook above — a static `import ... from "@/..."` at the top of this
+// file would resolve before that registration runs and fail to resolve at
+// all (`unlock-gate-warning.test.ts` hits the same ordering and takes the
+// same way out).
+const { describeUnlockExchangeError } = (await import(
+  "@/modules/api/auth-contract"
+)) as typeof import("@/modules/api/auth-contract");
 
 const SESSION_PATH = join(harness.home, ".email-agent", "session.json");
 
@@ -187,5 +196,64 @@ describe("POST /api/auth/unlock", () => {
     });
     const result = await callHandler(unlock.POST, request);
     assert.equal(result.status, 400);
+  });
+
+  it("answers 503 store-busy — never 401 — when another process holds the session-store lock, and spends nothing", async () => {
+    // `core/config/session-lock.ts`'s `acquireStoreLock`/`lockPathFor` are not
+    // on the `config` barrel (module-boundary discipline: web may only import
+    // the barrel plus one named deep path, and this is not it), so this test
+    // cannot call them directly. It hand-writes the lock file in the exact
+    // format `session-lock.ts` reads — `<owner>\n<pid>\n`, only the PID line
+    // matters for liveness — which is the same technique
+    // `core/config/session-lock.test.ts`'s `plantLock` uses at the core layer
+    // to prove contention without a second OS process. A lock naming THIS
+    // process's own PID is live (`process.kill(pid, 0)` succeeds), so it is
+    // never stolen and the acquisition budget is genuinely spent.
+    const { token } = mintUnlockToken();
+    const lockPath = `${SESSION_PATH}.lock`;
+    writeFileSync(lockPath, `someone-else\n${process.pid}\n`);
+
+    try {
+      const request = buildRequest("/api/auth/unlock", {
+        method: "POST",
+        body: { token },
+        session: false,
+      });
+      const before = storeFailureCount();
+      const started = Date.now();
+      const result = await callHandler(unlock.POST, request);
+      const elapsed = Date.now() - started;
+
+      assert.equal(result.status, 503);
+      assert.equal((result.body as { code: string }).code, "store-busy");
+      // The route's `error` field and the unlock screen's own copy for this
+      // code must never say two different things — see `auth-contract.ts`.
+      assert.equal(
+        (result.body as { error: string }).error,
+        describeUnlockExchangeError("store-busy"),
+      );
+      assert.equal(result.headers.get("retry-after"), "1");
+      // A loose floor, not `LOCK_ACQUIRE_BUDGET_MS` itself (that constant is
+      // not on the barrel either) — enough to prove the budget was actually
+      // spent waiting, not skipped.
+      assert.ok(elapsed >= 1_000, `503 came back after only ${elapsed}ms — was the lock live?`);
+
+      // Contention must never look like a bad guess: nothing was added to the
+      // rate-limit window.
+      assert.equal(storeFailureCount(), before);
+    } finally {
+      unlinkSync(lockPath);
+    }
+
+    // And the token itself is untouched: once the lock clears, the SAME link
+    // still works. Reporting contention as `invalid-token` would have burned
+    // a one-time credential the caller never got to spend.
+    const retry = buildRequest("/api/auth/unlock", {
+      method: "POST",
+      body: { token },
+      session: false,
+    });
+    const retryResult = await callHandler(unlock.POST, retry);
+    assert.equal(retryResult.status, 200);
   });
 });
