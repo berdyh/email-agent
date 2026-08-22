@@ -5,3 +5,4 @@
  * package's tsconfig `paths` alias) can import it.
  */
 export * from "./lancedb-fixture.js";
+export * from "./session-fixture.js";
