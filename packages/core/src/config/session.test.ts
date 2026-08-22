@@ -547,11 +547,13 @@ describe("the origin-scoped second factor", () => {
     assert.equal(SESSION_BINDING_HEADER, "x-email-agent-session-binding");
   });
 
-  it("does NOT renew the session for a cookie presented without the factor", () => {
-    // A thief holding only the cookie must not be able to keep the session
-    // alive by replaying it. `hasValidSession` (the page gate) renews; the API
-    // guard's check renews only for a request that proved same-origin
-    // possession.
+  it("does NOT renew the session on the DATA surface for a cookie with no factor", () => {
+    // Narrower than it looks, and the narrower claim is the true one: the API
+    // guard never extends a session for a caller that has not proved
+    // same-origin possession. It does NOT make an unaccompanied cookie decay
+    // on schedule — `hasValidSession` still renews and the PAGE gate calls it,
+    // so bare top-level GETs keep the record fresh. What that keeps alive is
+    // half a credential; the assertion below is about this surface only.
     const { sessionToken, bindingToken } = unlockedPairAt(T0);
     const late = T0 + SESSION_TTL_MS - 1000;
 

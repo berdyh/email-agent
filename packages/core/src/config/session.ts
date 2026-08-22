@@ -761,10 +761,18 @@ export type SessionCheck = "ok" | "no-session" | "binding-required";
  *
  * WHY RENEWAL ONLY ON `"ok"`. `hasValidSession` renews whenever the cookie
  * matches. Doing that here would let a caller holding nothing but a captured
- * cookie keep the session alive indefinitely by replaying it — it would never
- * get data, but it would stop the session from ever idling out from under the
- * thief. Renewing only for a request that also proved same-origin possession
- * means an unaccompanied cookie decays on schedule.
+ * cookie keep the session alive indefinitely by replaying it at THIS surface,
+ * which is the one that returns data.
+ *
+ * STATE THE LIMIT, because the obvious summary of this is wrong: it does NOT
+ * make an unaccompanied cookie decay on schedule. `hasValidSession` still
+ * renews, and the PAGE gate calls it, so a thief holding only the cookie can
+ * keep the session alive with bare top-level GETs to `/mail`. That is left
+ * alone deliberately — what they keep alive is half a credential, since every
+ * request the shell then makes lands here and gets `binding-required`. The
+ * property this branch actually buys is narrower and still worth having: the
+ * data surface never extends a session for a caller that has not proved
+ * same-origin possession.
  */
 export function checkSessionRequest(
   cookieValue: string | undefined,

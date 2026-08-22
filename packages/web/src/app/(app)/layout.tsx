@@ -14,10 +14,25 @@ import { isSessionUnlocked, SESSION_COOKIE_NAME } from "@/modules/api/validation
  * lives. This layout exists so a locked-out browser lands somewhere it can
  * act, instead of a shell that quietly 401s on every request it makes.
  *
- * `isSessionUnlocked` (`@/modules/api/validation`) is the SAME predicate
- * `sessionViolation` uses inside the API guards, including the
- * `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypass — sharing it is what makes the
- * bypass automatic here rather than a second copy someone forgets to update.
+ * `isSessionUnlocked` (`@/modules/api/validation`) USED to be the same
+ * predicate `sessionViolation` uses inside the API guards. It is not any more,
+ * and the difference is deliberate: since 2026-08-22 the API guards also
+ * require an origin-scoped second factor out of `localStorage`
+ * (`SESSION_BINDING_HEADER`, because cookies are not scoped by port), and a
+ * top-level navigation cannot carry a custom header. This gate therefore runs
+ * on the COOKIE ALONE and could not do otherwise — requiring the factor here
+ * would mean nobody could ever load the app.
+ *
+ * That is safe only because of the paragraph above: the shell is all a
+ * cookie-only pass yields. Consequence worth naming, since it is the one thing
+ * the split gives away: a stolen cookie replayed here renders the shell and
+ * RENEWS the session's idle expiry (`hasValidSession` renews). What it renews
+ * is half a credential — every request that shell makes still 401s — but do
+ * not describe an unaccompanied cookie as decaying on schedule.
+ *
+ * What the two DO still share is the `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`
+ * bypass, reached through the same function rather than a second copy someone
+ * forgets to update.
  * Miss that bypass and a LAN deployment (`serve --host 0.0.0.0`, which turns
  * the gate off entirely — no token is ever minted for that run) becomes a
  * PERMANENT lockout: the API would let the LAN browser through, but this
