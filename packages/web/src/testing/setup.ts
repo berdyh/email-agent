@@ -1,7 +1,7 @@
 /**
  * Per-file setup for the component suite (`vitest.config.ts` → `setupFiles`).
  *
- * THREE THINGS, each of which is a bug if it is missing.
+ * FOUR THINGS, each of which is a bug if it is missing.
  *
  * 1. jest-dom matchers. `toBeInTheDocument`, `toHaveTextContent` and friends
  *    are not part of vitest's `expect`; without this import they are silent
@@ -23,13 +23,64 @@
  *    Worse, in a repo whose whole subject is a local server, a stray absolute
  *    URL would be a real network call from a test run. Every test states what
  *    the server said; one that does not gets told so by name.
+ *
+ * 4. A WORKING `localStorage`, installed AT MODULE TOP LEVEL rather than in a
+ *    hook. Measured on this Node/jsdom combination: `window.localStorage` is
+ *    `undefined`, NOT jsdom's usual real `Storage` — Node 22+ predefines its
+ *    OWN global `localStorage` accessor (gated behind `--localstorage-file`,
+ *    returning `undefined` without it), and jsdom's environment setup
+ *    installs its `window.localStorage` by plain assignment, which runs
+ *    Node's existing SETTER instead of replacing the property. Harmless for
+ *    every component so far, but `action-chat-store.ts`'s zustand `persist`
+ *    middleware calls `createJSONStorage(() => window.localStorage)` and
+ *    reads it EXACTLY ONCE, synchronously, at module-import time — so a fix
+ *    applied in `beforeEach` (proven by hand: still crashes) is already too
+ *    late, and the property must be redefined (not assigned — the same
+ *    setter problem) before ANY test file's own imports run. `setupFiles`
+ *    load before the test file does, which is what makes top level here
+ *    early enough. `beforeEach` below only CLEARS it between tests; it must
+ *    never redefine the property, or later tests keep the first test's
+ *    reference and inherit its persisted `action-chat` conversation state.
  */
 
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 
+class MemoryStorage implements Storage {
+  private store = new Map<string, string>();
+  get length(): number {
+    return this.store.size;
+  }
+  clear(): void {
+    this.store.clear();
+  }
+  getItem(key: string): string | null {
+    return this.store.get(key) ?? null;
+  }
+  key(index: number): string | null {
+    return [...this.store.keys()][index] ?? null;
+  }
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value));
+  }
+}
+
+const memoryLocalStorage = new MemoryStorage();
+// `Object.defineProperty`, not `globalThis.localStorage = ...`: Node's
+// existing descriptor is a getter/setter pair, and a plain assignment
+// invokes that setter rather than replacing it — see point 4 above.
+Object.defineProperty(globalThis, "localStorage", {
+  value: memoryLocalStorage,
+  configurable: true,
+  writable: true,
+});
+
 beforeEach(() => {
+  memoryLocalStorage.clear();
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {

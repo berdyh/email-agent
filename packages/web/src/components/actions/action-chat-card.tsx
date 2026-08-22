@@ -80,7 +80,7 @@ export function ActionChatCard() {
           <CardTitle className="text-base">
             {mode === "create" ? "Create New Action" : `Edit: ${editingAction?.id ?? "Action"}`}
           </CardTitle>
-          <Button variant="ghost" size="icon" onClick={close}>
+          <Button variant="ghost" size="icon" onClick={close} aria-label="Close">
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -199,6 +199,7 @@ export function ActionChatCard() {
             className="h-[60px]"
             onClick={handleSend}
             disabled={!input.trim() || isGenerating}
+            aria-label="Send"
           >
             {isGenerating ? (
               <Loader2 className="h-4 w-4 animate-spin" />
