@@ -1,4 +1,11 @@
-import { UNLOCK_REQUIRED_CODE } from "@/modules/api/auth-contract";
+import {
+  BINDING_REQUIRED_CODE,
+  SESSION_BINDING_HEADER,
+  UNLOCK_REASON_BINDING,
+  UNLOCK_REASON_PARAM,
+  UNLOCK_REQUIRED_CODE,
+} from "@/modules/api/auth-contract";
+import { readSessionBinding } from "@/lib/session-binding";
 
 /**
  * Thrown by `apiFetch` when it redirects the tab instead of returning a
@@ -15,11 +22,26 @@ export class UnlockRequiredError extends Error {
 }
 
 /**
- * `fetch()`, plus ONE thing this app's ~12 call sites otherwise each have to
- * remember by hand: when a 401 carries `{ code: UNLOCK_REQUIRED_CODE }`, send
- * the TAB to `/unlock` instead of leaving the caller to render an
- * indistinguishable "failed to fetch" error for a session that simply
- * expired mid-use.
+ * `fetch()`, plus TWO things this app's call sites otherwise each have to
+ * remember by hand.
+ *
+ * ONE — IT ATTACHES THE SECOND FACTOR. The session cookie is not sufficient on
+ * its own: cookies are not scoped by port, so a sibling loopback port can be
+ * handed this app's cookie and replay it. `SESSION_BINDING_HEADER` carries an
+ * opaque value out of ORIGIN-scoped `localStorage` (an origin includes the
+ * port), and the API guard requires it alongside the cookie. THIS IS THE ONLY
+ * PLACE THE HEADER IS ADDED, which is precisely why every API call in this app
+ * has to come through here — a bare `fetch()` to a guarded route now 401s.
+ * See `lib/session-binding.ts` and core's `SESSION_BINDING_HEADER`.
+ *
+ * TWO — IT ROUTES A LAPSED SESSION SOMEWHERE RECOVERABLE. When a 401 carries
+ * `{ code: UNLOCK_REQUIRED_CODE }`, send the TAB to `/unlock` instead of
+ * leaving the caller to render an indistinguishable "failed to fetch" error
+ * for a session that simply expired mid-use. A 401 carrying
+ * `BINDING_REQUIRED_CODE` goes to the same page with
+ * `?reason=binding`, because that user is in a DIFFERENT situation — a live
+ * session whose second factor this browser does not have — and telling them
+ * they are not unlocked, when they can see they are, reads as a broken app.
  *
  * WHY THIS MATTERS ON TOP OF THE PAGE GATE. `(app)/layout.tsx` only runs on a
  * cold load/full navigation — every page under it is `"use client"` with its
@@ -44,7 +66,13 @@ export async function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  // Merged onto the caller's own headers rather than replacing them: the
+  // streaming chat call and every JSON POST set `content-type` here.
+  const headers = new Headers(init?.headers);
+  const binding = readSessionBinding();
+  if (binding !== undefined) headers.set(SESSION_BINDING_HEADER, binding);
+
+  const response = await fetch(input, { ...init, headers });
   if (response.status === 401) {
     let code: unknown;
     try {
@@ -53,9 +81,15 @@ export async function apiFetch(
       // Not JSON, or the body was empty — fall through and let the caller
       // handle this 401 as an ordinary failed response.
     }
-    if (code === UNLOCK_REQUIRED_CODE && typeof window !== "undefined") {
-      window.location.assign("/unlock");
-      throw new UnlockRequiredError();
+    if (typeof window !== "undefined") {
+      if (code === BINDING_REQUIRED_CODE) {
+        window.location.assign(`/unlock?${UNLOCK_REASON_PARAM}=${UNLOCK_REASON_BINDING}`);
+        throw new UnlockRequiredError();
+      }
+      if (code === UNLOCK_REQUIRED_CODE) {
+        window.location.assign("/unlock");
+        throw new UnlockRequiredError();
+      }
     }
   }
   return response;

@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Newspaper } from "lucide-react";
 import { toast } from "sonner";
+import { apiFetch } from "@/lib/api-fetch";
 
 interface DigestEntry {
   sender: string;
@@ -30,7 +31,7 @@ export default function DigestPage() {
 
   const mutation = useMutation<Digest, Error>({
     mutationFn: async (): Promise<Digest> => {
-      const res = await fetch("/api/analysis/digest", { method: "POST" });
+      const res = await apiFetch("/api/analysis/digest", { method: "POST" });
       if (!res.ok) throw new Error("Digest generation failed");
       return res.json() as Promise<Digest>;
     },

@@ -75,7 +75,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const response = NextResponse.json({ ok: true });
+  // The second factor travels in the BODY, never in a cookie — the entire
+  // point is that it must land somewhere a sibling loopback port cannot read,
+  // and a cookie is scoped by host with no port component. The client writes
+  // it to `localStorage` on THIS origin before navigating; see
+  // `lib/session-binding.ts` and core's `SESSION_BINDING_HEADER`.
+  const response = NextResponse.json({ ok: true, binding: result.bindingToken });
   response.cookies.set(SESSION_COOKIE_NAME, result.sessionToken, {
     ...SESSION_COOKIE_OPTIONS,
     maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,

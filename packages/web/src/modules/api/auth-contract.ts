@@ -25,6 +25,49 @@
  */
 export const UNLOCK_REQUIRED_CODE = "unlock-required";
 
+/**
+ * The `code` a 401 carries when the cookie IS a live session but the
+ * origin-scoped second factor is absent or wrong. Matches
+ * `BINDING_REQUIRED_CODE` in `packages/core/src/config/session.ts`; pinned
+ * equal by `auth-contract.test.ts` for the same anti-drift reason as above.
+ */
+export const BINDING_REQUIRED_CODE = "binding-required";
+
+/**
+ * The request header the second factor travels in. Matches
+ * `SESSION_BINDING_HEADER` in core — also pinned by `auth-contract.test.ts`,
+ * and a drift here is not a cosmetic bug: the client would send a header the
+ * guard never reads, and every request would 401.
+ */
+export const SESSION_BINDING_HEADER = "x-email-agent-session-binding";
+
+/**
+ * Where the browser keeps the second factor.
+ *
+ * `localStorage`, NOT `sessionStorage`, and the reason is written out at
+ * length on `SESSION_BINDING_HEADER` in `packages/core/src/config/session.ts`.
+ * The short version: both are scoped by ORIGIN — which includes the PORT, and
+ * that is the property that defeats a sibling loopback port — but
+ * `sessionStorage` is additionally per-TAB, which buys nothing against an
+ * attacker who is a different origin rather than a different tab, and would
+ * cost the user a fresh unlock link for every new tab and every browser
+ * restart while the cookie beside it survives both.
+ *
+ * This key is CLIENT-ONLY and has no core counterpart, so unlike the two
+ * constants above there is nothing for it to drift against.
+ */
+export const SESSION_BINDING_STORAGE_KEY = "email-agent.session-binding";
+
+/**
+ * The query parameter `apiFetch` adds when it sends the tab to `/unlock`
+ * because of a missing/wrong second factor rather than a missing session, so
+ * the unlock screen can explain the ACTUAL situation. Design point: a request
+ * with a valid cookie and no factor must lead somewhere recoverable and
+ * distinguishable from "no session at all".
+ */
+export const UNLOCK_REASON_PARAM = "reason";
+export const UNLOCK_REASON_BINDING = "binding";
+
 /** The `code` field on every failure response from `POST /api/auth/unlock`. */
 export type UnlockExchangeErrorCode =
   | "invalid-token"

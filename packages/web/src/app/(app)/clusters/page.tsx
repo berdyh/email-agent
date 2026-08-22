@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Network } from "lucide-react";
 import { toast } from "sonner";
+import { apiFetch } from "@/lib/api-fetch";
 
 interface Cluster {
   id: string;
@@ -23,7 +24,7 @@ export default function ClustersPage() {
 
   const mutation = useMutation<Cluster[], Error>({
     mutationFn: async (): Promise<Cluster[]> => {
-      const res = await fetch("/api/analysis/cluster", { method: "POST" });
+      const res = await apiFetch("/api/analysis/cluster", { method: "POST" });
       if (!res.ok) throw new Error("Clustering failed");
       return res.json() as Promise<Cluster[]>;
     },

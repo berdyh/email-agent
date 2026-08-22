@@ -7,6 +7,7 @@ import {
   describeUnlockExchangeError,
   type UnlockExchangeErrorCode,
 } from "@/modules/api/auth-contract";
+import { storeSessionBinding } from "@/lib/session-binding";
 
 /**
  * Pulls a redeemable token out of either a full unlock URL or a bare pasted
@@ -37,8 +38,20 @@ function extractToken(raw: string): string {
  * session cookie are both host-scoped to whatever address the server bound
  * (`localhost:3847` and `127.0.0.1:3847` hold separate sessions, and a phone
  * on the LAN is a different host again), and that is out of scope by design.
+ *
+ * `reason === "binding"` is the RECOVERY case, and it is a different sentence
+ * on purpose. That user's cookie is fine — what they are missing is the
+ * origin-scoped second factor `apiFetch` sends alongside it, so telling them
+ * "Email Agent is locked" would contradict what they can plainly see (they
+ * were just using it, or they can load the app shell). Redeeming a link is
+ * still the fix, because that is the only moment the server issues a new
+ * factor; the copy has to explain WHY a working-looking browser needs one.
  */
-export function UnlockScreen(): React.JSX.Element {
+export function UnlockScreen({
+  reason,
+}: {
+  reason?: "binding";
+} = {}): React.JSX.Element {
   const [value, setValue] = useState("");
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -57,6 +70,10 @@ export function UnlockScreen(): React.JSX.Element {
         body: JSON.stringify({ token }),
       });
       if (res.ok) {
+        // Before the navigation — `location.replace` tears the page down and
+        // anything still pending never runs. See `lib/session-binding.ts`.
+        const payload = (await res.json().catch(() => null)) as { binding?: unknown } | null;
+        if (typeof payload?.binding === "string") storeSessionBinding(payload.binding);
         window.location.replace("/mail");
         return;
       }
@@ -75,7 +92,17 @@ export function UnlockScreen(): React.JSX.Element {
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md space-y-6">
         <div className="space-y-2 text-center">
-          <h1 className="text-xl font-semibold">Email Agent is locked</h1>
+          <h1 className="text-xl font-semibold">
+            {reason === "binding" ? "This browser needs unlocking again" : "Email Agent is locked"}
+          </h1>
+          {reason === "binding" && (
+            <p className="text-sm text-muted-foreground">
+              You are still signed in, but this browser is missing the key that
+              ties that session to this exact address. That happens after
+              clearing site data, or if the browser is blocking storage for
+              this site. Redeeming a link below issues a fresh one.
+            </p>
+          )}
           <p className="text-sm text-muted-foreground">
             This unlocks read and write access to your mail data for this
             browser. It does not stop other programs running as you on this

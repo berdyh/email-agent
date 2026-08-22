@@ -10,9 +10,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
-import { UNLOCK_REQUIRED_CODE as coreCode } from "@email-agent/core/config";
 import {
+  BINDING_REQUIRED_CODE as coreBindingCode,
+  SESSION_BINDING_HEADER as coreBindingHeader,
+  UNLOCK_REQUIRED_CODE as coreCode,
+} from "@email-agent/core/config";
+import {
+  BINDING_REQUIRED_CODE as webBindingCode,
   describeUnlockExchangeError,
+  SESSION_BINDING_HEADER as webBindingHeader,
+  SESSION_BINDING_STORAGE_KEY,
   UNLOCK_REQUIRED_CODE as webCode,
   unlockExchangeErrorCode,
 } from "./auth-contract.js";
@@ -20,6 +27,19 @@ import {
 describe("auth-contract", () => {
   it("keeps the client-side unlock-required code equal to core's", () => {
     assert.equal(webCode, coreCode);
+  });
+
+  it("keeps the second factor's header and code equal to core's", () => {
+    // A drift in the HEADER is not cosmetic: the client would send a name the
+    // guard never reads, and every request in the app would 401 with no way
+    // for the user to tell why.
+    assert.equal(webBindingHeader, coreBindingHeader);
+    assert.equal(webBindingCode, coreBindingCode);
+    // Distinct from the no-session code, because the two need different copy.
+    assert.notEqual(webBindingCode, webCode);
+    // Client-only, so it has no core counterpart to drift against — but it
+    // must not accidentally be spelled as one of the wire values either.
+    assert.notEqual(SESSION_BINDING_STORAGE_KEY, webBindingHeader);
   });
 
   it("maps every core exchange-failure reason onto a wire code", () => {

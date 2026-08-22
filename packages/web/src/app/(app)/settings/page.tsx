@@ -22,6 +22,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState, useEffect } from "react";
+import { apiFetch } from "@/lib/api-fetch";
 
 export default function SettingsPage() {
   const { data: settings, isLoading } = useSettings();
@@ -74,7 +75,7 @@ export default function SettingsPage() {
   const addAccount = async () => {
     setAccountLoading(true);
     try {
-      const res = await fetch("/api/accounts", {
+      const res = await apiFetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "add" }),
@@ -93,7 +94,7 @@ export default function SettingsPage() {
 
   const setDefaultAccount = async (email: string) => {
     try {
-      const res = await fetch("/api/accounts", {
+      const res = await apiFetch("/api/accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "setDefault", email }),
@@ -113,7 +114,7 @@ export default function SettingsPage() {
   const removeAccount = async (email: string) => {
     if (!confirm(`Remove account ${email}? This will delete stored tokens.`)) return;
     try {
-      const res = await fetch("/api/accounts", {
+      const res = await apiFetch("/api/accounts", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),

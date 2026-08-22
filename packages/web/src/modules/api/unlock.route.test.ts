@@ -49,7 +49,6 @@ describe("POST /api/auth/unlock", () => {
     const result = await callHandler(unlock.POST, request);
 
     assert.equal(result.status, 200);
-    assert.deepEqual(result.body, { ok: true });
 
     const value = cookieValue(result.setCookies, SESSION_COOKIE_NAME);
     assert.ok(value, "expected a Set-Cookie for the session");
@@ -61,6 +60,33 @@ describe("POST /api/auth/unlock", () => {
     assert.ok(attrs.includes("samesite=lax"));
     assert.ok(!attrs.some((a) => a === "secure"));
     assert.ok(attrs.some((a) => a === `max-age=${SESSION_COOKIE_MAX_AGE_SECONDS}`));
+  });
+
+  it("returns the origin-scoped second factor in the BODY, and never as a cookie", async () => {
+    // The whole point of the second factor is that it must land somewhere a
+    // sibling loopback port cannot read. A cookie is scoped by HOST with no
+    // port component, so shipping it as one would hand it straight to the
+    // attacker this closes — it goes in the body, and the client writes it to
+    // localStorage on the origin the user actually opened.
+    const { token } = mintUnlockToken();
+    const result = await callHandler<{ ok: boolean; binding: string }>(
+      unlock.POST,
+      buildRequest("/api/auth/unlock", { method: "POST", body: { token }, session: false }),
+    );
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.ok, true);
+    assert.equal(typeof result.body.binding, "string");
+    assert.ok(result.body.binding.length >= 40);
+
+    const sessionCookie = cookieValue(result.setCookies, SESSION_COOKIE_NAME);
+    assert.notEqual(result.body.binding, sessionCookie);
+    for (const line of result.setCookies) {
+      assert.ok(
+        !line.includes(result.body.binding),
+        `the second factor must not appear in any Set-Cookie: ${line}`,
+      );
+    }
   });
 
   it("burns the token: the same link cannot be used twice", async () => {

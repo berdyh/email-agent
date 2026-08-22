@@ -5,6 +5,7 @@ import {
   describeUnlockExchangeError,
   type UnlockExchangeErrorCode,
 } from "@/modules/api/auth-contract";
+import { storeSessionBinding } from "@/lib/session-binding";
 
 /**
  * The `?token=…` handoff. Mounted by the root `page.tsx` dispatcher when a
@@ -22,6 +23,13 @@ import {
  * real navigation is what guarantees the next server component render
  * (`(app)/layout.tsx`) sees it, rather than relying on the client router
  * cache to have picked up a cookie a `fetch()` call set out of band.
+ *
+ * THE SECOND FACTOR IS STORED BEFORE THAT NAVIGATION, and the order is not
+ * incidental: `location.replace` tears the page down, so anything still
+ * pending never runs. This component runs on the origin the user actually
+ * opened, which is what makes `localStorage` here the right jar — that is the
+ * whole bootstrap, and there is no other moment at which the browser could
+ * obtain the value.
  */
 export function UnlockExchange({ token }: { token: string }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +47,10 @@ export function UnlockExchange({ token }: { token: string }): React.JSX.Element 
         });
         if (cancelled) return;
         if (res.ok) {
+          const payload = (await res.json().catch(() => null)) as
+            | { binding?: unknown }
+            | null;
+          if (typeof payload?.binding === "string") storeSessionBinding(payload.binding);
           window.location.replace("/mail");
           return;
         }
@@ -67,9 +79,24 @@ export function UnlockExchange({ token }: { token: string }): React.JSX.Element 
       <main className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-md space-y-4 text-center">
           <p className="text-sm text-muted-foreground">{error}</p>
-          <a href="/unlock" className="text-sm underline underline-offset-4">
-            Go to the unlock page
-          </a>
+          <div className="flex justify-center gap-4">
+            <a href="/unlock" className="text-sm underline underline-offset-4">
+              Go to the unlock page
+            </a>
+            {/*
+              This link exists because the root dispatcher now runs the
+              `?token=` branch BEFORE the already-unlocked redirect (see
+              `app/page.tsx` for why it has to). The cost of that ordering is
+              that a browser which is already fully working, clicking a stale
+              link out of a terminal, lands here instead of silently on /mail.
+              One click is the whole cost, and it is worth paying to keep the
+              printed link from being a dead end for a browser that has a
+              cookie but no second factor.
+            */}
+            <a href="/mail" className="text-sm underline underline-offset-4">
+              Open the app
+            </a>
+          </div>
         </div>
       </main>
     );
