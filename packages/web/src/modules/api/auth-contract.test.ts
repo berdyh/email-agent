@@ -8,6 +8,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { UNLOCK_REQUIRED_CODE as coreCode } from "@email-agent/core/config";
 import {
@@ -40,11 +41,29 @@ describe("auth-contract", () => {
       assert.ok(message.length > 0);
     }
     assert.equal(new Set(messages).size, messages.length);
-    // Every case but the rate-limit tells the user how to get back in — the
-    // rate limit specifically should NOT, since minting another token while
-    // rate-limited would not help and would just invite another attempt.
-    for (const code of ["invalid-token", "token-expired", "token-already-used"] as const) {
+    // EVERY case names the recovery command, the rate limit included. That is
+    // a change: this test used to assert the opposite for `rate-limited`, on
+    // the reasoning that minting while the window was hot could not help. It
+    // could not, and that was the defect — `mintUnlockToken()` now clears the
+    // failure window, so the command really is the way out, and a message that
+    // says only "wait" sends the user away from it for up to fifteen minutes.
+    for (const code of codes) {
       assert.match(describeUnlockExchangeError(code), /email-agent unlock/);
     }
+  });
+
+  it("has the route answer 429 with the shared copy, not a literal of its own", async () => {
+    // The route hand-wrote its own "too many attempts" sentence, so the JSON
+    // `error` and the unlock page's rendering of the same code could drift —
+    // exactly what this contract module exists to prevent. Pinned by reading
+    // the route source: invoking the handler for real would need an exhausted
+    // rate-limit window in a temp `$HOME`, which `unlock.route.test.ts`
+    // already covers end to end for the status and the code.
+    const source = await readFile(
+      new URL("../../app/api/auth/unlock/route.ts", import.meta.url),
+      "utf-8",
+    );
+    assert.doesNotMatch(source, /Too many attempts/);
+    assert.match(source, /describeUnlockExchangeError\("rate-limited"\)/);
   });
 });

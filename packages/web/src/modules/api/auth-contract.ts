@@ -70,7 +70,15 @@ export function describeUnlockExchangeError(code: UnlockExchangeErrorCode): stri
     case "token-expired":
       return "This link has expired — it was only good for ten minutes. Run `npx email-agent unlock` for a fresh one.";
     case "rate-limited":
-      return "Too many attempts. Wait a moment and try again.";
+      // This used to say only "wait a moment and try again", on the reasoning
+      // that a fresh token could not help while the window was hot. That was
+      // true and it was the bug: `mintUnlockToken()` now CLEARS the failure
+      // window (`packages/core/src/config/session.ts`), precisely because the
+      // old behaviour left the recovery command this app recommends everywhere
+      // else unable to recover from a lockout a couple of stale-link
+      // double-clicks could cause. Naming the command is now the fastest way
+      // out, not an invitation to another doomed attempt.
+      return "Too many attempts. Run `npx email-agent unlock` for a fresh link — minting one clears the limit.";
     case "invalid-token":
       return "That link or token is not valid. Run `npx email-agent unlock` for a fresh one.";
   }

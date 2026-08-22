@@ -53,7 +53,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (result.reason === "rate-limited") {
       return NextResponse.json(
         {
-          error: "Too many attempts. Wait a moment and try again.",
+          // Through `describeUnlockExchangeError`, not a second literal: that
+          // function exists so the JSON `error` this route returns and the
+          // copy the unlock page renders for the same code cannot say two
+          // different things, and this branch was quietly the one place that
+          // hand-wrote its own.
+          error: describeUnlockExchangeError("rate-limited"),
           code: "rate-limited",
           retryAfterMs: result.retryAfterMs,
         },
