@@ -26,3 +26,9 @@ Thumbs.db
 # regenerable. Merges use the union driver (see .gitattributes).
 graphify-out/*
 !graphify-out/graph.json
+
+# Per-machine agent tooling scratch. `.gstack/tmp` holds review prompts and
+# captured stdout; `.serena/` is an MCP server's local project cache. Both are
+# regenerable and neither belongs to any branch.
+.gstack/
+.serena/
