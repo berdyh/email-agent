@@ -234,11 +234,25 @@ re-asserted inside the same atomic write predicate — so neither a row an apply
 already resolved nor one an apply claimed inside the threshold can be
 overwritten. What it still does not cover has its own entry below ("An apply
 hung past the staleness threshold still loses its outcome"); do not describe
-this as closing the in-flight window. **Two answers, no retry, no
-verification:** the buttons say "I checked Gmail — it happened" / "— it didn't",
-the toast says the outcome was recorded "on your word", and an `applied` row
-carries `STRANDED_APPLIED_NOTE` saying Email Agent did not check. Skipping is a
-first-class answer. Do not describe any of this as recovery.
+this as closing the in-flight window. **Two answers, no retry, and — AS OF THIS
+WAVE — no verification:** the buttons say "I checked Gmail — it happened" /
+"— it didn't", the toast says the outcome was recorded "on your word", and an
+`applied` row carries `STRANDED_APPLIED_NOTE` saying Email Agent did not check.
+Skipping is a first-class answer. Do not describe any of this as recovery.
+
+**Corrected 2026-08-22, in verification of M1:** the "no verification" clause
+above is no longer true of these surfaces and is kept dated rather than
+deleted, so the wave that shipped it stays attributable. feature/todos-w11-
+bugfixes added `verifyStrandedApplyingOperations()`, which reads each stranded
+row's CURRENT labels back from Gmail and resolves what it can before a person
+is asked — run automatically at `email-agent fetch` and `email-agent serve`
+startup, once per `StrandedOperationsPanel` mount via
+`POST /api/approvals/stranded/verify`, and inline by `approvals stranded`. The
+human wording above therefore now applies only to the RESIDUAL that check
+could not answer: a row it resolves itself carries `STRANDED_VERIFIED_NOTE`
+and `resolutionEvidence: "verified-api"`, not `STRANDED_APPLIED_NOTE`. What did
+NOT change: neither source establishes CAUSATION, nothing re-applies, nothing
+rolls back, and this is still not recovery.
 
 **3. A test must go through a surface. DONE** (feature/todos-w3-tests) — see
 "THE SURFACES WAVE item 3" in Completed for what the CLI and web tests cover.

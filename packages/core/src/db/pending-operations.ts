@@ -344,13 +344,25 @@ export function selectStaleApplyingOperations(
  * The claim/lease means such a row is `applying`, not `pending`, so it can
  * never be silently re-applied — but it is also invisible to every surface,
  * which all list `status: "pending"`. Its Gmail mutation may or may not have
- * landed, so this is deliberately a *report*, not an auto-retry: only the user
- * can decide whether the change went through.
+ * landed, so this is deliberately a *report*, not an auto-retry. What has NOT
+ * changed: nothing here re-applies or rolls back anything.
  *
- * Callers: `GET /api/approvals/stranded` (rendered by `StrandedOperationsPanel`
- * on the web Actions page) and `email-agent approvals stranded`. Both LIST the
- * rows and ask the user to adjudicate them through
- * `resolveStrandedApplyingOperations`; neither re-applies anything.
+ * WHAT DID CHANGE, and this comment used to deny it. "Only the user can decide
+ * whether the change went through" was true when this was written and is not
+ * true now: `verifyStrandedApplyingOperations` (`actions/verify-stranded.ts`)
+ * is a THIRD caller, it uses this as its own cheap gate, and it reads the
+ * message's current labels back from Gmail and resolves what it can BEFORE any
+ * human is shown the row. It still establishes no CAUSATION — an end-state
+ * match is not proof this app's call produced it — and it deliberately refuses
+ * to record an `accountId: ""` ADC row as applied. A present-tense sentence
+ * denying that a check exists teaches the behaviour back, which is the failure
+ * this repo keeps getting bitten by.
+ *
+ * Callers: `verifyStrandedApplyingOperations` (which resolves what it can and
+ * leaves the rest), `GET /api/approvals/stranded` (rendered by
+ * `StrandedOperationsPanel` on the web Actions page) and `email-agent approvals
+ * stranded`. The two human surfaces LIST the residual and ask the user to
+ * adjudicate it through `resolveStrandedApplyingOperations`.
  */
 export async function getStaleApplyingOperations(options?: {
   olderThanMs?: number;
