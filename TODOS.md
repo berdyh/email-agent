@@ -1096,7 +1096,11 @@ works once the server reports ready instead). `POST /api/auth/unlock`
 `httpOnly`, `SameSite=Lax`, `secure: false` session cookie, rate-limited and
 compared via a hash-then-`timingSafeEqual`, burning the token synchronously in
 the same tick it is read (no `await` between read and burn — pinned by a
-test). A browser with no valid cookie meets the unlock page at `/unlock`, not
+test) AND across processes: every read-modify-write over the store runs
+inside an `O_EXCL` lock (`config/session-lock.ts`, added 2026-08-22 after the
+pre-lock code was measured to let two processes both redeem the same link,
+twenty of twenty rounds — see the codex paragraph below). A browser with no
+valid cookie meets the unlock page at `/unlock`, not
 a bare 403 (`(app)/layout.tsx`'s redirect, UX; the API guards in
 `modules/api/validation.ts` are the actual enforcement, folded into BOTH
 `mutationGuardResponse` and `readGuardResponse` — reads are gated too, since
@@ -1110,11 +1114,46 @@ process can inject an env var into a running child; the full argument,
 including the tradeoffs stated rather than hidden, is in AGENTS.md's config
 bullet and `packages/core/src/config/session.ts`'s module header.
 
+**Two real gaps in the paragraph above, found by codex (gpt-5.x, high effort)
+adversarially reviewing this closed feature, 2026-08-22, and both fixed the
+same day:**
+1. *Cookie port confusion.* RFC 6265 §8.5: cookies are not scoped by TCP
+   port, so `127.0.0.1:3847` and any other loopback port a different local
+   user or a container binds share ONE cookie jar. A cross-site top-level GET
+   carries this `Lax` cookie to that sibling server, which can then replay it
+   to 3847 as a valid bearer credential — `httpOnly` does not help, since the
+   thief is the receiving HTTP server, not page script. Closed by an
+   origin-scoped second factor: the exchange also mints a `bindingToken`,
+   returned ONLY in the response body (never a cookie, which would hand it to
+   the attacker), kept in the browser's `localStorage` (scoped by ORIGIN,
+   which DOES include the port), and echoed in `SESSION_BINDING_HEADER` on
+   every API call; `checkSessionRequest` requires both. A captured cookie
+   alone now gets an attacker nothing; the two together get everything a
+   normal unlocked browser has. The PAGE gate stays cookie-only — a top-level
+   navigation carries no custom header — which is safe only because every
+   page under it does zero server-side data fetching.
+2. *The burn was not atomic across processes* — see the sentence added above.
+
+Also in scope for that review and already reflected above: the token used to
+travel in the query string, so `email-agent serve`'s `next dev` child printed
+it a second time into the terminal on every unlock (fixed by moving it into
+the URL fragment); and `session.ts`'s `UnlockMint.token` doc comment claimed
+the plaintext went to "memory and stdout, and nowhere else", which was false
+for the whole period the query string carried it — the comment now
+enumerates every place it actually goes. Codex also reviewed and confirmed
+clean: no route/page bypass, no production/test-session bypass, and correct
+guard composition (`X-Forwarded-Host` ignored).
+
 **The honest claim, exactly as specified, checked against where the secret
-actually ended up:** this does NOT stop code running as you on this machine —
-such code reads `~/.email-agent/accounts/{email}/token.json` and calls Gmail
-directly, and it can also read `session.json` or `/proc/<pid>/environ`
-directly, never touching this app. What it buys is narrower and real: it
+actually ended up, and now checked against BOTH gaps above:** this does NOT
+stop code running as you on this machine — such code reads
+`~/.email-agent/accounts/{email}/token.json` and calls Gmail directly, and it
+can also read `session.json` or `/proc/<pid>/environ` directly, never
+touching this app. What it buys is narrower and real, and only fully true
+since the second-factor fix above: before that fix, a process holding only a
+cookie captured from a sibling loopback port — no home-directory read
+required — could still ride an unlocked session, so the sentence below was an
+overclaim for however long it stood unqualified. With the second factor, it
 raises the bar from "anything that can reach the port" to "anything that can
 read your home directory" — and that claim holds because only DIGESTS are
 ever persisted, so reading the store alone yields no usable credential. It is
@@ -1165,7 +1204,11 @@ rendering in isolation (there is still no component testing library — the
 unlock components are read, and exercised for real only by the one browser
 test above); and, unchanged by any of this, a successful Gmail mutation (no
 linked account anywhere in the suite).
-Found by: repo owner, 2026-08-20 (decision to build); this closes it.
+Found by: repo owner, 2026-08-20 (decision to build). The cookie-port-confusion
+gap and the cross-process burn race were found by codex (gpt-5.x, high effort)
+adversarial review of this closed feature, 2026-08-22, and fixed the same
+day — see the paragraph above; that review also confirmed the route/page
+bypass, production/test-session bypass, and guard-composition claims clean.
 
 ### Record which surface approved an operation
 **Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
