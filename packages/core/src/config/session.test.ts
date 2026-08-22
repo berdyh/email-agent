@@ -165,19 +165,23 @@ describe("rate limiting the exchange", () => {
     assert.ok(blocked.retryAfterMs <= RATE_LIMIT_WINDOW_MS);
   });
 
-  it("lets the correct token through once the window has rolled past", () => {
-    const { token } = mintUnlockToken(T0);
+  it("stops refusing once the window has rolled past, without needing a mint", () => {
+    mintUnlockToken(T0);
     for (let i = 0; i < RATE_LIMIT_MAX_FAILURES; i += 1) {
       exchangeUnlockToken(`guess-${i}`, T0 + i);
     }
-    assert.equal(exchangeUnlockToken(token, T0 + 100).ok, false);
+    const blocked = exchangeUnlockToken("guess-again", T0 + 100);
+    assert.ok(!blocked.ok);
+    assert.equal(blocked.reason, "rate-limited");
 
-    // The token itself is long dead by then, so re-mint: what is being pinned
-    // is that the LIMITER stops refusing, not that a stale token revives.
-    const fresh = mintUnlockToken(T0 + RATE_LIMIT_WINDOW_MS + 1);
-    const allowed = exchangeUnlockToken(fresh.token, T0 + RATE_LIMIT_WINDOW_MS + 1);
+    // Deliberately NOT re-minting to prove this: minting now clears the window
+    // (see below), which would make this test pass whether or not the rolling
+    // window works at all. A bare attempt past the window is the only probe
+    // that isolates the roll.
+    const rolled = exchangeUnlockToken("guess-again", T0 + RATE_LIMIT_WINDOW_MS + 1);
 
-    assert.ok(allowed.ok);
+    assert.ok(!rolled.ok);
+    assert.equal(rolled.reason, "invalid");
   });
 
   it("does not count a successful exchange against the window", () => {
@@ -186,6 +190,133 @@ describe("rate limiting the exchange", () => {
     const parsed = JSON.parse(storeBytes()) as { failures: number[] };
 
     assert.deepEqual(parsed.failures, []);
+  });
+
+  it("clears prior failures on a successful exchange", () => {
+    mintUnlockToken(T0);
+    for (let i = 0; i < RATE_LIMIT_MAX_FAILURES - 1; i += 1) {
+      exchangeUnlockToken(`guess-${i}`, T0 + i);
+    }
+    // Minting clears the window, so mint FIRST and fail after it — otherwise
+    // this would be testing the mint path again rather than the success path.
+    const fresh = mintUnlockToken(T0 + 1);
+    exchangeUnlockToken("one-more-guess", T0 + 2);
+    assert.equal(
+      (JSON.parse(storeBytes()) as { failures: number[] }).failures.length,
+      1,
+    );
+
+    assert.ok(exchangeUnlockToken(fresh.token, T0 + 3).ok);
+
+    assert.deepEqual((JSON.parse(storeBytes()) as { failures: number[] }).failures, []);
+  });
+});
+
+describe("recovering from an exhausted rate-limit window", () => {
+  it("lets `email-agent unlock` back in immediately after a lockout", () => {
+    // The exact sequence measured live against a running server: exhaust the
+    // budget, run `npx email-agent unlock` (which is `mintUnlockToken`), open
+    // the fresh link. It used to answer `rate-limited` with a retryAfterMs of
+    // ~14 minutes — from the one command the "this link was already used"
+    // message tells the user to run.
+    mintUnlockToken(T0);
+    for (let i = 0; i < RATE_LIMIT_MAX_FAILURES; i += 1) {
+      exchangeUnlockToken(`guess-${i}`, T0 + i);
+    }
+    const stillBlocked = exchangeUnlockToken("anything", T0 + RATE_LIMIT_MAX_FAILURES);
+    assert.ok(!stillBlocked.ok);
+    assert.equal(stillBlocked.reason, "rate-limited");
+
+    const fresh = mintUnlockToken(T0 + RATE_LIMIT_MAX_FAILURES + 1);
+    const allowed = exchangeUnlockToken(fresh.token, T0 + RATE_LIMIT_MAX_FAILURES + 2);
+
+    assert.ok(allowed.ok);
+    assert.deepEqual((JSON.parse(storeBytes()) as { failures: number[] }).failures, []);
+  });
+
+  it("keeps throttling an attacker hammering tokens that never matched", () => {
+    // The property the limiter exists for, and the one this must not weaken:
+    // something that can reach the port but has no token gets exactly
+    // RATE_LIMIT_MAX_FAILURES guesses per window, and the cap is enforced
+    // before any comparison happens.
+    mintUnlockToken(T0);
+    for (let i = 0; i < RATE_LIMIT_MAX_FAILURES; i += 1) {
+      const attempt = exchangeUnlockToken(`brute-${i}`, T0 + i);
+      assert.ok(!attempt.ok);
+      assert.equal(attempt.reason, "invalid");
+    }
+
+    const throttled = exchangeUnlockToken("brute-20", T0 + RATE_LIMIT_MAX_FAILURES);
+
+    assert.ok(!throttled.ok);
+    assert.equal(throttled.reason, "rate-limited");
+    assert.ok(throttled.retryAfterMs > 0);
+  });
+
+  it("does not spend the budget on replays of an already-used link", () => {
+    // 19 concurrent replays of one stale link is what made accidental
+    // self-lockout cheap — a double-click plus a browser prefetch will do it.
+    // A replay proves possession of the real token; it is not a guess.
+    const { token } = mintUnlockToken(T0);
+    assert.ok(exchangeUnlockToken(token, T0).ok);
+    for (let i = 0; i < RATE_LIMIT_MAX_FAILURES * 2; i += 1) {
+      const replay = exchangeUnlockToken(token, T0 + 10 + i);
+      assert.ok(!replay.ok);
+      assert.equal(replay.reason, "used");
+    }
+
+    // If replays had counted, this would come back `rate-limited`.
+    const guess = exchangeUnlockToken("a-real-guess", T0 + 1000);
+
+    assert.ok(!guess.ok);
+    assert.equal(guess.reason, "invalid");
+    assert.deepEqual((JSON.parse(storeBytes()) as { failures: number[] }).failures, [
+      T0 + 1000,
+    ]);
+  });
+
+  it("does not spend the budget on a matched-but-expired link either", () => {
+    const { token } = mintUnlockToken(T0);
+    const past = T0 + UNLOCK_TOKEN_TTL_MS + 1;
+    for (let i = 0; i < RATE_LIMIT_MAX_FAILURES * 2; i += 1) {
+      const attempt = exchangeUnlockToken(token, past + i);
+      assert.ok(!attempt.ok);
+      assert.equal(attempt.reason, "expired");
+    }
+
+    const guess = exchangeUnlockToken("a-real-guess", past + 1000);
+
+    assert.ok(!guess.ok);
+    assert.equal(guess.reason, "invalid");
+  });
+
+  it("writes nothing at all for a matched-but-dead token", () => {
+    // No record to make, and an unauthenticated caller must not be able to
+    // drive a disk write per request by re-clicking a stale link.
+    const { token } = mintUnlockToken(T0);
+    assert.ok(exchangeUnlockToken(token, T0).ok);
+    const before = storeBytes();
+
+    assert.equal(exchangeUnlockToken(token, T0 + 1).ok, false);
+
+    assert.equal(storeBytes(), before);
+  });
+
+  it("counts a replay again once the link it matched has been replaced", () => {
+    // What keeps "uncounted" from being a permanently free probe: after a
+    // re-mint the old value no longer matches the record on file, so it is an
+    // ordinary wrong guess and is charged like one.
+    const { token } = mintUnlockToken(T0);
+    assert.ok(exchangeUnlockToken(token, T0).ok);
+    mintUnlockToken(T0 + 1);
+
+    const replay = exchangeUnlockToken(token, T0 + 2);
+
+    assert.ok(!replay.ok);
+    assert.equal(replay.reason, "invalid");
+    assert.deepEqual((JSON.parse(storeBytes()) as { failures: number[] }).failures, [
+      T0 + 2,
+    ]);
   });
 });
 

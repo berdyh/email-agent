@@ -133,10 +133,44 @@ export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const SESSION_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 
-/** Rolling window over which failed exchange attempts are counted. */
+/**
+ * Rolling window over which failed exchange attempts are counted.
+ *
+ * ─── WHAT COUNTS, AND THE ONE RULE THAT DECIDES IT ───────────────────────────
+ *
+ * **Only an attempt that fails to MATCH the stored digest counts.** That is the
+ * whole rule, and everything below follows from it: this limiter exists to make
+ * brute-forcing an unknown 256-bit secret pointless for something that can reach
+ * the PORT. An attempt whose sha256 matched the record on file has PROVEN
+ * POSSESSION of that secret — it is a stale link being clicked twice, not a
+ * guess — so counting it throttles nothing an attacker was doing and locks out
+ * the person who owns the terminal.
+ *
+ * It used to count everything, and that was measured to be cheap to trip by
+ * accident: nineteen concurrent replays of ONE already-used link (a double-click
+ * plus a browser prefetch will do it) exhausted the whole budget, after which
+ * `email-agent unlock` — the recovery the "already used" copy explicitly
+ * recommends — could not get anybody back in for up to fifteen minutes. A
+ * limiter that locks out its own recovery path is not a security control, it is
+ * a denial of service with extra steps.
+ *
+ * So three things clear or skip the window, each on the same possession
+ * argument, and one thing does not:
+ *  - `mintUnlockToken()` CLEARS it (see that function for why write access to
+ *    `~/.email-agent` already beats this whole scheme);
+ *  - a successful exchange CLEARS it;
+ *  - a matched-but-dead token (`used`, `expired`) neither counts NOR writes;
+ *  - an unmatched token still counts at full weight, and the cap is still
+ *    checked BEFORE anything is compared, so a hot window refuses even a valid
+ *    token and a flooding caller learns nothing about validity.
+ *
+ * What keeps "uncounted" from being a free probe: the moment a fresh token is
+ * minted, the old used one no longer matches the record, so replaying it becomes
+ * `invalid` and counts again. There is never a permanently uncounted string.
+ */
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 
-/** Failed exchanges permitted per window before every attempt is refused. */
+/** Unmatched exchange attempts permitted per window before every attempt is refused. */
 export const RATE_LIMIT_MAX_FAILURES = 20;
 
 /**
@@ -371,12 +405,34 @@ export interface UnlockMint {
  * unlock` is the recovery path, so throwing here would mean a corrupt file
  * leaves the user with no way back in at all. Sessions are lost in that case,
  * which is unavoidable — they were unreadable.
+ *
+ * ─── MINTING CLEARS THE RATE-LIMIT WINDOW, AND THAT GIVES NOTHING AWAY ───────
+ *
+ * This was a real, measured lockout: exhaust the failure budget (nineteen
+ * concurrent replays of one stale link did it), then run `npx email-agent
+ * unlock`, and the fresh, valid, ten-minute token came straight back
+ * `rate-limited` — for up to fifteen minutes, from the very command the
+ * "this link was already used" message tells the user to run.
+ *
+ * Clearing it here is safe because of WHO CAN REACH THIS FUNCTION. Minting
+ * requires WRITE access to `~/.email-agent` (mode 0700), and anything that has
+ * that can already read `accounts/{email}/token.json` beside it and call the
+ * Gmail API directly, never touching this app, this store or this cookie. So an
+ * attacker who can clear the window this way had no need of the window's
+ * protection in the first place. The limiter defends against something that can
+ * reach the PORT and is guessing an unknown secret; it was never a defence
+ * against something that can already write this user's home directory, and
+ * pretending otherwise only ever cost the legitimate owner their recovery path.
+ *
+ * Note what is NOT cleared: live sessions (above) and the burn state of the
+ * token being replaced. Only the failure counters go.
  */
 export function mintUnlockToken(nowMs: number = Date.now()): UnlockMint {
   const token = randomBytes(32).toString("base64url");
   const store = readStore(SESSION_PATH) ?? emptyStore();
   const expiresAt = nowMs + UNLOCK_TOKEN_TTL_MS;
   store.unlock = { tokenHash: sha256Hex(token), expiresAt, usedAt: null };
+  store.failures = [];
   writeStore(SESSION_PATH, store, nowMs);
   return { token, expiresAt };
 }
@@ -402,11 +458,20 @@ export type UnlockExchangeResult =
  * ORDER, and each step's reason:
  *  1. rate limit, BEFORE anything is compared, so a flood cannot use the
  *     comparison itself as a timer and a limited caller learns nothing about
- *     validity;
+ *     validity. This stays first even though a matched token no longer counts
+ *     TOWARD the window: an already-hot window refuses everything, and the way
+ *     out of a hot window is `mintUnlockToken`, which clears it;
  *  2. constant-time digest compare (`digestMatches`);
  *  3. expiry and burn state, only for a token that matched — a wrong guess must
  *     never learn whether the real token is expired or spent;
  *  4. burn, then mint the session, then ONE write.
+ *
+ * WHICH FAILURES COUNT: only the ones that did not match (step 2). A token that
+ * matched and was merely spent or expired is a stale link, not a guess — see
+ * `RATE_LIMIT_WINDOW_MS` for the full argument and for why that cannot become a
+ * free probe. Those two paths therefore also write NOTHING: there is nothing to
+ * record, and an unauthenticated caller should not be able to drive a disk write
+ * per request.
  *
  * There is no `await` anywhere in this function, and that is load-bearing rather
  * than incidental: Next 15.5.19 runs route handlers in the same single-threaded
@@ -438,22 +503,39 @@ export function exchangeUnlockToken(
     };
   }
 
-  const fail = (reason: UnlockExchangeFailure): UnlockExchangeResult => {
+  /** A guess at an unknown secret: recorded against the window. */
+  const countedFailure = (reason: UnlockExchangeFailure): UnlockExchangeResult => {
     store.failures = [...recentFailures, nowMs];
     writeStore(SESSION_PATH, store, nowMs);
     return { ok: false, reason, retryAfterMs: 0 };
   };
 
+  /**
+   * A token that MATCHED but is spent or expired: possession is proven, so this
+   * is not brute force and does not belong in the window. No write either — the
+   * store is unchanged, and a stale link being re-clicked must not be able to
+   * drive disk I/O on an unauthenticated route.
+   */
+  const uncountedFailure = (reason: UnlockExchangeFailure): UnlockExchangeResult => ({
+    ok: false,
+    reason,
+    retryAfterMs: 0,
+  });
+
   const unlock = store.unlock;
-  if (!unlock || !digestMatches(token, unlock.tokenHash)) return fail("invalid");
-  if (unlock.usedAt !== null) return fail("used");
-  if (unlock.expiresAt <= nowMs) return fail("expired");
+  if (!unlock || !digestMatches(token, unlock.tokenHash)) return countedFailure("invalid");
+  if (unlock.usedAt !== null) return uncountedFailure("used");
+  if (unlock.expiresAt <= nowMs) return uncountedFailure("expired");
 
   const sessionToken = randomBytes(32).toString("base64url");
   const expiresAt = nowMs + SESSION_TTL_MS;
   unlock.usedAt = nowMs;
   store.sessions = [...store.sessions, { tokenHash: sha256Hex(sessionToken), expiresAt }];
-  store.failures = recentFailures;
+  // Same possession argument as `mintUnlockToken`: whoever just redeemed the
+  // real token is not the caller the window exists to slow down, and leaving
+  // their predecessors' failed guesses on file only sets up the next accidental
+  // lockout.
+  store.failures = [];
   writeStore(SESSION_PATH, store, nowMs);
   return { ok: true, sessionToken, expiresAt };
 }
