@@ -857,8 +857,7 @@ function readSessionCookie(request: Request): string | undefined {
  * passed, so this cannot assume which happened.
  */
 function sessionViolation(request: Request): Response | undefined {
-  if (!isUnlockGateEnabled()) return undefined;
-  if (hasValidSession(readSessionCookie(request))) return undefined;
+  if (isSessionUnlocked(readSessionCookie(request))) return undefined;
   return Response.json(
     { error: "This browser has not unlocked the Email Agent UI.", code: UNLOCK_REQUIRED_CODE },
     { status: 401 },
@@ -915,6 +914,26 @@ export function readGuardResponse(request: Request): Response | undefined {
 export function unlockExchangeGuardResponse(request: Request): Response | undefined {
   return mutationHeaderViolation(request);
 }
+
+/**
+ * The same predicate `sessionViolation` uses, exposed for the one place
+ * outside `app/api` that also needs it: `(app)/layout.tsx` and the root
+ * `page.tsx` dispatcher, which gate PAGE navigation the same way the guards
+ * above gate the API (see AGENTS.md's H6 — that page gate is UX, not the
+ * enforcement; the API guards above are).
+ *
+ * Lives here, not a bare re-export next to the page code, because
+ * `scripts/check-module-boundaries.mjs` sanctions exactly two places for a
+ * direct `@email-agent/core` import from the web package: `app/api/**` and
+ * `modules/api/**` (this file). A re-export shim placed in `app/` to dodge
+ * that text scan would be gaming the check rather than respecting what it is
+ * for; this is the file the logic already lives in.
+ */
+export function isSessionUnlocked(cookieValue: string | undefined): boolean {
+  return !isUnlockGateEnabled() || hasValidSession(cookieValue);
+}
+
+export { SESSION_COOKIE_NAME };
 
 export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSettings {
   return {

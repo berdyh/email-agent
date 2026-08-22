@@ -20,6 +20,7 @@ await useTempHome("validation");
 
 const {
   internalErrorResponse,
+  isSessionUnlocked,
   mergeSettingsUpdate,
   mutationGuardResponse,
   parseActionGenerateRequest,
@@ -832,6 +833,18 @@ describe("web API validation", () => {
       },
     });
     assert.equal(unlockExchangeGuardResponse(noSession), undefined);
+  });
+
+  it("isSessionUnlocked is the same predicate the page gate relies on", () => {
+    assert.equal(isSessionUnlocked(undefined), false);
+    assert.equal(isSessionUnlocked("garbage"), false);
+    assert.equal(isSessionUnlocked(guardSession.cookieValue), true);
+
+    withRemoteAllowed(() => {
+      // The page gate's bypass has to match the API's exactly, or a LAN
+      // deployment (gate off, no token ever minted) is a permanent lockout.
+      assert.equal(isSessionUnlocked(undefined), true);
+    });
   });
 
   it("parses an unlock exchange request body", () => {
