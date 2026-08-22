@@ -147,7 +147,8 @@ export type VerificationResidualReason =
   | "credentials"
   | "check-failed"
   | "unverifiable-operation"
-  | "unscoped-account";
+  | "unscoped-account"
+  | "not-checked";
 
 /** One row a verification pass could not resolve, and why. */
 export interface StrandedVerificationResidual {
@@ -180,11 +181,12 @@ export interface VerifyStrandedResult {
  * Per-reason sentence for a row Email Agent's own Gmail check could not close
  * out. THE REASON PICKS THE HEADLINE; `detail` (core's own words) carries the
  * specifics, so this never re-authors what core already said — it only frames
- * it. `message-missing` and `unscoped-account` arrive as complete sentences
- * from core already, so they pass through unchanged.
+ * it. `message-missing`, `unscoped-account` and `not-checked` arrive as
+ * complete sentences from core already, so they pass through unchanged.
  *
  * `unverifiable-operation` NEVER resolves itself — word it differently from
- * `check-failed`, which may.
+ * `check-failed`, which may. `not-checked` is different again: nothing went
+ * wrong and nothing was looked at, so it must not read as a failure.
  */
 export function describeResidualReason(
   reason: VerificationResidualReason,
@@ -200,6 +202,8 @@ export function describeResidualReason(
       return `The check itself failed, not the change: ${detail} This may resolve on its own the next time Email Agent checks.`;
     case "unverifiable-operation":
       return `Email Agent does not know how to check this one automatically — it is ${detail}. This will not resolve on its own; only you can close it out.`;
+    case "not-checked":
+      return detail;
   }
 }
 

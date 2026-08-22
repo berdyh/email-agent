@@ -71,6 +71,25 @@ import {
  *    15-minute staleness clock and hiding the row again, which is strictly
  *    worse.
  *
+ * 5. IT IS BOUNDED IN TIME, AND A PASS MAY DELIBERATELY NOT FINISH. The reads
+ *    are serial, so N stranded rows cost N reads, and each read can only be
+ *    bounded (`gmail/read.ts`), never made fast. `email-agent serve` runs this
+ *    BEFORE it spawns the web server, so an unbounded pass is a server that
+ *    never starts on a network where connections hang rather than reset — the
+ *    surrounding try/catch is no help, because it catches throws, not hangs.
+ *
+ *    `STRANDED_VERIFICATION_DEADLINE_MS` caps the whole pass. Rows it did not
+ *    reach come back as `not-checked` residuals: untouched, still `applying`,
+ *    still visible on every stranded surface, checked by the next pass. A
+ *    requeue candidate the budget stopped short of RE-READING is a residual
+ *    too, never a requeue — pass one's evidence is exactly what point 4 says
+ *    not to write on. Nothing is lost and nothing is guessed; the queue drains
+ *    over more than one pass.
+ *
+ *    The budget bounds only the READS. Both adjudication writes still run for
+ *    whatever the pass did decide — they are local database writes, and
+ *    abandoning a decision already made would throw away the work.
+ *
  * NOT RECOVERY, and do not describe it as such. It re-applies nothing and rolls
  * nothing back; it records an end state, or it hands the row to a person.
  */
@@ -187,7 +206,19 @@ export type VerificationResidualReason =
    * we cannot be sure which mailbox we just read. Only a person can close this
    * one out. See point 3 in the module header.
    */
-  | "unscoped-account";
+  | "unscoped-account"
+  /**
+   * The pass ran out of its wall-clock budget before it could read this row —
+   * or before it could RE-READ it, which is the same refusal to guess.
+   *
+   * NOTHING WAS LEARNED AND NOTHING WAS TOUCHED. The row is exactly as it was,
+   * `applying`, visible to every stranded surface, and the next `fetch` or
+   * server start checks it. Like `check-failed` it resolves itself on a later
+   * pass; unlike `check-failed` nothing went wrong — the budget exists so that
+   * `email-agent serve` starts its server on a network where connections hang
+   * rather than reset. See point 5 in the module header.
+   */
+  | "not-checked";
 
 /** One row a verification pass could not answer, and why. Computed per call — deliberately NOT persisted. */
 export interface StrandedResidual {
@@ -221,6 +252,21 @@ export interface StrandedVerificationDeps {
   ): Promise<number>;
 }
 
+/**
+ * The wall clock, injected, so the budget below is testable without sleeping.
+ *
+ * Separate from `StrandedVerificationDeps` on purpose: those are the three
+ * SIDE-EFFECTING STEPS a caller may substitute, and reading the clock is
+ * neither a step nor something a real caller would ever replace. Keeping them
+ * apart is what stops `deps` from turning into a bag of knobs.
+ */
+export interface StrandedVerificationOptions {
+  /** Wall-clock budget for the whole pass. Default `STRANDED_VERIFICATION_DEADLINE_MS`. */
+  deadlineMs?: number;
+  /** Default `Date.now`. */
+  now?: () => number;
+}
+
 export interface StrandedVerificationResult {
   /** Stale rows this pass looked at. `0` means there was nothing to do and NO Gmail call was made. */
   checked: number;
@@ -240,6 +286,40 @@ const MESSAGE_MISSING_DETAIL =
 /** The ADC sentence, shared by both paths that can reach an `applied` verdict. */
 const UNSCOPED_ACCOUNT_DETAIL =
   "The message's labels match this change, but it was queued without a named Google account, so we cannot be sure which mailbox we just read. Confirming this one is left to you.";
+
+/** The deadline sentence, shared by both passes. Says plainly that nothing happened to the row. */
+const NOT_CHECKED_DETAIL =
+  "Email Agent ran out of time checking Gmail before it got to this change, so it has not been checked and nothing about it has changed. The next fetch, or the next time the server starts, will check it.";
+
+/**
+ * How long ONE verification pass may spend, end to end.
+ *
+ * WHY A TOTAL AND NOT JUST A PER-READ BOUND. `gmail/read.ts` bounds each read
+ * at 10s, but these reads are SERIAL (deliberately — see the note on the
+ * function below about 429s), so N stranded rows on a network where
+ * connections HANG rather than reset still costs N x 10s. `email-agent serve`
+ * runs this before it spawns the web server, and a server that starts is the
+ * entire point of that command.
+ *
+ * THE WORST CASE IS `deadline + one read deadline`, i.e. 30s, because the
+ * budget is checked BEFORE each read and the read that starts just inside it
+ * runs to its own bound. Do not read 20s as the ceiling.
+ *
+ * WHY 20s. It is a whole number of worst-case reads (two), which is the unit
+ * this is actually spent in, and it is short enough that `serve` is visibly
+ * starting rather than visibly stuck. It is a BUDGET, not a timeout: on a
+ * healthy network a `format: "minimal"` read is a small fraction of a second,
+ * so a realistic stale set — at most one chunk of 10 per crashed in-flight
+ * caller — finishes in a second or two and never comes near this.
+ *
+ * WHAT IT COSTS. Rows the budget did not reach stay `applying` and come back
+ * as `not-checked` residuals. Nothing is lost and nothing is guessed; the
+ * queue simply drains over more than one pass. The check is skipped for the
+ * FIRST row of pass one so that a pass always reads at least one row —
+ * otherwise a run that inherited an already-spent clock would check nothing,
+ * forever, and the queue would never drain at all.
+ */
+export const STRANDED_VERIFICATION_DEADLINE_MS = 20_000;
 
 /** What one label read means for one row, before any ADC or write consideration. */
 type RowOutcome =
@@ -369,6 +449,14 @@ const defaultDeps: StrandedVerificationDeps = {
  * both routes; a re-read that FAILS becomes a residual for a human and never
  * falls back to the first read.
  *
+ * BOUNDED IN TOTAL, NOT ONLY PER READ. `STRANDED_VERIFICATION_DEADLINE_MS` is
+ * checked before every read in both passes (see point 5 in the module header).
+ * A pass may therefore end with rows it never looked at, reported as
+ * `not-checked` residuals — untouched, and picked up by the next pass. This is
+ * what lets `serve` block for a bounded time and then start its server whatever
+ * the network is doing, and it costs `serve` nothing at all when nothing is
+ * stranded, because the cheap gate above still runs first.
+ *
  * TWO ADJUDICATION CALLS, OVER DISJOINT ID SETS. It writes through
  * `adjudicateStrandedOperations` rather than a private DB path, and inherits
  * for free: the staleness cutoff RECOMPUTED AT WRITE TIME and folded into the
@@ -382,8 +470,13 @@ const defaultDeps: StrandedVerificationDeps = {
  */
 export async function verifyStrandedApplyingOperations(
   deps?: Partial<StrandedVerificationDeps>,
+  options?: StrandedVerificationOptions,
 ): Promise<StrandedVerificationResult> {
   const { listStranded, readLabels, adjudicate } = { ...defaultDeps, ...deps };
+  const now = options?.now ?? Date.now;
+  const deadlineMs = options?.deadlineMs ?? STRANDED_VERIFICATION_DEADLINE_MS;
+  const startedAt = now();
+  const outOfTime = (): boolean => now() - startedAt >= deadlineMs;
 
   const rows = await listStranded();
   const result: StrandedVerificationResult = {
@@ -402,9 +495,18 @@ export async function verifyStrandedApplyingOperations(
   // immediately makes a pass over an empty queue call out.
   if (rows.length === 0) return result;
 
-  // PASS ONE. Every stale row, read once, in order.
+  // PASS ONE. Every stale row, read once, in order — as far as the budget goes.
   const requeueCandidates: PendingOperationRecord[] = [];
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
+    // THE BUDGET, CHECKED BEFORE THE READ RATHER THAN DURING IT. Each read is
+    // already bounded by `gmail/read.ts`; what this bounds is HOW MANY of them
+    // a single pass may cost, so that `serve` starts its server and `fetch`
+    // exits. `index > 0` guarantees at least one row is always attempted: a
+    // budget that could refuse the first row would drain the queue never.
+    if (index > 0 && outOfTime()) {
+      pushResidual(result, row, "not-checked", NOT_CHECKED_DETAIL);
+      continue;
+    }
     const outcome = classifyRow(row, await readLabels(row.emailId, row.accountId));
     if (outcome.kind === "residual") {
       pushResidual(result, row, outcome.reason, outcome.detail);
@@ -438,6 +540,16 @@ export async function verifyStrandedApplyingOperations(
   //
   // STILL SERIAL, deliberately: see the note above about 429s. No `Promise.all`.
   for (const row of requeueCandidates) {
+    // OUT OF TIME MEANS NO VERDICT, NEVER A REQUEUE ON PASS ONE'S EVIDENCE.
+    // That evidence is exactly what the re-read exists to distrust: requeueing
+    // on it puts a change that may since have landed back in the queue behind
+    // an audit trail saying it never happened. There is no exemption for the
+    // first candidate here — pass one has already had its guaranteed read, and
+    // the guarantee is about the queue draining, not about this row.
+    if (outOfTime()) {
+      pushResidual(result, row, "not-checked", NOT_CHECKED_DETAIL);
+      continue;
+    }
     let reread: MessageLabelRead;
     try {
       reread = await readLabels(row.emailId, row.accountId);

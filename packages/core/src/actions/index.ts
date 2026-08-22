@@ -34,7 +34,9 @@ export {
 export {
   verifyStrandedApplyingOperations,
   verdictFromLabels,
+  STRANDED_VERIFICATION_DEADLINE_MS,
   type StrandedVerificationDeps,
+  type StrandedVerificationOptions,
   type StrandedVerificationResult,
   type StrandedResidual,
   type VerificationResidualReason,

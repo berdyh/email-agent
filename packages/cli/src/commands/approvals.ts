@@ -562,10 +562,14 @@ export function describeStrandedHeader(count: number): string[] {
  * out. THE REASON PICKS THE HEADLINE; `detail` (core's own words, from
  * `verifyStrandedApplyingOperations`) carries the specifics, so this never
  * re-authors what core already said. `message-missing` and `unscoped-account`
- * arrive as complete sentences already — pass through unchanged.
+ * and `not-checked` arrive as complete sentences already — pass through
+ * unchanged.
  *
  * `unverifiable-operation` NEVER resolves itself on a later pass; word it
- * differently from `check-failed`, which may.
+ * differently from `check-failed`, which may. `not-checked` is different
+ * again — the pass ran out of its time budget before reaching the row, so
+ * nothing went wrong and nothing was looked at; core's sentence already says
+ * exactly that, so it passes through unchanged like the other two.
  */
 export function describeStrandedReason(
   reason: VerificationResidualReason,
@@ -581,6 +585,8 @@ export function describeStrandedReason(
       return `The check itself failed, not the change: ${detail} This may resolve on its own the next time Email Agent checks.`;
     case "unverifiable-operation":
       return `Email Agent does not know how to check this one automatically — it is ${detail}. This will not resolve on its own; only you can close it out.`;
+    case "not-checked":
+      return detail;
   }
 }
 

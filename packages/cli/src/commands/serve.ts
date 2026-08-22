@@ -101,6 +101,29 @@ export function registerServe(program: Command) {
       // serial, not batched). A failure here must never stop `serve` from
       // starting — wrapped in its own try/catch, one honest line, and the
       // child spawns regardless.
+      //
+      // AND IT IS BOUNDED IN TIME, which the try/catch alone could never give
+      // it: a catch catches throws, not hangs, and until the bounds went in
+      // (2026-08-22) nothing under `users.messages.get` supplied a timeout at
+      // all. On a network where connections hang rather than reset — a captive
+      // portal, a half-up VPN — a handful of stranded rows read serially meant
+      // `serve` printed the line above and NEVER SPAWNED THE SERVER.
+      //
+      // The ceiling is `STRANDED_VERIFICATION_DEADLINE_MS` (20s, the pass
+      // budget) PLUS `GMAIL_READ_DEADLINE_MS` (10s, the one read that may start
+      // just inside the budget) = 30s, whatever the network is doing and
+      // however many rows are stranded. Rows the budget did not reach come back
+      // as `not-checked`, unchanged and still visible, for the next run. When
+      // nothing is stranded this whole block still costs zero Gmail calls, so
+      // D1's cheap-gate property is untouched.
+      //
+      // WHY THE BOUND RATHER THAN SPAWNING THE CHILD FIRST: the bound lives in
+      // core and every caller inherits it — `fetch`, this command, and
+      // `POST /api/approvals/stranded/verify` — whereas re-ordering the spawn
+      // would fix this command only, and leave the route and the fetch tail
+      // exactly as exposed. It would also have to switch the child off
+      // `stdio: "inherit"` onto pipes for the parent to interleave its own
+      // output sanely, which is a real cost for a narrower fix.
       try {
         await initDb();
         const verified = await verifyStrandedApplyingOperations();

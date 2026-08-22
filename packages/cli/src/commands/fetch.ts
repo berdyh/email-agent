@@ -49,6 +49,17 @@ export function registerFetch(program: Command) {
         // happy path (nothing stranded) prints nothing extra at all. A failure
         // here must never break a fetch that otherwise succeeded — it is
         // wrapped in its own try/catch and prints one honest line instead.
+        //
+        // THE HANG IS BOUNDED TOO, and this command needed it as much as
+        // `serve` did even though it is already network-bound: being network-
+        // bound is not the same as being bounded. The fetch above has finished
+        // and its result is already printed by the time this runs, so an
+        // unbounded pass could not corrupt anything — it could only leave the
+        // command sitting there forever after saying it was done, which is its
+        // own kind of broken. The per-read timeout in `gmail/read.ts` plus the
+        // pass budget in `verify-stranded.ts` cap this block at 30s (20s budget
+        // + the one 10s read that may start just inside it), and that is all
+        // this command needs; nothing here has to be re-ordered.
         try {
           const verified = await verifyStrandedApplyingOperations();
           for (const line of describeStrandedNotifyLines(verified)) {

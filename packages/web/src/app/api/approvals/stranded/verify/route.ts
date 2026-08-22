@@ -22,6 +22,19 @@ import type { VerifyStrandedResult } from "@/modules/api/approvals-contract";
  * GATED ON A CHEAP DB READ FIRST, inside `verifyStrandedApplyingOperations`
  * itself: if nothing is stale, this makes zero Gmail calls and writes nothing.
  *
+ * BOUNDED IN TIME, also inside core, which is why this route needs nothing of
+ * its own. The reads are serial and nothing under `users.messages.get` supplied
+ * a timeout until 2026-08-22, so a network that hangs connections rather than
+ * resetting them left this request open for as long as the browser would hold
+ * it — with the panel spinning and no way to tell a slow check from a dead one.
+ * `GMAIL_READ_DEADLINE_MS` (10s per read) under
+ * `STRANDED_VERIFICATION_DEADLINE_MS` (20s per pass) caps this handler at 30s
+ * however many rows are stranded. Rows the budget did not reach come back in
+ * `unresolved` as `not-checked` — untouched, still listed by
+ * `GET /api/approvals/stranded`, and checked by the next pass. That is why the
+ * panel must render `unresolved` rather than inferring anything from `checked`
+ * minus the recorded counts.
+ *
  * EVIDENCE. A row this resolves as `applied` is stamped `verified-api` /
  * `STRANDED_VERIFIED_NOTE`, never `STRANDED_APPLIED_NOTE` — the audit trail
  * must keep the two claims (a Gmail read vs a human's word) apart. Reading a

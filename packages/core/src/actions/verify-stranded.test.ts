@@ -509,3 +509,160 @@ describe("verifying stranded rows", () => {
     assert.equal(result.appliedRecorded, 1);
   });
 });
+
+/**
+ * THE PASS BUDGET.
+ *
+ * Each read is bounded by `gmail/read.ts`, but the reads are serial, so N
+ * stranded rows on a network where connections HANG rather than reset still
+ * cost N x that bound. `email-agent serve` runs this before it spawns the web
+ * server; `email-agent fetch` runs it before it exits.
+ *
+ * The clock is INJECTED and advanced by the stub read, so these are exact
+ * rather than timed: no sleeps, no tolerances, and the same numbers on a loaded
+ * machine.
+ */
+describe("the verification pass's time budget", () => {
+  /** A clock that only moves when a read is taken, by exactly `costMs`. */
+  function metered(state: Recorder, costMs: number) {
+    let clock = 0;
+    const readLabels = state.deps.readLabels;
+    return {
+      now: () => clock,
+      deps: {
+        ...state.deps,
+        readLabels: async (messageId: string, accountEmail: string) => {
+          clock += costMs;
+          return readLabels(messageId, accountEmail);
+        },
+      },
+    };
+  }
+
+  it("stops reading once the budget is spent, and leaves the rest untouched", async () => {
+    // Four stranded rows, each read costing 9s against a 20s budget. The check
+    // runs BEFORE each read, so rows are read at t=0, 9 and 18 — and the fourth
+    // is refused at t=27. The pass ends at 27s, not 20s: the worst case is
+    // "budget plus one read", which is exactly why the constant's comment says
+    // not to read 20s as the ceiling.
+    const rows = ["a", "b", "c", "d"].map((id) => row({ id, type: "markRead" }));
+    const state = recorder(rows, Object.fromEntries(
+      rows.map((r) => [r.emailId, { kind: "labels", labelIds: [] } as MessageLabelRead]),
+    ));
+    const { now, deps } = metered(state, 9_000);
+
+    const result = await verifyStrandedApplyingOperations(deps, {
+      deadlineMs: 20_000,
+      now,
+    });
+
+    assert.equal(state.readCalls.length, 3, "the fourth row must not be read");
+    assert.deepEqual(result.appliedIds, ["a", "b", "c"]);
+    // `checked` keeps meaning "stale rows found", which is what the surfaces'
+    // "N changes were stuck mid-apply" sentence is counting.
+    assert.equal(result.checked, 4);
+    assert.deepEqual(
+      result.unresolved.map((r) => [r.id, r.reason]),
+      [["d", "not-checked"]],
+    );
+    assert.match(
+      result.unresolved[0]?.detail ?? "",
+      /nothing about it has changed/,
+      "the user must be told the row was not touched, not that something failed",
+    );
+  });
+
+  it("always reads at least one row, however spent the clock already is", async () => {
+    // A budget that could refuse the FIRST row would make the pass a no-op
+    // forever and the queue would never drain — the stranded rows would sit
+    // there being skipped by every fetch and every server start.
+    const rows = [row({ id: "a", type: "markRead" }), row({ id: "b", type: "markRead" })];
+    const state = recorder(rows, {
+      "msg-a": { kind: "labels", labelIds: [] },
+      "msg-b": { kind: "labels", labelIds: [] },
+    });
+    const { now, deps } = metered(state, 1);
+
+    const result = await verifyStrandedApplyingOperations(deps, {
+      deadlineMs: 0,
+      now,
+    });
+
+    assert.equal(state.readCalls.length, 1);
+    assert.deepEqual(result.appliedIds, ["a"]);
+    assert.deepEqual(
+      result.unresolved.map((r) => [r.id, r.reason]),
+      [["b", "not-checked"]],
+    );
+  });
+
+  it("refuses to requeue a candidate it ran out of time to RE-READ", async () => {
+    // THE ONE THAT MATTERS. Pass one's `notApplied` is precisely the evidence
+    // the re-read exists to distrust: requeueing on it puts a change that may
+    // since have landed back in the approval queue behind an audit trail saying
+    // it never happened, and a later approval sends it to Gmail a second time.
+    // Running out of budget must therefore produce a residual, never a requeue.
+    const rows = [row({ id: "a", type: "markRead" })];
+    const state = recorder(rows, { "msg-a": { kind: "labels", labelIds: ["UNREAD"] } });
+    const { now, deps } = metered(state, 30_000);
+
+    const result = await verifyStrandedApplyingOperations(deps, {
+      deadlineMs: 20_000,
+      now,
+    });
+
+    assert.equal(state.readCalls.length, 1, "the re-read must not have been taken");
+    assert.deepEqual(result.requeuedIds, []);
+    assert.deepEqual(state.adjudications, [], "nothing decided means nothing written");
+    assert.deepEqual(
+      result.unresolved.map((r) => [r.id, r.reason]),
+      [["a", "not-checked"]],
+    );
+  });
+
+  it("still writes the decisions it DID reach after the budget is spent", async () => {
+    // The budget bounds the Gmail reads, not the local database writes.
+    // Abandoning a verdict already established would throw away the one thing
+    // the pass managed to do.
+    const rows = ["a", "b", "c"].map((id) => row({ id, type: "markRead" }));
+    const state = recorder(rows, Object.fromEntries(
+      rows.map((r) => [r.emailId, { kind: "labels", labelIds: [] } as MessageLabelRead]),
+    ));
+    const { now, deps } = metered(state, 25_000);
+
+    const result = await verifyStrandedApplyingOperations(deps, {
+      deadlineMs: 20_000,
+      now,
+    });
+
+    assert.deepEqual(result.appliedIds, ["a"]);
+    assert.equal(result.appliedRecorded, 1);
+    assert.deepEqual(state.adjudications, [
+      { ids: ["a"], decision: "applied", evidence: "verified-api" },
+    ]);
+    assert.deepEqual(
+      result.unresolved.map((r) => r.reason),
+      ["not-checked", "not-checked"],
+    );
+  });
+
+  it("never looks at the clock when nothing is stranded", async () => {
+    // The cheap DB gate comes first and stays first: an empty stale list costs
+    // one local query, no Gmail call, and no output. That property is what lets
+    // this run unprompted on every fetch and every server start.
+    const result = await verifyStrandedApplyingOperations(
+      {
+        listStranded: async () => [],
+        readLabels: async () => {
+          throw new Error("readLabels must not be called with nothing stranded");
+        },
+        adjudicate: async () => {
+          throw new Error("adjudicate must not be called with nothing stranded");
+        },
+      },
+      { deadlineMs: 0, now: () => 0 },
+    );
+    assert.equal(result.checked, 0);
+    assert.deepEqual(result.unresolved, []);
+  });
+});
