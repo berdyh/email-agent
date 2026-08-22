@@ -660,7 +660,17 @@ describe("the verification pass's time budget", () => {
           throw new Error("adjudicate must not be called with nothing stranded");
         },
       },
-      { deadlineMs: 0, now: () => 0 },
+      {
+        deadlineMs: 0,
+        // A clock that THROWS, not one that returns a constant. A stub that
+        // merely answers would let the budget setup drift back above the gate
+        // and still pass, which would make the sentence "an empty stale list
+        // costs one local query and nothing else" a claim nothing checks —
+        // and this repo's history is a list of exactly those.
+        now: () => {
+          throw new Error("the clock must not be consulted with nothing stranded");
+        },
+      },
     );
     assert.equal(result.checked, 0);
     assert.deepEqual(result.unresolved, []);

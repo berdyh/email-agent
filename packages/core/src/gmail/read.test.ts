@@ -253,14 +253,29 @@ describe("a Gmail read that never answers", () => {
     // The deadline timer outlives the work it guards unless it is cleared. A
     // stray one keeps the event loop alive, so `email-agent fetch` would sit
     // idle for a further 10 seconds after printing its last line.
+    const timersBefore = process
+      .getActiveResourcesInfo()
+      .filter((r) => r === "Timeout").length;
     const read = await readMessageLabels(
       "m1",
       "me@example.com",
       async () => ["INBOX"],
       60_000,
     );
+    const timersAfter = process
+      .getActiveResourcesInfo()
+      .filter((r) => r === "Timeout").length;
+
     assert.deepEqual(read, { kind: "labels", labelIds: ["INBOX"] });
-    // If the 60s timer were still pending and referenced, this test file could
-    // not exit; `unref` plus the `finally` clear are what make that true.
+    // `getActiveResourcesInfo` is the observable: it does NOT list unref'd
+    // handles, so a live 60s timer only shows up here if BOTH the `unref` and
+    // the `finally` clear are gone — which is exactly the regression that would
+    // leave `email-agent fetch` sitting for a further minute after printing its
+    // last line. Asserting only the returned value would not notice.
+    assert.equal(
+      timersAfter,
+      timersBefore,
+      "the deadline timer outlived the read it was guarding",
+    );
   });
 });

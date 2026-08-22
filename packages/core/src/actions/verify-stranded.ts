@@ -473,10 +473,6 @@ export async function verifyStrandedApplyingOperations(
   options?: StrandedVerificationOptions,
 ): Promise<StrandedVerificationResult> {
   const { listStranded, readLabels, adjudicate } = { ...defaultDeps, ...deps };
-  const now = options?.now ?? Date.now;
-  const deadlineMs = options?.deadlineMs ?? STRANDED_VERIFICATION_DEADLINE_MS;
-  const startedAt = now();
-  const outOfTime = (): boolean => now() - startedAt >= deadlineMs;
 
   const rows = await listStranded();
   const result: StrandedVerificationResult = {
@@ -494,6 +490,18 @@ export async function verifyStrandedApplyingOperations(
   // it changes nothing TODAY, and removing it together with either write guard
   // immediately makes a pass over an empty queue call out.
   if (rows.length === 0) return result;
+
+  // THE BUDGET STARTS HERE, BELOW THE GATE, and the clock is not consulted
+  // above it. The gate is a local DB read; the thing that needs bounding is the
+  // serial Gmail phase below, which is the same distinction as "the budget
+  // bounds the reads, not the writes". It also keeps the cheap-gate claim
+  // literally true — nothing stranded costs one local query and NOTHING else,
+  // not even a `Date.now()` — which is a claim a test can then enforce rather
+  // than a sentence that merely reads well.
+  const now = options?.now ?? Date.now;
+  const deadlineMs = options?.deadlineMs ?? STRANDED_VERIFICATION_DEADLINE_MS;
+  const startedAt = now();
+  const outOfTime = (): boolean => now() - startedAt >= deadlineMs;
 
   // PASS ONE. Every stale row, read once, in order — as far as the budget goes.
   const requeueCandidates: PendingOperationRecord[] = [];

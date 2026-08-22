@@ -7061,8 +7061,8 @@
       "source_location": "L176",
       "_origin": "ast",
       "id": "packages_core_src_db_emails_buildemaillookupfilter",
-      "community": 32,
-      "community_name": "emails.ts",
+      "community": 7,
+      "community_name": "db/index.ts",
       "norm_label": "buildemaillookupfilter()"
     },
     {
@@ -7094,8 +7094,8 @@
       "source_location": "L210",
       "_origin": "ast",
       "id": "packages_core_src_db_emails_openemailstable",
-      "community": 7,
-      "community_name": "db/index.ts",
+      "community": 32,
+      "community_name": "emails.ts",
       "norm_label": "openemailstable()"
     },
     {
@@ -7171,8 +7171,8 @@
       "source_location": "L339",
       "_origin": "ast",
       "id": "packages_core_src_db_emails_markstaleunreademailsread",
-      "community": 32,
-      "community_name": "emails.ts",
+      "community": 7,
+      "community_name": "db/index.ts",
       "norm_label": "markstaleunreademailsread()"
     },
     {
@@ -7182,8 +7182,8 @@
       "source_location": "L351",
       "_origin": "ast",
       "id": "packages_core_src_db_emails_buildstaleunreadfilter",
-      "community": 32,
-      "community_name": "emails.ts",
+      "community": 7,
+      "community_name": "db/index.ts",
       "norm_label": "buildstaleunreadfilter()"
     },
     {
@@ -7721,8 +7721,8 @@
       "source_location": "L191",
       "_origin": "ast",
       "id": "packages_core_src_db_pending_operations_getpendingoperationsforemails",
-      "community": 7,
-      "community_name": "db/index.ts",
+      "community": 6,
+      "community_name": "approval.ts",
       "norm_label": "getpendingoperationsforemails()"
     },
     {
@@ -7754,8 +7754,8 @@
       "source_location": "L232",
       "_origin": "ast",
       "id": "packages_core_src_db_pending_operations_claimpendingoperations",
-      "community": 6,
-      "community_name": "approval.ts",
+      "community": 7,
+      "community_name": "db/index.ts",
       "norm_label": "claimpendingoperations()"
     },
     {
@@ -28892,7 +28892,7 @@
       "confidence": "INFERRED",
       "confidence_score": 0.8,
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L507",
+      "source_location": "L515",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29247,7 +29247,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L481",
+      "source_location": "L477",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29271,7 +29271,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L510",
+      "source_location": "L518",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29295,7 +29295,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L583",
+      "source_location": "L591",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29307,7 +29307,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L510",
+      "source_location": "L518",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29331,7 +29331,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L507",
+      "source_location": "L515",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -29343,7 +29343,7 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "packages/core/src/actions/verify-stranded.ts",
-      "source_location": "L516",
+      "source_location": "L524",
       "weight": 1.0,
       "_origin": "ast",
       "source": "packages_core_src_actions_verify_stranded_verifystrandedapplyingoperations",
@@ -61114,5 +61114,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "ec772e357f66526741d6abb05639c98039668b67"
+  "built_at_commit": "e3cd1a6710de6273f8ac564a22366d6b146ca6fa"
 }
