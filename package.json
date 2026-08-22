@@ -10,8 +10,11 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
-    "test": "npm run -w @email-agent/core build && npm run -w @email-agent/cli build && node --import tsx --test \"packages/**/*.test.ts\"",
-    "test:coverage": "npm run -w @email-agent/core build && npm run -w @email-agent/cli build && node --import tsx --test --experimental-test-coverage \"packages/**/*.test.ts\"",
+    "test": "npm run test:build && npm run test:node && npm run test:components",
+    "test:build": "npm run -w @email-agent/core build && npm run -w @email-agent/cli build",
+    "test:node": "node --import tsx --test \"packages/**/*.test.ts\"",
+    "test:components": "npm run -w @email-agent/web test",
+    "test:coverage": "npm run test:build && node --import tsx --test --experimental-test-coverage \"packages/**/*.test.ts\"",
     "check:boundaries": "node scripts/check-module-boundaries.mjs",
     "setup": "./setup.sh",
     "start": "npm run -w @email-agent/web dev"

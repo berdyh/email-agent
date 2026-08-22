@@ -18,6 +18,8 @@ import { describe, it } from "node:test";
 // JS). `allowJs` lets tsc infer its exports; the casts below pin the shapes
 // this test relies on.
 import { EXPLICIT_CORE_SUBPATHS, coreSubpathTarget } from "./testing/module-aliases.mjs";
+import { WEB_ALIAS_PLUGIN_NAME } from "./testing/vite-alias-plugin.mjs";
+import webVitestConfig from "../../../vitest.config";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = join(HERE, "..", "..", "..");
@@ -85,5 +87,112 @@ describe("the test resolve hook mirrors packages/web/tsconfig.json", () => {
     // the app cannot build.
     assert.equal(target("db/utils"), join("db", "utils", "index.ts"));
     assert.notEqual(target("db/utils"), join("db", "utils.ts"));
+  });
+});
+
+/**
+ * THE THIRD RESOLVER.
+ *
+ * The block above pins the `node --test` hook against the tsconfig. Since the
+ * component suite landed there is a third resolver in the repo — vitest — and
+ * "it uses the same function" is exactly the kind of claim the hook's own
+ * header used to make about the tsconfig while quietly being more permissive.
+ *
+ * So this drives the plugin instance OUT OF THE REAL EXPORTED CONFIG, not a
+ * freshly constructed one: a `vitest.config.ts` that stopped installing the
+ * plugin, or installed it without `enforce: "pre"` (which is what keeps the
+ * tsconfig authoritative over Vite's own resolution of the `@email-agent/core`
+ * workspace symlink to `dist`), fails here.
+ *
+ * `src/modules/api/vitest-resolution.test.tsx` is the other half and cannot be
+ * replaced by this one: this checks the config object, that one makes the
+ * RUNNING vitest resolve real specifiers.
+ */
+describe("packages/web/vitest.config.ts resolves the same way", () => {
+  const CORE_SRC = join(WEB_ROOT, "..", "core", "src");
+
+  interface MinimalPlugin {
+    name: string;
+    enforce?: string;
+    resolveId: (
+      this: { resolve: (id: string) => Promise<{ id: string } | null> },
+      source: string,
+      importer: string | undefined,
+      options: Record<string, unknown>,
+    ) => Promise<string | { id: string } | null>;
+  }
+
+  function aliasPlugin(): MinimalPlugin {
+    const plugins = (webVitestConfig as { plugins?: unknown[] }).plugins ?? [];
+    const found = plugins
+      .flat()
+      .find((plugin): plugin is MinimalPlugin =>
+        Boolean(plugin && typeof plugin === "object" && "name" in plugin &&
+          (plugin as { name: unknown }).name === WEB_ALIAS_PLUGIN_NAME));
+    assert.ok(found, `vitest.config.ts must install the "${WEB_ALIAS_PLUGIN_NAME}" plugin`);
+    return found;
+  }
+
+  // A stand-in for Vite's plugin context. `@/…` has no extension in the
+  // tsconfig either, so both hosts finish that resolution themselves; this
+  // records what the plugin handed over.
+  const ctx = { resolve: async (id: string) => ({ id }) };
+
+  it("is installed, and runs before Vite's own node resolution", () => {
+    assert.equal(aliasPlugin().enforce, "pre");
+  });
+
+  it("maps core specifiers to exactly the files the tsconfig names", async () => {
+    const paths = await tsconfigPaths();
+    const plugin = aliasPlugin();
+
+    assert.equal(
+      await plugin.resolveId.call(ctx, "@email-agent/core", undefined, {}),
+      join(CORE_SRC, "index.ts"),
+    );
+    // The wildcard, read off the tsconfig rather than restated.
+    const [wildcard] = paths["@email-agent/core/*"] ?? [];
+    assert.equal(wildcard, "../core/src/*/index.ts");
+    assert.equal(
+      await plugin.resolveId.call(ctx, "@email-agent/core/db", undefined, {}),
+      join(CORE_SRC, "db", "index.ts"),
+    );
+    // Every explicit deep path, same set the hook carries.
+    for (const rest of Object.keys(explicit)) {
+      assert.equal(
+        await plugin.resolveId.call(ctx, `@email-agent/core/${rest}`, undefined, {}),
+        join(CORE_SRC, target(rest)),
+      );
+    }
+  });
+
+  it("maps @/ to the web source root, as the tsconfig does", async () => {
+    const paths = await tsconfigPaths();
+    assert.deepEqual(paths["@/*"], ["./src/*"]);
+    assert.deepEqual(
+      await aliasPlugin().resolveId.call(ctx, "@/modules/api/snapshot-contract", undefined, {}),
+      { id: join(WEB_ROOT, "src", "modules", "api", "snapshot-contract") },
+    );
+  });
+
+  it("THROWS on an unmappable core subpath rather than letting Vite find dist", async () => {
+    // Returning null here is the dangerous outcome, not an error: Vite would
+    // fall back to node resolution, follow the workspace symlink and resolve
+    // through the package `exports` map — a different file set, under different
+    // semantics, quietly.
+    await assert.rejects(
+      () => aliasPlugin().resolveId.call(ctx, "@email-agent/core/db/utils", undefined, {}),
+      /\[module-aliases\]/,
+    );
+  });
+
+  it("leaves every non-alias specifier to Vite", async () => {
+    for (const specifier of ["react", "@testing-library/react", "./sibling", "node:fs"]) {
+      assert.equal(
+        await aliasPlugin().resolveId.call(ctx, specifier, undefined, {}),
+        null,
+        `${specifier} must not be claimed by the alias plugin`,
+      );
+    }
   });
 });
