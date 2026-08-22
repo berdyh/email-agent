@@ -1,6 +1,10 @@
 import {
   defaultConfig,
+  hasValidSession,
+  isUnlockGateEnabled,
   normalizeAutoApplyConsent,
+  SESSION_COOKIE_NAME,
+  UNLOCK_REQUIRED_CODE,
   type AppConfig,
 } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
@@ -110,6 +114,10 @@ export interface EmailReadStatusRequest {
 export interface EmailIdRequest {
   emailId: string;
   accountId: string;
+}
+
+export interface UnlockExchangeRequest {
+  token: string;
 }
 
 type SettingsUpdate = Partial<
@@ -349,6 +357,11 @@ export function parseEmailIdRequest(input: unknown): EmailIdRequest {
     emailId: requiredString(body["emailId"], "emailId"),
     accountId: requiredPresentString(body["accountId"], "accountId"),
   };
+}
+
+export function parseUnlockExchangeRequest(input: unknown): UnlockExchangeRequest {
+  const body = asRecord(input);
+  return { token: requiredString(body["token"], "token") };
 }
 
 export function parseEmailIdentityQuery(params: URLSearchParams): { accountId: string } {
@@ -768,7 +781,15 @@ function localRequestViolation(
   return undefined;
 }
 
-export function mutationGuardResponse(request: Request): Response | undefined {
+/**
+ * Header-only half of the mutation guard: local origin/Host, plus a hard
+ * requirement that `Origin` or `Sec-Fetch-Site` be present.
+ *
+ * Split out from `mutationGuardResponse` so ONE route — the unlock exchange —
+ * can get this half without the session half it would be circular for it to
+ * require. See `unlockExchangeGuardResponse` below.
+ */
+function mutationHeaderViolation(request: Request): Response | undefined {
   const violation = localRequestViolation(request, "Mutation");
   if (violation) return violation;
 
@@ -799,18 +820,100 @@ export function mutationGuardResponse(request: Request): Response | undefined {
 }
 
 /**
+ * Reads the session cookie by parsing the `cookie` HEADER, never
+ * `request.cookies` — every guard here is typed against plain `Request`, and
+ * `validation.test.ts` builds bare `new Request(...)` objects with no
+ * `.cookies` accessor. `route-harness.ts`'s fabricated `NextRequest`-shaped
+ * objects set a real `cookie` header in addition to their `.cookies` shim, so
+ * this works against both real and test request objects without widening
+ * either guard's parameter type.
+ */
+function readSessionCookie(request: Request): string | undefined {
+  const header = request.headers.get("cookie");
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === SESSION_COOKIE_NAME) {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The session half of the guards. Since 2026-08-22 a local, same-origin
+ * caller is no longer enough on its own — it must also present a session
+ * cookie obtained by redeeming a one-time unlock token
+ * (`packages/core/src/config/session.ts`). This is what narrows "another
+ * process on this machine" down to "another process running as THIS user";
+ * it does not, and cannot, narrow it further — code already running as this
+ * user reads the OAuth tokens under `~/.email-agent/accounts/` directly and
+ * never touches this app or this cookie.
+ *
+ * Re-reads `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` itself via
+ * `isUnlockGateEnabled()` rather than trusting call order: the header checks
+ * above return `undefined` both when the flag is on and when they merely
+ * passed, so this cannot assume which happened.
+ */
+function sessionViolation(request: Request): Response | undefined {
+  if (!isUnlockGateEnabled()) return undefined;
+  if (hasValidSession(readSessionCookie(request))) return undefined;
+  return Response.json(
+    { error: "This browser has not unlocked the Email Agent UI.", code: UNLOCK_REQUIRED_CODE },
+    { status: 401 },
+  );
+}
+
+/**
+ * Every mutating route's guard: local origin/Host, required fetch metadata,
+ * then a valid session — in that order, so a wrong-origin caller with no
+ * session still gets 403 (wrong place) rather than 401 (right place, no
+ * session). The two stay distinguishable by status alone, which the exchange
+ * route's own guard (below) and the client's unlock redirect both rely on.
+ */
+export function mutationGuardResponse(request: Request): Response | undefined {
+  return mutationHeaderViolation(request) ?? sessionViolation(request);
+}
+
+/**
  * Guard for read routes that return mail content (subjects, senders, snippets)
  * rather than just a count. `GET /api/approvals` had no guard at all, so any
  * page the user visited could read the whole approval queue cross-origin.
  *
  * Unlike the mutation guard this does NOT require the fetch metadata: a user
  * typing the URL into the address bar sends `Sec-Fetch-Site: none` (fine), but
- * `curl` sends nothing, and refusing that would break local debugging for no
- * security gain — reads are already reachable by anything that can open the
- * socket.
+ * `curl` sends nothing. Refusing that bought nothing when reads were otherwise
+ * unguarded, which is why this comment used to promise bare `curl` reads kept
+ * working — that promise is now FALSE. A session cookie is a different,
+ * additive credential from the header presence this paragraph is about, and
+ * refusing its absence is a real confidentiality gain now that one exists: an
+ * unauthenticated local browser could otherwise read every message through
+ * these same routes. The documented way to keep `curl`/local debugging
+ * working is the existing escape hatch, `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1`
+ * (`email-agent serve --host 127.0.0.1` with that flag set), which bypasses
+ * this exactly as it bypasses the header checks.
  */
 export function readGuardResponse(request: Request): Response | undefined {
-  return localRequestViolation(request, "Read");
+  const violation = localRequestViolation(request, "Read");
+  if (violation) return violation;
+  return sessionViolation(request);
+}
+
+/**
+ * Header/origin checks only — deliberately NO session requirement. Exactly
+ * ONE caller: `POST /api/auth/unlock`, which ISSUES the session every other
+ * guard requires, so requiring one here would be circular.
+ *
+ * This also deliberately does NOT satisfy `route-guards.test.ts`'s
+ * `GUARD_CALL` regex (it matches `mutationGuardResponse`/`readGuardResponse`
+ * by name, not this). That is what forces the exchange route onto that test's
+ * `EXEMPT` map as a written decision instead of silently passing — and that
+ * test additionally asserts the exempted route's body calls THIS function by
+ * name, so the exemption cannot mask a route with no guard at all.
+ */
+export function unlockExchangeGuardResponse(request: Request): Response | undefined {
+  return mutationHeaderViolation(request);
 }
 
 export function sanitizeSettingsForResponse(settings: AppConfig): SanitizedSettings {

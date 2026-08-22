@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AppConfig } from "@email-agent/core/config";
-import {
+import { registerWebModuleAliases } from "./testing/route-harness.js";
+
+// `validation.ts` now imports `hasValidSession`/`UNLOCK_REQUIRED_CODE` from
+// `@email-agent/core/config`, whose `SESSION_PATH` is a `homedir()`-at-
+// module-load constant (see AGENTS.md's `useTempHome()` bullet). A static top-
+// level `import "./validation.js"` — what this file had until 2026-08-22 —
+// would resolve that path against the developer's REAL `$HOME` before any
+// test body runs, and the guard tests below WRITE a real session record. So
+// the module is loaded dynamically, after `useTempHome()` redirects `$HOME` —
+// the same ordering `session.test.ts` and `route-harness.ts` already use, for
+// the identical reason.
+registerWebModuleAliases();
+const { useTempHome, mintTestSession } = (await import(
+  "@email-agent/core/testing"
+)) as typeof import("@email-agent/core/testing");
+await useTempHome("validation");
+
+const {
   internalErrorResponse,
   mergeSettingsUpdate,
   mutationGuardResponse,
@@ -19,11 +36,23 @@ import {
   parseStrandedResolutionRequest,
   parseFetchEmailsRequest,
   parseJsonBody,
+  parseUnlockExchangeRequest,
   parseUserActionSaveRequest,
   readGuardResponse,
   RequestValidationError,
   sanitizeSettingsForResponse,
-} from "./validation.js";
+  unlockExchangeGuardResponse,
+} = (await import("./validation.js")) as typeof import("./validation.js");
+
+const { SESSION_COOKIE_NAME, UNLOCK_REQUIRED_CODE } = (await import(
+  "@email-agent/core/config"
+)) as typeof import("@email-agent/core/config");
+
+// Minted ONCE for the whole file, through the REAL mint+exchange against this
+// file's temp `$HOME` — not a stub, not a value `hasValidSession` treats
+// specially. `describe`'s callback below is synchronous (node's test runner
+// requires it), so this has to be a top-level await rather than inline.
+const guardSession = await mintTestSession();
 
 describe("web API validation", () => {
   it("rejects a malformed JSON body as a 400-shaped error, not a rethrown SyntaxError", async () => {
@@ -516,11 +545,16 @@ describe("web API validation", () => {
       origin?: string;
       fetchSite?: string;
       method?: string;
+      /** Attach the minted session cookie. Default true. */
+      session?: boolean;
     },
   ): Request {
     const headers: Record<string, string> = { host: options.host };
     if (options.origin !== undefined) headers["origin"] = options.origin;
     if (options.fetchSite !== undefined) headers["sec-fetch-site"] = options.fetchSite;
+    if (options.session !== false) {
+      headers["cookie"] = `${SESSION_COOKIE_NAME}=${guardSession.cookieValue}`;
+    }
     return new Request(`${NEXT_URL}${path}`, {
       method: options.method ?? "GET",
       headers,
@@ -696,6 +730,115 @@ describe("web API validation", () => {
     assert.equal(readGuardResponse(addressBar), undefined);
   });
 
+  // ---------------------------------------------------------------------
+  // The session gate (since 2026-08-22). Every case above proves the header
+  // half; these prove the session half `sessionViolation` folds into the same
+  // two exported guards.
+  // ---------------------------------------------------------------------
+
+  it("refuses a perfectly-shaped local request with no session cookie", () => {
+    const noCookieMutation = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "http://localhost:3847",
+      fetchSite: "same-origin",
+      session: false,
+    });
+    const mutationResponse = mutationGuardResponse(noCookieMutation);
+    assert.equal(mutationResponse?.status, 401);
+
+    const noCookieRead = serverRequest("/api/approvals", {
+      host: "localhost:3847",
+      fetchSite: "none",
+      session: false,
+    });
+    const readResponse = readGuardResponse(noCookieRead);
+    assert.equal(readResponse?.status, 401);
+  });
+
+  it("reports the unlock-required code on a 401, so a client can act on it", async () => {
+    const request = serverRequest("/api/approvals", {
+      host: "localhost:3847",
+      fetchSite: "none",
+      session: false,
+    });
+    const response = readGuardResponse(request);
+    assert.equal(response?.status, 401);
+    const body = (await response?.json()) as { error: string; code: string };
+    assert.equal(body.code, UNLOCK_REQUIRED_CODE);
+    assert.equal(typeof body.error, "string");
+  });
+
+  it("passes a local request that carries a real, minted session cookie", () => {
+    const mutation = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "http://localhost:3847",
+      fetchSite: "same-origin",
+      // session:true is the default — asserted explicitly here as the
+      // positive counterpart to the no-cookie case above.
+      session: true,
+    });
+    assert.equal(mutationGuardResponse(mutation), undefined);
+
+    const read = serverRequest("/api/approvals", { host: "localhost:3847", fetchSite: "none" });
+    assert.equal(readGuardResponse(read), undefined);
+  });
+
+  it("checks origin before session — a wrong-origin caller with no cookie still gets 403, not 401", () => {
+    // If this ever answered 401 it would mean the header checks stopped
+    // running first, and a cross-origin page would learn "this app has an
+    // unlock screen" instead of being refused outright.
+    const crossOriginNoSession = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "https://example.com",
+      fetchSite: "cross-site",
+      session: false,
+    });
+    assert.equal(mutationGuardResponse(crossOriginNoSession)?.status, 403);
+  });
+
+  it("EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1 bypasses the session requirement too", () => {
+    withRemoteAllowed(() => {
+      const noCookie = new Request("http://0.0.0.0:3847/api/approvals/apply", {
+        method: "POST",
+        headers: { host: "192.168.1.20:3847" },
+      });
+      assert.equal(mutationGuardResponse(noCookie), undefined);
+      assert.equal(readGuardResponse(noCookie), undefined);
+    });
+  });
+
+  it("unlockExchangeGuardResponse checks the header half and never demands a session", () => {
+    const wrongHost = new Request("http://localhost:3847/api/auth/unlock", {
+      method: "POST",
+      headers: {
+        host: "evil.example:3847",
+        origin: "http://evil.example:3847",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(unlockExchangeGuardResponse(wrongHost)?.status, 403);
+
+    // Matching host, matching fetch metadata, NO cookie at all — this is the
+    // route that ISSUES the session, so requiring one would be circular.
+    const noSession = new Request("http://localhost:3847/api/auth/unlock", {
+      method: "POST",
+      headers: {
+        host: "localhost:3847",
+        origin: "http://localhost:3847",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(unlockExchangeGuardResponse(noSession), undefined);
+  });
+
+  it("parses an unlock exchange request body", () => {
+    assert.deepEqual(parseUnlockExchangeRequest({ token: " abc " }), { token: "abc" });
+    assert.throws(() => parseUnlockExchangeRequest({}), RequestValidationError);
+    assert.throws(() => parseUnlockExchangeRequest({ token: "" }), RequestValidationError);
+  });
 
   it("returns generic internal errors", async () => {
     const originalError = console.error;

@@ -37,6 +37,27 @@ export const TEST_ORIGIN = "http://localhost:3847";
 let aliasesRegistered = false;
 
 /**
+ * The real, already-unlocked session this harness minted for its temp `$HOME`.
+ * Module-level rather than per-call: `node --test` gives each test FILE its
+ * own module instantiation (the existing `aliasesRegistered` flag above
+ * already relies on that), so this is one session per file, not one shared
+ * across the whole suite.
+ *
+ * WHY THIS IS NOT A PRODUCTION BYPASS. The cookie folded into a fabricated
+ * request here is a real session token, minted and redeemed through the REAL
+ * `mintUnlockToken()`/`exchangeUnlockToken()` against this file's temp
+ * `SESSION_PATH` (`mintTestSession()`, `@email-agent/core/testing`) — the same
+ * functions the real exchange route calls, the same store format, the same
+ * `hasValidSession()` the guards call to accept it. There is no test-only
+ * branch anywhere in `validation.ts` or `session.ts` that recognises this
+ * value as special; it is accepted for the ordinary reason a real cookie
+ * would be. The opt-out (`session: false`, see `RequestOptions`) lives
+ * entirely in THIS file, which production code never imports — a route
+ * handler has no way to reach it, in a test or otherwise.
+ */
+let currentSession: { cookieName: string; cookieValue: string } | undefined;
+
+/**
  * Installs the tsconfig `paths` aliases for subsequent dynamic imports.
  * Idempotent — registering the same hook twice would run it twice per resolve.
  */
@@ -53,6 +74,8 @@ export interface RouteHarness {
   load: <T = Record<string, unknown>>(relativePath: string) => Promise<T>;
   /** Core's seeding/reading helpers, bound to the temp database. */
   db: typeof import("@email-agent/core/testing");
+  /** The plaintext value `buildRequest` folds in by default — see `session`. */
+  sessionCookieValue: string;
 }
 
 /**
@@ -79,9 +102,18 @@ export async function startRouteHarness(label: string): Promise<RouteHarness> {
   const home = await db.useTempHome(`web-${label}`);
   await db.initTempDb();
 
+  // Real mint + real exchange against THIS file's temp SESSION_PATH — see the
+  // header comment on `currentSession` above for why this is not a bypass.
+  const session = await db.mintTestSession();
+  const { SESSION_COOKIE_NAME } = (await import(
+    "@email-agent/core/config"
+  )) as typeof import("@email-agent/core/config");
+  currentSession = { cookieName: SESSION_COOKIE_NAME, cookieValue: session.cookieValue };
+
   return {
     home: home.path,
     db,
+    sessionCookieValue: session.cookieValue,
     load: async <T,>(relativePath: string): Promise<T> => {
       const target = relativePath.startsWith("@/")
         ? relativePath
@@ -113,6 +145,19 @@ export interface RequestOptions {
    * test that means to exercise that refusal opts out explicitly.
    */
   sameOrigin?: boolean;
+  /**
+   * Whether to fold in the harness's real, minted session cookie. Default
+   * true — mirrors `sameOrigin`'s shape: once `sessionViolation` lands inside
+   * `mutationGuardResponse`/`readGuardResponse`, every existing test that
+   * wants to exercise something ELSE gets a free pass through the gate, and
+   * `session: false` is the explicit, visible way to test the gate itself.
+   * Orthogonal to `sameOrigin` on purpose — a cross-origin request should
+   * still carry a session, so a test proving "wrong origin still 403s, not
+   * 401" isn't accidentally proving "no session also 403s" instead.
+   * Ignored (no cookie attached) if `startRouteHarness` was never called, or
+   * if `cookies` already sets this exact cookie name explicitly.
+   */
+  session?: boolean;
 }
 
 /**
@@ -140,6 +185,13 @@ export function buildRequest(
   }
 
   const cookies = Object.entries(options.cookies ?? {});
+  if (
+    options.session !== false &&
+    currentSession &&
+    !cookies.some(([name]) => name === currentSession!.cookieName)
+  ) {
+    cookies.push([currentSession.cookieName, currentSession.cookieValue]);
+  }
   if (cookies.length > 0) {
     headers.set(
       "cookie",
