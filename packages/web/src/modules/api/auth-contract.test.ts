@@ -18,6 +18,7 @@ import {
 import {
   BINDING_REQUIRED_CODE as webBindingCode,
   describeUnlockExchangeError,
+  describeUnlockScreenCopy,
   SESSION_BINDING_HEADER as webBindingHeader,
   SESSION_BINDING_STORAGE_KEY,
   UNLOCK_REQUIRED_CODE as webCode,
@@ -99,10 +100,27 @@ describe("auth-contract", () => {
   });
 });
 
+describe("describeUnlockScreenCopy", () => {
+  it("gives the binding recovery case a headline and explanation distinct from a plain lockout", () => {
+    const plain = describeUnlockScreenCopy(undefined);
+    const binding = describeUnlockScreenCopy("binding");
+
+    assert.notEqual(plain.headline, binding.headline);
+    // A plain lockout has nothing extra to explain.
+    assert.equal(plain.recoveryContext, null);
+    // The binding case must read as "your session is fine", never as "you are
+    // logged out" — the two situations are different and must not share a
+    // sentence with the no-session case.
+    assert.ok(binding.recoveryContext);
+    assert.match(binding.recoveryContext!, /still signed in/i);
+    assert.doesNotMatch(binding.headline, /locked/i);
+  });
+});
+
 describe("the pasted-link parser", () => {
   // The paste box is the documented fallback for every link a terminal or a
-  // mail client mangles, and the only part of `unlock-screen.tsx` that can be
-  // tested at all (there is no component testing library in this repo).
+  // mail client mangles, and `unlock-screen.test.tsx` renders the box itself;
+  // this is the parsing logic underneath it.
 
   it("reads the token out of the FRAGMENT of a current link", () => {
     assert.equal(

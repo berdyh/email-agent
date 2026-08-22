@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  UNLOCK_NETWORK_ERROR_MESSAGE,
   UNLOCK_TOKEN_FRAGMENT_KEY,
   describeUnlockExchangeError,
   type UnlockExchangeErrorCode,
@@ -89,7 +90,7 @@ export function UnlockExchange(): React.JSX.Element {
         setError(body?.code ? describeUnlockExchangeError(body.code) : "That link did not work.");
       } catch {
         if (!cancelled) {
-          setError("Could not reach the server. Check your connection and try again.");
+          setError(UNLOCK_NETWORK_ERROR_MESSAGE);
         }
       }
     })();

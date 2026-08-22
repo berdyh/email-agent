@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   describeUnlockExchangeError,
+  describeUnlockScreenCopy,
   extractUnlockToken,
+  UNLOCK_NETWORK_ERROR_MESSAGE,
   type UnlockExchangeErrorCode,
 } from "@/modules/api/auth-contract";
 import { storeSessionBinding } from "@/lib/session-binding";
@@ -39,6 +41,7 @@ export function UnlockScreen({
   const [value, setValue] = useState("");
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const copy = describeUnlockScreenCopy(reason);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -66,7 +69,7 @@ export function UnlockScreen({
         | null;
       setMessage(body?.code ? describeUnlockExchangeError(body.code) : "That did not work.");
     } catch {
-      setMessage("Could not reach the server. Check your connection and try again.");
+      setMessage(UNLOCK_NETWORK_ERROR_MESSAGE);
     } finally {
       setChecking(false);
     }
@@ -76,16 +79,9 @@ export function UnlockScreen({
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md space-y-6">
         <div className="space-y-2 text-center">
-          <h1 className="text-xl font-semibold">
-            {reason === "binding" ? "This browser needs unlocking again" : "Email Agent is locked"}
-          </h1>
-          {reason === "binding" && (
-            <p className="text-sm text-muted-foreground">
-              You are still signed in, but this browser is missing the key that
-              ties that session to this exact address. That happens after
-              clearing site data, or if the browser is blocking storage for
-              this site. Redeeming a link below issues a fresh one.
-            </p>
+          <h1 className="text-xl font-semibold">{copy.headline}</h1>
+          {copy.recoveryContext && (
+            <p className="text-sm text-muted-foreground">{copy.recoveryContext}</p>
           )}
           <p className="text-sm text-muted-foreground">
             This unlocks read and write access to your mail data for this

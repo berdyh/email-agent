@@ -178,12 +178,13 @@ export function describeUnlockExchangeError(code: UnlockExchangeErrorCode): stri
  * shape here costs nothing and closes the one gap removing the old `?token=`
  * route left.
  *
- * IT LIVES HERE, NOT BESIDE THE PASTE BOX IT SERVES, for a testing reason
- * worth stating: there is no component testing library in this repo, so
- * anything inside `unlock-screen.tsx` can only be type-checked and read. This
+ * IT LIVES HERE, NOT BESIDE THE PASTE BOX IT SERVES, for the same reason the
+ * rest of this file does: `unlock-screen.test.tsx` renders the box and can
+ * exercise the whole submit flow, but the wording and wire-format parsing
+ * still belong in one place each caller can compute expectations from,
+ * rather than duplicated inline where a copy edit would break silently. This
  * is the documented fallback for every link a terminal or a mail client
- * mangles, which is too load-bearing to leave untested — and it is wire-format
- * parsing, which is what this file is for.
+ * mangles, which is too load-bearing to leave untested.
  */
 export function extractUnlockToken(raw: string): string {
   const trimmed = raw.trim();
@@ -200,4 +201,52 @@ export function extractUnlockToken(raw: string): string {
   }
   return trimmed;
 }
+
+export interface UnlockScreenCopy {
+  /** The `<h1>` on the unlock screen. */
+  headline: string;
+  /**
+   * The extra explanatory paragraph shown only for `reason === "binding"`,
+   * or `null` for a plain lockout — there is nothing extra to say there.
+   */
+  recoveryContext: string | null;
+}
+
+/**
+ * The unlock screen's headline and (for the `binding` case) its extra
+ * paragraph, keyed on WHY the screen is showing rather than left as inline
+ * JSX ternaries — so a component test can assert the screen picked the RIGHT
+ * copy for its `reason` by calling this, instead of re-pinning the strings a
+ * second place.
+ *
+ * `reason === "binding"` is the RECOVERY case and is deliberately a different
+ * sentence: that user's session cookie is fine — what is missing is the
+ * origin-scoped second factor `apiFetch` sends alongside it — so "Email Agent
+ * is locked" would contradict what they can plainly see. See
+ * `unlock-screen.tsx`'s header for the full argument, including why this must
+ * never read as a dead end: both cases render the same paste-box/redeem
+ * instructions below the headline, because the recovery action is identical
+ * (redeem a link) even though the SITUATION is not.
+ */
+export function describeUnlockScreenCopy(reason?: "binding"): UnlockScreenCopy {
+  if (reason === "binding") {
+    return {
+      headline: "This browser needs unlocking again",
+      recoveryContext:
+        "You are still signed in, but this browser is missing the key that " +
+        "ties that session to this exact address. That happens after " +
+        "clearing site data, or if the browser is blocking storage for " +
+        "this site. Redeeming a link below issues a fresh one.",
+    };
+  }
+  return { headline: "Email Agent is locked", recoveryContext: null };
+}
+
+/**
+ * Shown when `fetch` itself throws — no response to read a code from at all.
+ * A single constant because `UnlockScreen` and `UnlockExchange` both hit this
+ * branch and must not drift into saying it two different ways.
+ */
+export const UNLOCK_NETWORK_ERROR_MESSAGE =
+  "Could not reach the server. Check your connection and try again.";
 
