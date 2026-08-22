@@ -502,22 +502,25 @@
 
         <g class="s-refused">
           <rect x="150" y="162" width="600" height="74" rx="3" class="f-refused" stroke="currentColor" stroke-width="1"/>
-          <text x="170" y="184" class="lbl-cap">THINGS THAT ACTUALLY WENT WRONG IN HERE</text>
+          <text x="170" y="184" class="lbl-cap">WHAT THIS INTERVAL MAKES POSSIBLE</text>
           <text x="170" y="205" class="lbl">a second surface cancelled the change — and the cancellation was overwritten</text>
           <text x="170" y="223" class="lbl">the process died mid-batch — no screen could say which mail had moved</text>
         </g>
       </svg>
     </div>
     <figcaption><span class="fignum">Fig. 1</span> &nbsp; Approval is not an instant, it is an
-    interval &mdash; and intervals have races. Both failures listed here are real defects that were
-    found and fixed in this codebase, not hypotheticals.</figcaption>
+    interval &mdash; and intervals have races. The two are not the same kind of claim, so they are
+    not stated as one: the second <em>shipped</em> &mdash; stranded rows really were invisible to
+    every screen, because every screen listed <em>pending</em>. The first is the hazard the claim
+    protocol in <a href="#gate">§&thinsp;07</a> exists to prevent, recorded in that code&rsquo;s own
+    rationale rather than in a bug report. Neither is invented; only one was observed.</figcaption>
   </figure>
 </section>
 
 <div class="interval"><span></span></div>
 
 <!-- ══════════════════════════════════════ 02 ══════════════════════════════════════ -->
-<section>
+<section id="machine">
   <div class="col">
     <span class="secnum">§ 02</span>
     <h2>One machine, one user, no server</h2>
@@ -534,11 +537,25 @@
     machine can connect to. Binding here is a real boundary: an off-box process cannot open the
     socket at all, whatever headers it would have sent.</aside>
 
-    <p>Everything under <code>~/.email-agent/</code> is written mode <code>0600</code> inside a
-    <code>0700</code> directory. It was <code>0644</code> inside <code>0755</code> until August 2026
-    &mdash; measured, not assumed: neither the settings writer nor the token writer passed a mode,
-    and the default umask is 022. Among the world-readable files was the Gmail <strong>refresh
-    token</strong>, which needs no password and stays valid until somebody revokes it.</p>
+    <p>Every <em>credential</em> file under <code>~/.email-agent/</code> &mdash; the OAuth tokens,
+    the settings, the session store &mdash; is written mode <code>0600</code>, and the directory
+    holding them is <code>0700</code>. All three were <code>0644</code> inside <code>0755</code>
+    until August 2026 &mdash; measured, not assumed: neither the settings writer nor the token writer
+    passed a mode, and the default umask is 022. Among the world-readable files was the Gmail
+    <strong>refresh token</strong>, which needs no password and stays valid until somebody revokes
+    it.</p>
+
+    <div class="refuses">
+      <span class="tag">The database is the exception, and the project&rsquo;s own notes overstate this</span>
+      <p>&ldquo;Everything under <code>~/.email-agent/</code>&rdquo; is how the instruction file puts
+      it, and that is not quite true. Only those three files go through the hardened writer. The mail
+      itself is written by LanceDB, which is handed a directory created with no mode at all &mdash;
+      measured here, on a throwaway home: <code>data/lancedb</code> and every table inside it land
+      <code>0755</code>, and each manifest lands <code>0644</code>. What protects your mail is the
+      <code>0700</code> on the directory <em>above</em> it, so another local user cannot traverse in;
+      it is not a mode on the mail. Those are different guarantees, and only one of them is
+      written down.</p>
+    </div>
 
     <p>The code is a <strong>monorepo</strong> of three packages, and the split matters because it
     is also a trust split.</p>
@@ -2359,10 +2376,22 @@
   <details>
     <summary>Where the documentation and the code disagreed</summary>
     <div class="col" style="max-width:none">
-      <p style="max-width:68ch">Three disagreements were found while writing this page, by checking
-      prose against source. Two were fixed in the wave that followed; the third is still open, which is
-      the more useful ending.</p>
+      <p style="max-width:68ch">Five disagreements were found by checking prose against source
+      &mdash; three while writing this page, two more when it was afterwards fact-checked by someone
+      who had not written it. Two were fixed in the wave that followed; three are still open, which
+      is the more useful ending. Note the shape of the last two: the page had faithfully reproduced
+      the instruction file, and the instruction file was wrong. Copying an authoritative document
+      accurately is not the same as checking it.</p>
       <ul class="plain" style="max-width:none">
+        <li><strong>Still open &mdash; and it was on this page until the fact-check.</strong> The
+        instruction file says every file under <code>~/.email-agent/</code> is written
+        <code>0600</code> inside <code>0700</code>. Measured: only the three credential files are.
+        The mail database is created with no mode and lands <code>0755</code>/<code>0644</code>,
+        protected by the directory above it rather than by its own permissions. <a href="#machine">&sect;&thinsp;02</a>
+        now says so.</li>
+        <li><strong>Still open, and small.</strong> The instruction file says an unauthenticated
+        gemini run fails in about four seconds; the executor&rsquo;s own comment says two. Both are
+        described as measured. This page quotes the four.</li>
         <li><strong>Still open.</strong> The main instruction file describes credential selection as a
         three-step fallback chain &mdash; explicit account, then default account, then ambient
         credentials. Two hundred lines later the same file states the refusal correctly. Both sentences
