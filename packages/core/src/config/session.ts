@@ -115,8 +115,23 @@ export const UNLOCK_TOKEN_TTL_MS = 10 * 60 * 1000;
  */
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** The `Max-Age` a caller should put on the cookie, in seconds. */
-export const SESSION_MAX_AGE_SECONDS = SESSION_TTL_MS / 1000;
+/**
+ * The `Max-Age` to put on the cookie, in seconds. DELIBERATELY MUCH LONGER than
+ * `SESSION_TTL_MS`, and that is not a mismatch to tidy up.
+ *
+ * `Max-Age` is enforced by the BROWSER, from the moment the cookie is set, and
+ * nothing re-sets it afterwards — the API guard returns `undefined` on a pass
+ * and attaches no headers. So a `Max-Age` equal to the idle window would delete
+ * the cookie exactly 24 hours after the unlock however heavily the browser was
+ * used in between, and the idle renewal below would be dead code: the browser
+ * would simply stop sending a value for `hasValidSession` to renew.
+ *
+ * THE STORE IS THE SOLE AUTHORITY ON VALIDITY. A cookie whose server-side record
+ * has expired is inert — its digest matches nothing — so the attribute's only
+ * job is to outlive the longest session a user could keep renewing, and to stop
+ * a value lingering in a browser profile forever after that. A year does both.
+ */
+export const SESSION_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 
 /** Rolling window over which failed exchange attempts are counted. */
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
@@ -133,6 +148,17 @@ export const RATE_LIMIT_MAX_FAILURES = 20;
  * name is a silent logout.
  */
 export const SESSION_COOKIE_NAME = "email_agent_session";
+
+/**
+ * The `code` a 401 carries when the caller simply has no session.
+ *
+ * Lives here for the same reason the cookie name does: the API guard writes it,
+ * and a client interceptor has to branch on it to send the tab to the unlock
+ * page. Two spellings of this string is a UI that shows a broken panel instead
+ * of a way back in. 403 stays reserved for the host/origin failures — the two
+ * must remain distinguishable by status alone.
+ */
+export const UNLOCK_REQUIRED_CODE = "unlock-required";
 
 /**
  * Every attribute the session cookie is set with, and why it has that value.
@@ -266,9 +292,22 @@ function parseStore(raw: string): SessionStoreFile | null {
   if (!Array.isArray(candidate.sessions) || !Array.isArray(candidate.failures)) {
     return null;
   }
+  // The `unlock` record is validated as strictly as the arrays, not trusted
+  // because the file parsed. A store carrying `unlock: "garbage"` would
+  // otherwise reach `digestMatches(token, undefined)` and THROW, turning the
+  // documented fail-closed answer (`invalid`) into a 500 from the exchange
+  // route — a corrupt store must lock people out, never crash at them.
+  const unlock = candidate.unlock;
+  const unlockOk =
+    typeof unlock === "object" &&
+    unlock !== null &&
+    typeof (unlock as UnlockRecord).tokenHash === "string" &&
+    typeof (unlock as UnlockRecord).expiresAt === "number" &&
+    ((unlock as UnlockRecord).usedAt === null ||
+      typeof (unlock as UnlockRecord).usedAt === "number");
   return {
     version: 1,
-    unlock: candidate.unlock ?? null,
+    unlock: unlockOk ? (unlock as UnlockRecord) : null,
     sessions: candidate.sessions.filter(
       (s): s is SessionRecord =>
         typeof s?.tokenHash === "string" && typeof s?.expiresAt === "number",

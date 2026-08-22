@@ -30,7 +30,8 @@ export {
   // (validate). A second spelling of any of this is a silent lockout.
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
-  SESSION_MAX_AGE_SECONDS,
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  UNLOCK_REQUIRED_CODE,
   SESSION_TTL_MS,
   UNLOCK_TOKEN_TTL_MS,
   RATE_LIMIT_WINDOW_MS,

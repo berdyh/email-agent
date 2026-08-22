@@ -35,7 +35,8 @@ const {
   RATE_LIMIT_WINDOW_MS,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
-  SESSION_MAX_AGE_SECONDS,
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  UNLOCK_REQUIRED_CODE,
   SESSION_TTL_MS,
   UNLOCK_TOKEN_TTL_MS,
   exchangeUnlockToken,
@@ -262,6 +263,31 @@ describe("a store that cannot be used", () => {
     });
   });
 
+  it("fails CLOSED on a store that parses but carries a nonsense unlock record", () => {
+    // Valid JSON is not a valid store. Before the record was validated, an
+    // `unlock` of the wrong shape reached the digest compare and THREW, which
+    // would surface as a 500 from the exchange route instead of the documented
+    // "invalid" — a corrupt store must lock people out, never crash at them.
+    const session = unlockedAt(T0);
+    writeFileSync(
+      SESSION_PATH,
+      JSON.stringify({ version: 1, unlock: "garbage", sessions: [], failures: [] }),
+    );
+
+    assert.deepEqual(exchangeUnlockToken("anything", T0), {
+      ok: false,
+      reason: "invalid",
+      retryAfterMs: 0,
+    });
+    assert.equal(hasValidSession(session, T0), false);
+
+    writeFileSync(
+      SESSION_PATH,
+      JSON.stringify({ version: 1, unlock: { expiresAt: T0 }, sessions: [], failures: [] }),
+    );
+    assert.equal(exchangeUnlockToken("anything", T0).ok, false);
+  });
+
   it("fails OPEN when minting, so the recovery command still works", () => {
     // `email-agent unlock` is what a user runs when they are locked out.
     // Throwing here would mean a corrupt file leaves them with no way back in.
@@ -284,7 +310,15 @@ describe("the shape the web package has to agree with", () => {
       secure: false,
       path: "/",
     });
-    assert.equal(SESSION_MAX_AGE_SECONDS, 86_400);
+    // DELIBERATELY far longer than the 24h idle window. `Max-Age` is enforced
+    // by the browser from the moment the cookie is set and nothing re-sets it,
+    // so matching it to the idle window would delete the cookie after a day
+    // however heavily the browser was used — and the idle renewal would be dead
+    // code, because the browser would stop sending a value to renew. The store
+    // is the sole authority: a cookie whose record has expired matches nothing.
+    assert.ok(SESSION_COOKIE_MAX_AGE_SECONDS > (SESSION_TTL_MS / 1000) * 30);
+    assert.equal(SESSION_COOKIE_MAX_AGE_SECONDS, 365 * 24 * 60 * 60);
+    assert.equal(UNLOCK_REQUIRED_CODE, "unlock-required");
   });
 
   it("treats the existing remote-mutations flag as the one and only off switch", () => {
