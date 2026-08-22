@@ -6226,7 +6226,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_digest",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "digest.ts"
     },
     {
@@ -6237,7 +6237,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_digest_router",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "router"
     },
     {
@@ -6248,7 +6248,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_digest_digestentry",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "digestentry"
     },
     {
@@ -6259,7 +6259,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_digest_digest",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "digest"
     },
     {
@@ -6292,7 +6292,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_summarizer",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "summarizer.ts"
     },
     {
@@ -6303,7 +6303,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_summarizer_router",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "router"
     },
     {
@@ -6314,7 +6314,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_summarizer_emailsummary",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "emailsummary"
     },
     {
@@ -6325,7 +6325,7 @@
       "_origin": "ast",
       "id": "packages_core_src_analysis_summarizer_summarysection",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "summarysection"
     },
     {
@@ -8161,7 +8161,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "embeddings.ts"
     },
@@ -8172,7 +8172,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings_requireenvvar",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "requireenvvar()"
     },
@@ -8183,7 +8183,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings_getopenai",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "getopenai()"
     },
@@ -8194,7 +8194,7 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings_getopenrouter",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "getopenrouter()"
     },
@@ -8205,7 +8205,7 @@
       "source_location": "L41",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings_generateembedding",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "generateembedding()"
     },
@@ -8216,7 +8216,7 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "packages_core_src_db_embeddings_generateembeddings",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "generateembeddings()"
     },
@@ -8965,7 +8965,7 @@
       "_origin": "ast",
       "id": "packages_core_src_db_record_mapper",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "record-mapper.ts"
     },
     {
@@ -9404,8 +9404,8 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "packages_core_src_gmail_account_manager_oauth_scopes",
-      "community": 13,
-      "community_name": "account-manager.ts",
+      "community": 33,
+      "community_name": "POST",
       "norm_label": "oauth_scopes"
     },
     {
@@ -9503,8 +9503,8 @@
       "source_location": "L171",
       "_origin": "ast",
       "id": "packages_core_src_gmail_account_manager_upsertaccountentry",
-      "community": 13,
-      "community_name": "account-manager.ts",
+      "community": 104,
+      "community_name": "gmail/index.ts",
       "norm_label": "upsertaccountentry()"
     },
     {
@@ -9514,8 +9514,8 @@
       "source_location": "L197",
       "_origin": "ast",
       "id": "packages_core_src_gmail_account_manager_addaccount",
-      "community": 13,
-      "community_name": "account-manager.ts",
+      "community": 33,
+      "community_name": "POST",
       "norm_label": "addaccount()"
     },
     {
@@ -9547,8 +9547,8 @@
       "source_location": "L230",
       "_origin": "ast",
       "id": "packages_core_src_gmail_account_manager_setdefaultaccount",
-      "community": 13,
-      "community_name": "account-manager.ts",
+      "community": 33,
+      "community_name": "POST",
       "norm_label": "setdefaultaccount()"
     },
     {
@@ -9558,8 +9558,8 @@
       "source_location": "L245",
       "_origin": "ast",
       "id": "packages_core_src_gmail_account_manager_requireaccountauth",
-      "community": 104,
-      "community_name": "gmail/index.ts",
+      "community": 13,
+      "community_name": "account-manager.ts",
       "norm_label": "requireaccountauth()"
     },
     {
@@ -9778,8 +9778,8 @@
       "source_location": "L83",
       "_origin": "ast",
       "id": "packages_core_src_gmail_client_resetgmailclient",
-      "community": 13,
-      "community_name": "account-manager.ts",
+      "community": 64,
+      "community_name": "client.ts",
       "norm_label": "resetgmailclient()"
     },
     {
@@ -10131,7 +10131,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_sync_records_test",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "sync-records.test.ts"
     },
     {
@@ -10142,7 +10142,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_sync_records_test_message",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "message"
     },
     {
@@ -10153,7 +10153,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_sync_records",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "sync-records.ts"
     },
     {
@@ -10263,7 +10263,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_types",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "gmail/types.ts"
     },
     {
@@ -10274,7 +10274,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_types_gmailmessage",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "gmailmessage"
     },
     {
@@ -10285,7 +10285,7 @@
       "_origin": "ast",
       "id": "packages_core_src_gmail_types_gmailthread",
       "community": 42,
-      "community_name": "vector.ts",
+      "community_name": "digest.ts",
       "norm_label": "gmailthread"
     },
     {
@@ -10416,7 +10416,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector_test",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "vector.test.ts"
     },
@@ -10427,7 +10427,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "vector.ts"
     },
@@ -10438,7 +10438,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector_hashtoken",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "hashtoken()"
     },
@@ -10449,7 +10449,7 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector_createemptyvector",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "createemptyvector()"
     },
@@ -10460,7 +10460,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector_createlocalembeddingvector",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "createlocalembeddingvector()"
     },
@@ -10471,7 +10471,7 @@
       "source_location": "L51",
       "_origin": "ast",
       "id": "packages_core_src_shared_vector_createlocalembeddingvectors",
-      "community": 42,
+      "community": 72,
       "community_name": "vector.ts",
       "norm_label": "createlocalembeddingvectors()"
     },
@@ -11428,8 +11428,8 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_next",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 103,
+      "community_name": "next",
       "norm_label": "next"
     },
     {
@@ -11439,8 +11439,8 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "next",
-      "community": 35,
-      "community_name": "dependencies",
+      "community": 103,
+      "community_name": "next",
       "norm_label": "next"
     },
     {
@@ -11582,8 +11582,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "packages_web_package_dependencies_class_variance_authority",
-      "community": 72,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -11593,8 +11593,8 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "class_variance_authority",
-      "community": 72,
-      "community_name": "class-variance-authority",
+      "community": 35,
+      "community_name": "dependencies",
       "norm_label": "class-variance-authority"
     },
     {
@@ -11923,8 +11923,8 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "packages_web_src_app_app_digest_page_digestpage",
-      "community": 2,
-      "community_name": "approval-panel.tsx",
+      "community": 70,
+      "community_name": "apiFetch",
       "norm_label": "digestpage()"
     },
     {
@@ -12936,7 +12936,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_content",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "mail-content.tsx"
     },
     {
@@ -12947,7 +12947,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_content_mailcontent",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "mailcontent()"
     },
     {
@@ -12958,7 +12958,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_display",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "mail-display.tsx"
     },
     {
@@ -12969,7 +12969,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_display_maildisplay",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "maildisplay()"
     },
     {
@@ -12980,7 +12980,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_display_safeparselabels",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "safeparselabels()"
     },
     {
@@ -13068,7 +13068,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_mail_mail_summary_mailsummary",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "mailsummary()"
     },
     {
@@ -13508,7 +13508,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_ui_separator",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "separator.tsx"
     },
     {
@@ -13519,7 +13519,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_ui_separator_separatorprops",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "separatorprops"
     },
     {
@@ -13530,7 +13530,7 @@
       "_origin": "ast",
       "id": "packages_web_src_components_ui_separator_separator",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "separator"
     },
     {
@@ -14036,7 +14036,7 @@
       "_origin": "ast",
       "id": "packages_web_src_hooks_use_email_detail",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "use-email-detail.ts"
     },
     {
@@ -14047,7 +14047,7 @@
       "_origin": "ast",
       "id": "packages_web_src_hooks_use_email_detail_emaildetail",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "emaildetail"
     },
     {
@@ -14058,7 +14058,7 @@
       "_origin": "ast",
       "id": "packages_web_src_hooks_use_email_detail_emaildetailquerykey",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "emaildetailquerykey()"
     },
     {
@@ -14069,7 +14069,7 @@
       "_origin": "ast",
       "id": "packages_web_src_hooks_use_email_detail_emaildetailpath",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "emaildetailpath()"
     },
     {
@@ -14080,7 +14080,7 @@
       "_origin": "ast",
       "id": "packages_web_src_hooks_use_email_detail_useemaildetail",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "useemaildetail()"
     },
     {
@@ -14322,7 +14322,7 @@
       "_origin": "ast",
       "id": "packages_web_src_lib_api_fetch",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "api-fetch.ts"
     },
     {
@@ -14333,7 +14333,7 @@
       "_origin": "ast",
       "id": "packages_web_src_lib_api_fetch_unlockrequirederror",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "unlockrequirederror"
     },
     {
@@ -14344,7 +14344,7 @@
       "_origin": "ast",
       "id": "packages_web_src_lib_api_fetch_unlockrequirederror_constructor",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": ".constructor()"
     },
     {
@@ -14354,8 +14354,8 @@
       "source_location": "L65",
       "_origin": "ast",
       "id": "packages_web_src_lib_api_fetch_apifetch",
-      "community": 2,
-      "community_name": "approval-panel.tsx",
+      "community": 70,
+      "community_name": "apiFetch",
       "norm_label": "apifetch()"
     },
     {
@@ -14377,7 +14377,7 @@
       "_origin": "ast",
       "id": "packages_web_src_lib_session_binding_readsessionbinding",
       "community": 70,
-      "community_name": "mail-display.tsx",
+      "community_name": "apiFetch",
       "norm_label": "readsessionbinding()"
     },
     {
@@ -18526,7 +18526,7 @@
       "label": "Architecture",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L277",
+      "source_location": "L285",
       "_origin": "ast",
       "id": "readme_architecture",
       "community": 3,
@@ -18537,7 +18537,7 @@
       "label": "Agent System",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L290",
+      "source_location": "L298",
       "_origin": "ast",
       "id": "readme_agent_system",
       "community": 3,
@@ -18548,7 +18548,7 @@
       "label": "Action Plugin System",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L300",
+      "source_location": "L308",
       "_origin": "ast",
       "id": "readme_action_plugin_system",
       "community": 3,
@@ -18559,7 +18559,7 @@
       "label": "Built-in Actions",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L336",
+      "source_location": "L344",
       "_origin": "ast",
       "id": "readme_built_in_actions",
       "community": 3,
@@ -18570,7 +18570,7 @@
       "label": "Approval Gate",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L344",
+      "source_location": "L352",
       "_origin": "ast",
       "id": "readme_approval_gate",
       "community": 3,
@@ -18581,7 +18581,7 @@
       "label": "Tech Stack",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L378",
+      "source_location": "L386",
       "_origin": "ast",
       "id": "readme_tech_stack",
       "community": 3,
@@ -18592,7 +18592,7 @@
       "label": "Development Checks",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L391",
+      "source_location": "L399",
       "_origin": "ast",
       "id": "readme_development_checks",
       "community": 3,
@@ -18603,7 +18603,7 @@
       "label": "License",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L402",
+      "source_location": "L410",
       "_origin": "ast",
       "id": "readme_license",
       "community": 3,
@@ -66556,7 +66556,7 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L334",
+      "source_location": "L342",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme",
@@ -66677,7 +66677,7 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L334",
+      "source_location": "L342",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme",
@@ -66765,7 +66765,7 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L287",
+      "source_location": "L295",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme",
@@ -66787,7 +66787,7 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L400",
+      "source_location": "L408",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme",
@@ -66798,7 +66798,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L277",
+      "source_location": "L285",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_email_agent",
@@ -66809,7 +66809,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L391",
+      "source_location": "L399",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_email_agent",
@@ -66831,7 +66831,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L402",
+      "source_location": "L410",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_email_agent",
@@ -66864,7 +66864,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L378",
+      "source_location": "L386",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_email_agent",
@@ -66941,7 +66941,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L300",
+      "source_location": "L308",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_architecture",
@@ -66952,7 +66952,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L290",
+      "source_location": "L298",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_architecture",
@@ -66963,7 +66963,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L344",
+      "source_location": "L352",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_architecture",
@@ -66974,7 +66974,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L336",
+      "source_location": "L344",
       "weight": 1.0,
       "_origin": "ast",
       "source": "readme_architecture",
@@ -68061,5 +68061,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "a911973ccc4d828658b7baf9a287ca5b353754d3"
+  "built_at_commit": "3c1bac460be5e110594bcb0641cf3a8f33bb7001"
 }
