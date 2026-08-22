@@ -1,5 +1,6 @@
 import { google, type gmail_v1 } from "googleapis";
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+import { ensurePrivateDir, writePrivateFile } from "../shared/private-files.js";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { AccountConfig } from "../config/types.js";
@@ -53,9 +54,12 @@ export async function getStoredTokens(email: string): Promise<StoredTokens | nul
 }
 
 async function saveTokens(email: string, tokens: StoredTokens): Promise<void> {
-  const dir = safeAccountDir(email);
-  await mkdir(dir, { recursive: true });
-  await writeFile(tokenPath(email), JSON.stringify(tokens, null, 2));
+  // `0600` inside `0700` directories, all the way up to `~/.email-agent`.
+  // These bytes ARE the mailbox: a Gmail OAuth refresh token needs no password
+  // and survives until it is revoked. They were written at the umask default
+  // (`0644`) until 2026-08-22 — see `shared/private-files.ts`.
+  await ensurePrivateDir(safeAccountDir(email));
+  await writePrivateFile(tokenPath(email), JSON.stringify(tokens, null, 2));
 }
 
 // --- OAuth2 Flow ---

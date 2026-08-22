@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { writePrivateFile } from "../shared/private-files.js";
 import { SETTINGS_PATH, defaultConfig } from "./defaults.js";
 import type { AccountConfig, AppConfig, GmailAutoApplyConfig } from "./types.js";
 
@@ -440,9 +440,11 @@ export function clearSettingsCache(): void {
 
 export async function saveSettings(config: AppConfig): Promise<void> {
   const normalized = normalizeSettings(config);
-  await mkdir(dirname(SETTINGS_PATH), { recursive: true });
   const serialized = JSON.stringify(normalized, null, 2);
-  await writeFile(SETTINGS_PATH, serialized);
+  // `0600` inside a `0700` directory. This file records the auto-apply consent
+  // flags that arm unattended Gmail writes; it has no business being
+  // world-readable, and it used to be (see `shared/private-files.ts`).
+  await writePrivateFile(SETTINGS_PATH, serialized);
   // Key the cache on the bytes we just wrote — no re-read, no re-stat, no
   // window in which the recorded identity could belong to different bytes.
   cacheEntry = {
