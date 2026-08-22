@@ -36,7 +36,6 @@ const {
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
   SESSION_COOKIE_MAX_AGE_SECONDS,
-  UNLOCK_GATE_DISABLED_LINES,
   UNLOCK_REQUIRED_CODE,
   SESSION_TTL_MS,
   UNLOCK_TOKEN_TTL_MS,
@@ -45,7 +44,6 @@ const {
   isUnlockGateEnabled,
   mintUnlockToken,
   revokeAllSessions,
-  warnIfUnlockGateDisabled,
 } = await import("./session.js");
 
 const T0 = 1_770_000_000_000;
@@ -322,104 +320,6 @@ describe("recovering from an exhausted rate-limit window", () => {
   });
 });
 
-describe("announcing a disarmed gate", () => {
-  // The measured failure: a repo-root `.env` carrying
-  // `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` — never typed into a shell, copied
-  // from the commented line in `.env.example` — disarmed the header checks, the
-  // session requirement and the page gate for `npm run dev`/`npm run start`,
-  // and NOTHING said so: `commands/serve.ts` was the only place in the repo
-  // that printed a word about it, and neither script goes near it.
-  const WARNED = Symbol.for("email-agent.unlock-gate-disabled-warned");
-
-  function resetWarned(): void {
-    delete (globalThis as Record<symbol, unknown>)[WARNED];
-  }
-
-  beforeEach(resetWarned);
-
-  const OFF = { EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS: "1" };
-
-  it("warns when the flag is set, and says where an untyped one came from", () => {
-    const lines: string[] = [];
-
-    assert.equal(warnIfUnlockGateDisabled(OFF, (m) => lines.push(m)), true);
-
-    const printed = lines.join("\n");
-    assert.match(printed, /EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1/);
-    // Naming the .env is the point, not decoration: a user who never typed the
-    // variable has nowhere else to look.
-    assert.match(printed, /\.env/);
-    assert.match(printed, /next\.config\.ts/);
-    // And it must say what was lost, or it is a notice rather than a warning.
-    assert.match(printed, /read your mail/);
-  });
-
-  it("says nothing at all when the gate is on", () => {
-    const lines: string[] = [];
-
-    assert.equal(warnIfUnlockGateDisabled({}, (m) => lines.push(m)), false);
-    assert.equal(warnIfUnlockGateDisabled({ EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS: "0" }, (m) => lines.push(m)), false);
-
-    assert.deepEqual(lines, []);
-    // Nothing is marked either, so a flag flipped later still announces.
-    assert.equal((globalThis as Record<symbol, unknown>)[WARNED], undefined);
-  });
-
-  it("warns ONCE, however many times the flag is observed", () => {
-    // Every guarded request reads this flag. Warning per read would be a log
-    // line per request, which is how a real warning becomes invisible.
-    const lines: string[] = [];
-
-    assert.equal(warnIfUnlockGateDisabled(OFF, (m) => lines.push(m)), true);
-    for (let i = 0; i < 50; i += 1) {
-      assert.equal(warnIfUnlockGateDisabled(OFF, (m) => lines.push(m)), false);
-    }
-
-    assert.equal(lines.length, 1);
-  });
-
-  it("keeps the once-flag on globalThis, so DUPLICATE MODULE COPIES agree", async () => {
-    // Not a hypothetical: AGENTS.md records, measured from a production build,
-    // that Next does not guarantee one module instance per process — the auth
-    // callback route carries its own inlined copy of `config/defaults.ts` +
-    // `config/settings.ts`. A module-level `let printed = false` would live
-    // once per copy and warn once per copy. `?copy=2` gives node a genuinely
-    // second instance of this exact module, which is the same situation.
-    // The specifier is ASSEMBLED rather than written as a literal on purpose:
-    // node treats a distinct query string as a distinct module (verified under
-    // tsx, which keeps the query while mapping `.js` to `.ts`), but tsc tries
-    // to RESOLVE a literal specifier and fails with TS2307 on the query.
-    const secondCopy = `./session.js?copy=${2}`;
-    const second = (await import(secondCopy)) as {
-      warnIfUnlockGateDisabled: typeof warnIfUnlockGateDisabled;
-    };
-    assert.notEqual(second.warnIfUnlockGateDisabled, warnIfUnlockGateDisabled);
-    const lines: string[] = [];
-
-    assert.equal(warnIfUnlockGateDisabled(OFF, (m) => lines.push(m)), true);
-    assert.equal(second.warnIfUnlockGateDisabled(OFF, (m) => lines.push(m)), false);
-
-    assert.equal(lines.length, 1);
-    assert.equal((globalThis as Record<symbol, unknown>)[WARNED], true);
-  });
-
-  it("exports the wording once, for the CLI and the web process to share", () => {
-    // `serve` prints this block from the parent and the web child prints it
-    // again. Two hand-written descriptions of one flag would read as two
-    // problems; the same sentences twice read as one.
-    assert.ok(UNLOCK_GATE_DISABLED_LINES.length > 0);
-    for (const line of UNLOCK_GATE_DISABLED_LINES) {
-      assert.equal(typeof line, "string");
-    }
-    const lines: string[] = [];
-    warnIfUnlockGateDisabled(OFF, (m) => lines.push(m));
-
-    for (const line of UNLOCK_GATE_DISABLED_LINES) {
-      assert.ok(lines[0]?.includes(line), `missing from the warning: ${line}`);
-    }
-  });
-});
-
 describe("validating a session cookie", () => {
   it("rejects an absent, empty or unrecognised cookie value", () => {
     unlockedAt(T0);
@@ -558,14 +458,18 @@ describe("the shape the web package has to agree with", () => {
     assert.equal(isUnlockGateEnabled({ EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS: "0" }), true);
   });
 
-  it("reads no other environment variable anywhere in the module", () => {
-    // The .env foot-gun, closed by construction: next.config.ts loads the repo
-    // root .env into the web process, so any unlock variable this module read
-    // could be armed by a stale committed value. There is no such variable.
+  it("reads no environment variable at all — the store is a file", () => {
+    // The .env foot-gun, closed by construction in the ARMING direction:
+    // next.config.ts loads the repo-root .env into the web process, so any
+    // unlock variable this module read could be armed by a stale committed
+    // value. There is no such variable. Since the gate's off-switch moved to
+    // `../unlock-gate/index.ts` this file reads NONE, and the one variable that
+    // module does read is asserted there — the two halves together are what
+    // used to be one assertion here.
     const source = readFileSync(new URL("./session.ts", import.meta.url), "utf-8");
     const reads = [...source.matchAll(/env\["([A-Z_]+)"\]/g)].map((m) => m[1]);
 
-    assert.deepEqual([...new Set(reads)], ["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"]);
+    assert.deepEqual(reads, []);
   });
 });
 
