@@ -834,8 +834,26 @@ function readSessionCookie(request: Request): string | undefined {
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === SESSION_COOKIE_NAME) {
+    if (part.slice(0, eq).trim() !== SESSION_COOKIE_NAME) continue;
+    // `decodeURIComponent` THROWS `URIError` on invalid percent-encoding, and
+    // this header is fully caller-controlled and read BEFORE anything has
+    // authenticated. Unguarded, `Cookie: email_agent_session=%` turned every
+    // guarded route into a 500 with an empty body — fail-closed on data, but
+    // it replaced the documented "401 vs 403, distinguishable by status alone"
+    // contract with a silent third outcome, and `apiFetch` only redirects to
+    // /unlock on a 401 carrying `unlock-required`, so a browser in that state
+    // would never be sent anywhere it could recover.
+    //
+    // `continue`, not `return`: a browser can send the same cookie name twice
+    // for one host, so a junk entry must not hide a valid session behind it.
+    // Skipping is also correct on the merits — session values are base64url
+    // (`randomBytes(32).toString("base64url")`), which never contains a
+    // character needing percent-encoding, so a value this app issued always
+    // decodes to itself and one that does not decode was never issued here.
+    try {
       return decodeURIComponent(part.slice(eq + 1).trim());
+    } catch {
+      continue;
     }
   }
   return undefined;

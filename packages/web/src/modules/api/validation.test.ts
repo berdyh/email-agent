@@ -786,6 +786,54 @@ describe("web API validation", () => {
     assert.equal(readGuardResponse(read), undefined);
   });
 
+  it("treats an undecodable cookie value as no session, rather than throwing", async () => {
+    // `readSessionCookie` runs `decodeURIComponent` over a header the caller
+    // fully controls, BEFORE anything has authenticated. A lone `%` is not
+    // valid percent-encoding, so an unguarded decode throws `URIError` out of
+    // the guard and Next answers 500 with an empty body — measured against a
+    // real `email-agent serve` on every guarded route. That fails closed on
+    // data, but it breaks two things that matter: the documented "401 vs 403,
+    // distinguishable by status alone" contract gains a silent third outcome,
+    // and `apiFetch` only redirects to /unlock on a 401 carrying
+    // UNLOCK_REQUIRED_CODE — so a browser holding such a cookie gets an
+    // unending stream of generic errors instead of the unlock screen. A value
+    // that cannot be decoded cannot be a session token either way.
+    const undecodable = new Request(`${NEXT_URL}/api/approvals`, {
+      headers: { host: "localhost:3847", "sec-fetch-site": "none", cookie: `${SESSION_COOKIE_NAME}=%E0%A4%A` },
+    });
+    const response = readGuardResponse(undecodable);
+    assert.equal(response?.status, 401);
+    const body = (await response?.json()) as { code: string };
+    assert.equal(body.code, UNLOCK_REQUIRED_CODE);
+
+    const undecodableMutation = new Request(`${NEXT_URL}/api/approvals/apply`, {
+      method: "POST",
+      headers: {
+        host: "localhost:3847",
+        origin: "http://localhost:3847",
+        "sec-fetch-site": "same-origin",
+        cookie: `${SESSION_COOKIE_NAME}=%`,
+      },
+    });
+    assert.equal(mutationGuardResponse(undecodableMutation)?.status, 401);
+  });
+
+  it("still finds a valid session when an undecodable one shares its name", () => {
+    // A browser can legitimately send the same cookie name twice for one host
+    // (host-only beside domain-scoped, or two paths). Refusing the whole
+    // header on the first undecodable entry would log out a user whose real
+    // session is sitting right after it, so the parser skips the bad entry
+    // and keeps looking rather than bailing out.
+    const mixed = new Request(`${NEXT_URL}/api/approvals`, {
+      headers: {
+        host: "localhost:3847",
+        "sec-fetch-site": "none",
+        cookie: `${SESSION_COOKIE_NAME}=%E0%A4%A; ${SESSION_COOKIE_NAME}=${guardSession.cookieValue}`,
+      },
+    });
+    assert.equal(readGuardResponse(mixed), undefined);
+  });
+
   it("checks origin before session — a wrong-origin caller with no cookie still gets 403, not 401", () => {
     // If this ever answered 401 it would mean the header checks stopped
     // running first, and a cross-origin page would learn "this app has an
