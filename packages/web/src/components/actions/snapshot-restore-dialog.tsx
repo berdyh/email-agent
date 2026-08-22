@@ -9,12 +9,14 @@
  * who has just overwritten an action through the edit chat is looking at this
  * page, not at a shell.
  *
- * DELIBERATELY THIN. There is no component testing library in this repo, so
- * anything expressed here is verified by reading only. The list wording
+ * DELIBERATELY THIN, AND NOW RENDERED BY A TEST. The list wording
  * (`describeSnapshotAge`), the refusal wording (`describeSnapshotRestoreFailure`)
  * and the request itself live in `modules/api/snapshot-contract.ts` and
- * `hooks/use-action-snapshots.ts`, which are tested. This file picks a layout
- * and calls them.
+ * `hooks/use-action-snapshots.ts`, which are tested; this file picks a layout
+ * and calls them. `snapshot-restore-dialog.test.tsx` — the first component test
+ * in this repo — covers WHICH of those it picks for the state it is in, and
+ * deliberately re-asserts none of their strings. Keep it that way: a copy edit
+ * should break one test, not two.
  */
 
 import { useState } from "react";
