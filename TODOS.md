@@ -1207,8 +1207,8 @@ linked account anywhere in the suite).
 Found by: repo owner, 2026-08-20 (decision to build). The cookie-port-confusion
 gap and the cross-process burn race were found by codex (gpt-5.x, high effort)
 adversarial review of this closed feature, 2026-08-22, and fixed the same
-day — see the paragraph above; that review also confirmed the route/page
-bypass, production/test-session bypass, and guard-composition claims clean.
+day — see the paragraph above; that review also confirmed no route/page
+bypass, no production/test-session bypass, and correct guard composition.
 
 ### Record which surface approved an operation
 **Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
