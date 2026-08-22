@@ -86,7 +86,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | For the `claude-sdk` executor | Claude Agent SDK access without the CLI |
 | `OPENROUTER_API_KEY` | For OpenRouter | Embeddings (Qwen3) + LLM access via openrouter.ai |
 | `OPENROUTER_MODEL` | No | OpenRouter LLM model (default: `qwen/qwen3-8b`) |
-| `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments. Relaxes the API's local-origin checks **and** makes `email-agent serve` bind `0.0.0.0` instead of loopback |
+| `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` | No | Set to `1` only for trusted remote deployments. Relaxes the API's local-origin checks, makes `email-agent serve` bind `0.0.0.0` instead of loopback, **and** bypasses the browser unlock/session gate described below |
 
 The root `.env` is loaded by both the CLI and the web server at startup (it holds
 API keys). Agent selection, embedding provider, GCP project, and data dir are
@@ -150,9 +150,43 @@ npm run dev    # Start development server
 npm run start  # Start on port 3847
 ```
 
-Then open [http://localhost:3847](http://localhost:3847), or
-[http://127.0.0.1:3847](http://127.0.0.1:3847) — the URL Next and
-`email-agent serve` print. Both address the same server and both work.
+`npm run dev`/`npm run start` never mint an unlock link (only `email-agent
+serve`/`email-agent unlock` do, see below) — open the printed link from one
+of those, or run `npx email-agent unlock` in another terminal to print one
+for a server already running under `npm run dev`.
+
+### Unlocking the local UI
+
+Since 2026-08-22, opening [http://localhost:3847](http://localhost:3847) or
+[http://127.0.0.1:3847](http://127.0.0.1:3847) with a fresh browser lands on
+an unlock screen, not the mail UI directly. `npx email-agent serve` prints a
+**one-time link** — `http://<host>:<port>/?token=…`, good for ten minutes —
+before it starts the server. Open it once and the browser stays unlocked: the
+resulting session is a rolling 24-hour idle window that renews itself on
+daily use, so it does not re-lock on its own as long as you keep using the
+app. If the link is lost, expired, or you're running `npm run dev` directly
+(which never prints one), run:
+
+```bash
+npx email-agent unlock
+```
+
+from the project directory — it works whether or not a server is currently
+running, and does not require restarting one that already is. The unlock
+page also accepts the link or the bare token pasted into a form, for when
+only the token was copied.
+
+This raises the bar from "anything that can reach the port" to "anything
+that can read your home directory" — a process on this machine that is NOT
+running as you (a different Unix user, a container sharing the network
+namespace) previously got the whole app for free on an open port; now it
+gets the lock screen. It does **not** raise the bar against a process running
+AS you: that can already read the OAuth tokens directly from
+`~/.email-agent/accounts/` and call Gmail without this app at all, unlock
+token or not. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses this gate the
+same way it bypasses the header checks below — a LAN deployment via
+`serve --host 0.0.0.0` never prints a token, because nothing is checking for
+one.
 
 **The server binds `127.0.0.1` only.** The API's "is this local?" checks read the
 `Host`, `Origin` and `Sec-Fetch-Site` headers, all of which a non-browser client
