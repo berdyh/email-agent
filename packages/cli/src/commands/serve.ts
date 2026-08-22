@@ -192,6 +192,7 @@ export function registerServe(program: Command) {
           const { token } = mintUnlockToken();
           for (const line of describeUnlockLines(
             buildUnlockUrl(host, options.port, token),
+            { pendingServerStart: true },
           )) {
             console.log(chalk.cyan(line));
           }

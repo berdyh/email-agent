@@ -31,21 +31,27 @@ export function buildUnlockUrl(host: string, port: string, token: string): strin
 /**
  * The block `serve` and `unlock` print, as lines.
  *
- * Says the link may need a moment DELIBERATELY. `serve` spawns the Next child
- * with `stdio: "inherit"` and cannot watch it for a readiness line without
- * switching to pipes and forwarding everything — about thirty lines of
- * machinery to avoid a two-second "connection refused" for a user who clicks
- * instantly. Saying so costs one sentence.
+ * `pendingServerStart` is `serve`'s case, and the sentence it adds is
+ * DELIBERATE: `serve` spawns the Next child with `stdio: "inherit"` and cannot
+ * watch it for a readiness line without switching to pipes and forwarding
+ * everything — about thirty lines of machinery to avoid a two-second
+ * "connection refused" for a user who clicks instantly. Saying so costs one
+ * sentence. `unlock` omits it, because the server it is handing a link to is
+ * usually already up.
  */
-export function describeUnlockLines(url: string): string[] {
+export function describeUnlockLines(
+  url: string,
+  { pendingServerStart = false }: { pendingServerStart?: boolean } = {},
+): string[] {
   return [
     "",
     "Open this link to unlock the web UI in your browser:",
     "",
     `  ${url}`,
     "",
-    "It works once the server below reports it is ready, can be used ONCE, and",
-    "expires in 10 minutes. Lost it? Run `npx email-agent unlock` for a fresh one.",
+    ...(pendingServerStart ? ["It works once the server below reports it is ready."] : []),
+    "The link can be used ONCE and expires in 10 minutes.",
+    "Lost it? Run `npx email-agent unlock` for a fresh one.",
     "",
   ];
 }

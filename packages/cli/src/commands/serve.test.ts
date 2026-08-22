@@ -109,7 +109,9 @@ describe("the unlock link serve prints", () => {
   });
 
   it("tells the reader the link is one-time, expiring, and how to get another", () => {
-    const block = describeUnlockLines(buildUnlockUrl("127.0.0.1", "3847", "tok")).join("\n");
+    const block = describeUnlockLines(buildUnlockUrl("127.0.0.1", "3847", "tok"), {
+      pendingServerStart: true,
+    }).join("\n");
 
     assert.match(block, /http:\/\/127\.0\.0\.1:3847\/\?token=tok/);
     assert.match(block, /ONCE/);
