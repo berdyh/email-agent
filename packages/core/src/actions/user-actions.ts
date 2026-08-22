@@ -1,4 +1,8 @@
-import { readdir, readFile, writeFile, unlink, mkdir, copyFile } from "node:fs/promises";
+import { readdir, readFile, unlink } from "node:fs/promises";
+import {
+  ensurePrivateDir,
+  writePrivateFile,
+} from "../shared/private-files.js";
 import { join, basename } from "node:path";
 import { ACTIONS_DIR } from "../config/defaults.js";
 import {
@@ -177,22 +181,34 @@ export async function saveUserAction(
   // TypeScript would wave through syntax Node cannot actually run.
   assertSafeActionSource(content, safeFilename);
 
-  await mkdir(actionsDir, { recursive: true });
+  // NOT a bare mkdir, and NOT a bare writeFile below. Under the common
+  // `umask 022` those produced a 0755 directory of 0644 files, which is the
+  // same defect the mail database had: AGENTS.md claims everything under
+  // `~/.email-agent/` is 0600 inside 0700, and this path was one of the places
+  // that made the claim false. An action file is not a credential, but it is
+  // the user's own automation over their mailbox — its prompt says what it
+  // looks for and what it does about it — and there is no reason for another
+  // local user to read it.
+  await ensurePrivateDir(actionsDir);
 
   const filePath = resolveUserActionFilePath(actionsDir, safeFilename);
 
   // Snapshot existing file before overwrite
   try {
-    await readFile(filePath, "utf-8");
-    await mkdir(snapshotsDirFor(dir), { recursive: true });
+    const previous = await readFile(filePath, "utf-8");
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const snapshotName = `${safeFilename}.${ts}.ts`;
-    await copyFile(filePath, join(snapshotsDirFor(dir), snapshotName));
+    // Written through the private writer rather than `copyFile`, which
+    // reproduces the SOURCE's mode — so a snapshot of a file an older version
+    // left at 0644 would have been created at 0644 too, and the loose modes
+    // would keep propagating forward one version at a time. The bytes are the
+    // ones just read, so nothing is copied twice.
+    await writePrivateFile(join(snapshotsDirFor(dir), snapshotName), previous);
   } catch {
     // No existing file to snapshot
   }
 
-  await writeFile(filePath, content, "utf-8");
+  await writePrivateFile(filePath, content);
 }
 
 /** Delete a user action file. */
