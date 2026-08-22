@@ -200,12 +200,12 @@ describe("session store: two real processes", () => {
     }
 
     assert.equal(doubleWins, 0);
-    // Not an assertion about fairness — just proof that the race is genuinely
-    // contested rather than one process always arriving first.
-    assert.ok(
-      new Set(winners).size >= 1,
-      "at least one process must have won a round",
-    );
+    // INFORMATIONAL ONLY, and deliberately not an assertion. Which process wins
+    // is a real race and the split varies run to run, but one of them winning
+    // all twenty rounds is a legitimate outcome — asserting a split would be
+    // trading a test that cannot fail for one that fails at random. The
+    // property that matters is asserted per round above: exactly one winner.
+    console.log(`  winners: ${winners.join("")}`);
   });
 
   it("counts every failed guess from every process against the rate-limit window", async () => {
