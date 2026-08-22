@@ -18,6 +18,40 @@ progress() {
   echo -e "\n${BOLD}[${step}/${total_steps}]${RESET} $1"
 }
 
+# --- private writes ------------------------------------------------------
+# EXTRACTED VERBATIM AND EXECUTED by
+# packages/core/src/shared/setup-sh-private-writes.test.ts, between the marker
+# lines above and below. Keep the markers.
+#
+# WHY THIS IS NOT A PLAIN `mkdir -p` + `cat >`. Those obey the process umask, so
+# under the common `umask 022` this script created `~/.email-agent` at 0755 and
+# wrote `oauth.json` — the Google client id AND client secret — at 0644, readable
+# by every other local user. Nothing in the app ever rewrote that file, so unlike
+# `settings.json` it stayed loose forever. This is the bash twin of
+# `packages/core/src/shared/private-files.ts`, and it deliberately makes the same
+# two choices: the temp file is created tight and renamed into place, so the
+# bytes are never on disk at a loose mode even for an instant, and the directory
+# is chmod-ed unconditionally, because `mkdir` leaves an existing 0755 directory
+# exactly as it found it.
+ensure_private_dir() {
+  mkdir -p "$1"
+  chmod 700 "$1"
+}
+
+# write_private_file <path>  — body on stdin.
+write_private_file() {
+  local path="$1"
+  local dir
+  dir="$(dirname "$path")"
+  ensure_private_dir "$dir"
+  local tmp
+  tmp="$(mktemp "$dir/.setup.XXXXXX")"
+  chmod 600 "$tmp"
+  cat > "$tmp"
+  mv "$tmp" "$path"
+}
+# --- end private writes --------------------------------------------------
+
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; exit 1; }
@@ -297,8 +331,7 @@ if [ -z "${GCP_PROJECT:-}" ]; then
     warn "No project set — Gmail features won't work until configured"
     warn "Set later: npx email-agent setup --project <id>"
   else
-    mkdir -p "$SETTINGS_DIR"
-    cat > "$SETTINGS_FILE" <<SETTINGS_EOF
+    write_private_file "$SETTINGS_FILE" <<SETTINGS_EOF
 {
   "agentMode": "${AGENT_MODE}",
   "preferredAgent": "claude",
@@ -386,8 +419,7 @@ else
     fi
 
     if [ -n "$OAUTH_CLIENT_SECRET" ]; then
-      mkdir -p "$HOME/.email-agent"
-      cat > "$OAUTH_FILE" <<OAUTH_EOF
+      write_private_file "$OAUTH_FILE" <<OAUTH_EOF
 {
   "clientId": "${OAUTH_CLIENT_ID}",
   "clientSecret": "${OAUTH_CLIENT_SECRET}"
