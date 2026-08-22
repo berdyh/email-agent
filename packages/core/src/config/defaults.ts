@@ -6,6 +6,11 @@ import type { AppConfig } from "./types.js";
 export const DATA_DIR = join(homedir(), ".email-agent", "data");
 export const SETTINGS_PATH = join(homedir(), ".email-agent", "settings.json");
 export const ACTIONS_DIR = join(homedir(), ".email-agent", "actions");
+// The unlock-token and session store behind the local web UI. Same
+// homedir()-at-module-load hazard as the paths above: a test that imports a core
+// module before `useTempHome()` runs has already resolved this against the
+// developer's real $HOME. See `config/session.ts`.
+export const SESSION_PATH = join(homedir(), ".email-agent", "session.json");
 export const LANCEDB_DIR = join(DATA_DIR, "lancedb");
 
 export const defaultConfig: AppConfig = {

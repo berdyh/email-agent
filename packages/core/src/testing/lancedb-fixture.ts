@@ -65,15 +65,23 @@ export async function useTempHome(label: string): Promise<TempHome> {
   // THE ORDERING GUARD. If a core module was already loaded — a stray static
   // import, or a helper that pulled one in — `LANCEDB_DIR` was computed against
   // the real home and this throws instead of letting the test scribble there.
-  const { LANCEDB_DIR } = await import("../config/defaults.js");
-  assert.ok(
-    LANCEDB_DIR.startsWith(path),
-    `LANCEDB_DIR is ${LANCEDB_DIR}, which is NOT inside the temp home ${path}. ` +
-      `A core module was imported before useTempHome() ran, so this test would ` +
-      `operate on the real ~/.email-agent database. Move every core import ` +
-      `below the useTempHome() call and use await import().`,
-  );
-
+  const { LANCEDB_DIR, SESSION_PATH } = await import("../config/defaults.js");
+  // Every homedir()-derived constant in config/defaults.ts has this hazard, so
+  // the guard names more than one of them: SESSION_PATH holds the unlock/session
+  // store, and a test that wrote to the real one would hand out a live session
+  // on the developer's actual machine.
+  for (const [name, value] of [
+    ["LANCEDB_DIR", LANCEDB_DIR],
+    ["SESSION_PATH", SESSION_PATH],
+  ] as const) {
+    assert.ok(
+      value.startsWith(path),
+      `${name} is ${value}, which is NOT inside the temp home ${path}. ` +
+        `A core module was imported before useTempHome() ran, so this test would ` +
+        `operate on the real ~/.email-agent state. Move every core import ` +
+        `below the useTempHome() call and use await import().`,
+    );
+  }
   after(async () => {
     await rm(path, { recursive: true, force: true });
   });
