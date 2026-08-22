@@ -210,8 +210,13 @@ approve queued Gmail changes; `serve` prints that warning before it starts.
 
 `npm run dev` and `npm run start` always bind `127.0.0.1`. The hostname is
 hardcoded in `packages/web/package.json` and `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS`
-does not move it — setting it there only relaxes the header checks on a server
-nothing off-box can reach. Use `email-agent serve` for remote access.
+does not move it — but it does turn off the header checks **and the browser
+unlock gate** on those servers, so an unauthenticated local caller gets the whole
+app. It does not have to be typed into a shell to do that: `next.config.ts` loads
+the repo-root `.env`, and `.env.example` ships a commented line for the variable.
+The web server now prints a security warning naming that file, once, when it
+starts with the flag set — if you see it and did not mean it, check
+`<repoRoot>/.env`. Use `email-agent serve` for remote access.
 
 None of this protects you from another process running as **you** on this
 machine: it can reach loopback, and it can read the OAuth tokens under
