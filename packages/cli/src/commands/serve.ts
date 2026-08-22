@@ -3,8 +3,18 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
-import { initDb, verifyStrandedApplyingOperations } from "@email-agent/core";
+import {
+  initDb,
+  isUnlockGateEnabled,
+  mintUnlockToken,
+  verifyStrandedApplyingOperations,
+} from "@email-agent/core";
 import { describeStrandedNotifyLines } from "./approvals.js";
+import {
+  buildUnlockUrl,
+  describeUnlockDisabledLines,
+  describeUnlockLines,
+} from "../unlock-url.js";
 
 // This file compiles to packages/cli/dist/commands/serve.js — walk up to the
 // monorepo root so `serve` works regardless of the caller's cwd.
@@ -32,6 +42,14 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
  * What this does NOT stop: another process on this machine. It can reach
  * loopback, and if it runs as this user it can also read the OAuth tokens under
  * `~/.email-agent/accounts/` and skip the app entirely.
+ *
+ * Since 2026-08-22 the bind is no longer the whole story for a BROWSER: a
+ * request also needs a session cookie, obtained once by opening the unlock link
+ * this command prints (`config/session.ts` in core). That narrows "another
+ * process on this machine" to "another process running as THIS USER" — anything
+ * else can still reach the port and gets a lock screen. It does not narrow it
+ * further, and never will: code running as this user reads the OAuth tokens
+ * directly.
  */
 export function resolveServeHost(
   explicitHost: string | undefined,
@@ -56,6 +74,24 @@ export function isLoopbackHost(host: string): boolean {
  * The warning printed alongside is what makes it a decision rather than a
  * surprise.
  */
+/**
+ * Whether this run should mint and print an unlock link.
+ *
+ * Two conditions, both necessary. A non-loopback bind implies the remote flag
+ * (see `resolveServeEnv`), which turns the gate off — printing a token there
+ * would claim a protection that is not running. And the flag set explicitly on
+ * a loopback bind is the documented headless-client combination, where the gate
+ * is off for the same reason.
+ *
+ * Note what is NOT a condition: how the server was started. There is no
+ * "arming" environment variable — the gate is on by default in the web process
+ * however it was launched, which is why `npm run dev` and `npm run start` need
+ * `email-agent unlock` rather than a token this command forgot to hand them.
+ */
+export function shouldPrintUnlockUrl(host: string, env: NodeJS.ProcessEnv): boolean {
+  return isLoopbackHost(host) && isUnlockGateEnabled(env);
+}
+
 export function resolveServeEnv(
   host: string,
   env: NodeJS.ProcessEnv,
@@ -138,6 +174,40 @@ export function registerServe(program: Command) {
               `Starting the server anyway.`,
           ),
         );
+      }
+
+      // D4 (owner's decision): print the link BEFORE spawning the child. The
+      // child inherits stdio, so the parent cannot watch it for a readiness
+      // line without switching to pipes and forwarding its output — about
+      // thirty lines of machinery to avoid a two-second "connection refused"
+      // for someone who clicks instantly. The printed block says so instead.
+      //
+      // Nothing about the token crosses into the child: it is not in the
+      // child's environment, and the digest lives in `~/.email-agent/session
+      // .json`, which the web process reads per request. That is also why
+      // `email-agent unlock` can hand out a fresh link to a server that is
+      // already running.
+      if (shouldPrintUnlockUrl(host, process.env)) {
+        try {
+          const { token } = mintUnlockToken();
+          for (const line of describeUnlockLines(
+            buildUnlockUrl(host, options.port, token),
+          )) {
+            console.log(chalk.cyan(line));
+          }
+        } catch (mintErr) {
+          console.log(
+            chalk.yellow(
+              `Could not write an unlock link: ` +
+                `${mintErr instanceof Error ? mintErr.message : String(mintErr)}. ` +
+                `Starting the server anyway — run \`npx email-agent unlock\` once it is up.`,
+            ),
+          );
+        }
+      } else {
+        for (const line of describeUnlockDisabledLines()) {
+          console.log(chalk.yellow(line));
+        }
       }
 
       const repoRoot = resolveRepoRoot();
