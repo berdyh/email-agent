@@ -27,6 +27,15 @@ export interface TestSession {
   cookieValue: string;
   /** A ready-made `Cookie:` header value. */
   cookieHeader: string;
+  /**
+   * The plaintext ORIGIN-SCOPED second factor the browser would keep in
+   * `localStorage` and echo in `SESSION_BINDING_HEADER`. A test that presents
+   * the cookie WITHOUT this is presenting exactly what a sibling loopback port
+   * replaying a captured cookie presents — see `validation.test.ts`.
+   */
+  bindingValue: string;
+  /** The header name `bindingValue` belongs in, so no test spells it by hand. */
+  bindingHeader: string;
 }
 
 /**
@@ -36,7 +45,7 @@ export interface TestSession {
  * twice yields two independent sessions rather than reusing one.
  */
 export async function mintTestSession(): Promise<TestSession> {
-  const { SESSION_COOKIE_NAME, exchangeUnlockToken, mintUnlockToken } =
+  const { SESSION_BINDING_HEADER, SESSION_COOKIE_NAME, exchangeUnlockToken, mintUnlockToken } =
     await import("../config/session.js");
 
   const { token } = mintUnlockToken();
@@ -53,5 +62,7 @@ export async function mintTestSession(): Promise<TestSession> {
     unlockToken: token,
     cookieValue: result.sessionToken,
     cookieHeader: `${SESSION_COOKIE_NAME}=${result.sessionToken}`,
+    bindingValue: result.bindingToken,
+    bindingHeader: SESSION_BINDING_HEADER,
   };
 }

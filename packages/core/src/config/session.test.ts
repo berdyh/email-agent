@@ -37,8 +37,11 @@ const {
   SESSION_COOKIE_OPTIONS,
   SESSION_COOKIE_MAX_AGE_SECONDS,
   UNLOCK_REQUIRED_CODE,
+  BINDING_REQUIRED_CODE,
+  SESSION_BINDING_HEADER,
   SESSION_TTL_MS,
   UNLOCK_TOKEN_TTL_MS,
+  checkSessionRequest,
   exchangeUnlockToken,
   hasValidSession,
   isUnlockGateEnabled,
@@ -53,11 +56,16 @@ function storeBytes(): string {
 }
 
 function unlockedAt(nowMs: number): string {
+  return unlockedPairAt(nowMs).sessionToken;
+}
+
+/** Both halves of an unlocked browser: the cookie value and the second factor. */
+function unlockedPairAt(nowMs: number): { sessionToken: string; bindingToken: string } {
   const { token } = mintUnlockToken(nowMs);
   const result = exchangeUnlockToken(token, nowMs);
   assert.equal(result.ok, true);
   assert.ok(result.ok);
-  return result.sessionToken;
+  return { sessionToken: result.sessionToken, bindingToken: result.bindingToken };
 }
 
 beforeEach(() => {
@@ -480,5 +488,109 @@ describe("where the store lives", () => {
     assert.equal(SESSION_PATH, `${home.path}/.email-agent/session.json`);
     assert.equal(filePermissions(SESSION_PATH), PRIVATE_FILE_MODE);
     assert.equal(filePermissions(`${home.path}/.email-agent`), PRIVATE_DIR_MODE);
+  });
+});
+
+describe("the origin-scoped second factor", () => {
+  it("issues one alongside the cookie, distinct from it and never persisted in the clear", () => {
+    const { sessionToken, bindingToken } = unlockedPairAt(T0);
+
+    assert.equal(typeof bindingToken, "string");
+    assert.notEqual(bindingToken, sessionToken);
+    // 32 random bytes, base64url — same strength as the cookie and the token.
+    assert.ok(bindingToken.length >= 40);
+
+    const bytes = storeBytes();
+    assert.ok(!bytes.includes(bindingToken), "the plaintext second factor must never be written");
+    assert.ok(!bytes.includes(sessionToken), "the plaintext cookie value must never be written");
+    assert.ok(bytes.includes("bindingHash"));
+  });
+
+  it("REFUSES A COOKIE PRESENTED WITHOUT IT — the sibling-port replay", () => {
+    // THE CASE THIS WHOLE FEATURE EXISTS FOR. Cookies are not scoped by port
+    // (RFC 6265 §8.5), so another process binding 127.0.0.1:<anything> can be
+    // handed this exact cookie by a top-level navigation and replay it here.
+    // What it cannot obtain is the second factor: that lives in localStorage,
+    // which IS scoped by origin including the port.
+    const { sessionToken } = unlockedPairAt(T0);
+
+    assert.equal(checkSessionRequest(sessionToken, undefined, T0), "binding-required");
+    assert.equal(checkSessionRequest(sessionToken, "", T0), "binding-required");
+  });
+
+  it("refuses a cookie presented with the WRONG second factor", () => {
+    const { sessionToken } = unlockedPairAt(T0);
+    const other = unlockedPairAt(T0);
+
+    assert.equal(checkSessionRequest(sessionToken, "not-the-binding", T0), "binding-required");
+    // Another live session's factor is not a skeleton key either.
+    assert.equal(checkSessionRequest(sessionToken, other.bindingToken, T0), "binding-required");
+  });
+
+  it("accepts the cookie and its own second factor together", () => {
+    const { sessionToken, bindingToken } = unlockedPairAt(T0);
+
+    assert.equal(checkSessionRequest(sessionToken, bindingToken, T0), "ok");
+  });
+
+  it("distinguishes 'no session at all' from 'session, wrong browser origin'", () => {
+    // The two need different copy on the unlock screen: same fix, very
+    // different explanation. Collapsing them tells a user with a working
+    // session that they have none, which reads as a broken app.
+    const { sessionToken, bindingToken } = unlockedPairAt(T0);
+
+    assert.equal(checkSessionRequest(undefined, bindingToken, T0), "no-session");
+    assert.equal(checkSessionRequest("not-a-session", bindingToken, T0), "no-session");
+    assert.equal(checkSessionRequest(sessionToken, undefined, T0), "binding-required");
+    assert.equal(BINDING_REQUIRED_CODE, "binding-required");
+    assert.notEqual(BINDING_REQUIRED_CODE, UNLOCK_REQUIRED_CODE);
+    assert.equal(SESSION_BINDING_HEADER, "x-email-agent-session-binding");
+  });
+
+  it("does NOT renew the session for a cookie presented without the factor", () => {
+    // A thief holding only the cookie must not be able to keep the session
+    // alive by replaying it. `hasValidSession` (the page gate) renews; the API
+    // guard's check renews only for a request that proved same-origin
+    // possession.
+    const { sessionToken, bindingToken } = unlockedPairAt(T0);
+    const late = T0 + SESSION_TTL_MS - 1000;
+
+    assert.equal(checkSessionRequest(sessionToken, undefined, late), "binding-required");
+    assert.ok(
+      !storeBytes().includes(String(late + SESSION_TTL_MS)),
+      "an unaccompanied cookie must not push the expiry back",
+    );
+
+    assert.equal(checkSessionRequest(sessionToken, bindingToken, late), "ok");
+    assert.ok(
+      storeBytes().includes(String(late + SESSION_TTL_MS)),
+      "a complete request renews exactly as before",
+    );
+  });
+
+  it("keeps the page gate working on the cookie ALONE", () => {
+    // A top-level navigation carries no custom header, so the page gate cannot
+    // see the second factor. Requiring it there would mean nobody could ever
+    // load the app. Safe only because every page under (app)/ is a client
+    // component with zero server-side data fetching.
+    const { sessionToken } = unlockedPairAt(T0);
+
+    assert.equal(hasValidSession(sessionToken, T0), true);
+  });
+
+  it("drops a pre-upgrade session record rather than half-honouring it", () => {
+    // A session written before this landed has no `bindingHash`, so it could
+    // never satisfy `checkSessionRequest`. It is dropped at parse time, which
+    // makes it a clean "you have no session, click the link" instead of a
+    // third state that claims a session and then refuses every request.
+    const { sessionToken } = unlockedPairAt(T0);
+    const store = JSON.parse(storeBytes()) as {
+      sessions: { tokenHash: string; bindingHash?: string; expiresAt: number }[];
+    };
+    for (const session of store.sessions) delete session.bindingHash;
+    writeFileSync(SESSION_PATH, JSON.stringify(store));
+
+    assert.equal(hasValidSession(sessionToken, T0), false);
+    assert.equal(checkSessionRequest(sessionToken, undefined, T0), "no-session");
   });
 });

@@ -195,6 +195,64 @@ export const SESSION_COOKIE_NAME = "email_agent_session";
 export const UNLOCK_REQUIRED_CODE = "unlock-required";
 
 /**
+ * The request header carrying the ORIGIN-SCOPED second factor, alongside the
+ * session cookie, on every guarded API request.
+ *
+ * ─── WHY A SECOND FACTOR AT ALL: COOKIES ARE NOT SCOPED BY PORT ──────────────
+ *
+ * RFC 6265 §8.5 is explicit that cookies provide no isolation by port, and
+ * `SESSION_COOKIE_OPTIONS` below spells out the consequence: `127.0.0.1:3847`
+ * and `127.0.0.1:9999` share ONE cookie jar. Another local user can bind a
+ * sibling loopback port; a cross-site TOP-LEVEL GET to it carries this `Lax`
+ * cookie; that server then holds a valid bearer credential it can replay to
+ * 3847. `httpOnly` does not help — it stops page script from READING the
+ * value, and the thief here is the HTTP server receiving it, not script.
+ *
+ * ─── WHAT CLOSES IT, AND WHY THIS PARTICULAR STORAGE ─────────────────────────
+ *
+ * Web storage IS scoped by ORIGIN, and an origin includes the PORT. So a value
+ * the unlock exchange writes into the browser's storage for `127.0.0.1:3847`
+ * is unreadable from `127.0.0.1:9999`, and a stolen cookie ALONE stops being
+ * sufficient. The client echoes it in this header; the guard requires both.
+ *
+ * `localStorage`, NOT `sessionStorage`, and the choice is argued rather than
+ * defaulted. Both are origin-scoped including port, so both defeat the sibling
+ * port equally — that is not the discriminator. `sessionStorage` is
+ * additionally scoped PER TAB, which buys nothing here (the adversary is
+ * another ORIGIN, not another tab) and costs the user a fresh unlock link
+ * every time they open a second tab or restart the browser, while the cookie
+ * beside it happily survives both. An earlier revision of the comment on
+ * `SESSION_COOKIE_OPTIONS` proposed `sessionStorage`; it was written before
+ * anyone worked through the two-tab case.
+ *
+ * ─── WHAT THIS DOES NOT BUY, AND MUST NEVER BE SAID TO ───────────────────────
+ *
+ * Nothing against code running as THIS user: it reads
+ * `~/.email-agent/accounts/{email}/token.json` and calls Gmail directly, never
+ * touching this app. Nothing against same-origin XSS either — script on the
+ * app's own page reads `localStorage` and could read `sessionStorage` just the
+ * same, so this is not a reason to prefer one over the other. It closes
+ * exactly one hole: a bearer cookie replayed from a DIFFERENT loopback port.
+ *
+ * The `x-` prefix is deliberate: a custom header is what makes a cross-origin
+ * browser fetch preflight, which the app answers for no other origin.
+ */
+export const SESSION_BINDING_HEADER = "x-email-agent-session-binding";
+
+/**
+ * The `code` a 401 carries when the cookie IS a live session but the
+ * origin-scoped second factor is missing or does not match.
+ *
+ * Deliberately DISTINCT from `UNLOCK_REQUIRED_CODE`, and not folded into it:
+ * the two need different copy on the unlock screen, because "you have no
+ * session" and "this browser has a session but not for this address" have the
+ * same fix but very different explanations — and a user who is told the first
+ * when the second is true will reasonably believe the app is broken. Both are
+ * 401, so 403 stays reserved for host/origin failures.
+ */
+export const BINDING_REQUIRED_CODE = "binding-required";
+
+/**
  * Every attribute the session cookie is set with, and why it has that value.
  *
  * `httpOnly: true` — the UI never reads this value from JavaScript, and this app
@@ -240,19 +298,24 @@ export const UNLOCK_REQUIRED_CODE = "unlock-required";
  *     app listening on any other loopback port receives this cookie on a
  *     top-level navigation the browser makes to it.
  *
- * That last line is a real weak-confidentiality property and it is written down
- * rather than argued away. It is NOT closed by any cookie attribute: `__Host-`
- * requires `Secure` (see above) and would not add port scoping anyway, because
- * no cookie attribute can. What bounds it is that exploiting it takes TWO
- * capabilities at once — binding a loopback port AND steering this user's
- * browser to it — which is two adversaries, not one: the co-resident process in
- * this threat model cannot drive the browser, and a hostile page cannot bind a
- * port. It is also strictly better than what preceded the gate, when a
- * co-resident process needed no lure at all and simply sent the right `Host` and
- * `Origin` headers. Closing it properly means a second factor the cookie cannot
- * carry — an opaque value in `sessionStorage`, which IS origin-scoped, echoed in
- * a custom header and required alongside the cookie. Worth doing if this app
- * ever shares a machine with untrusted local services; not done today.
+ * That last line is a real weak-confidentiality property, and as of 2026-08-22
+ * it is CLOSED — by a second factor the cookie cannot carry, not by a cookie
+ * attribute, because no cookie attribute can do it (`__Host-` requires `Secure`,
+ * see above, and would not add port scoping even so). See
+ * `SESSION_BINDING_HEADER`: the exchange issues an opaque value the browser
+ * keeps in ORIGIN-scoped `localStorage` (an origin includes the port) and echoes
+ * in a custom header, and `checkSessionRequest` requires it alongside the
+ * cookie on every guarded API request. A sibling loopback port that captures
+ * this cookie therefore holds half a credential.
+ *
+ * TWO THINGS THAT STAY TRUE and must not be trimmed away as stale. First, the
+ * cookie jar is still shared with every other loopback port — the leak is
+ * unchanged, what changed is that the leaked value is no longer sufficient on
+ * its own. Second, the PAGE gate (`app/(app)/layout.tsx`) still runs on the
+ * cookie ALONE and cannot do otherwise, because a top-level navigation carries
+ * no custom header; that is safe only because every page under it is a client
+ * component with zero server-side data fetching, so the worst a cookie-only
+ * pass yields is the static app shell. Enforcement is the API guard.
  */
 export const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
@@ -294,6 +357,13 @@ interface UnlockRecord {
 interface SessionRecord {
   /** sha256 hex of the plaintext cookie value. The plaintext is never persisted. */
   tokenHash: string;
+  /**
+   * sha256 hex of the ORIGIN-SCOPED second factor issued alongside the cookie.
+   * The plaintext is never persisted, exactly like `tokenHash` — see
+   * `SESSION_BINDING_HEADER` for what this is for and why the cookie alone is
+   * not enough.
+   */
+  bindingHash: string;
   expiresAt: number;
 }
 
@@ -368,9 +438,19 @@ function parseStore(raw: string): SessionStoreFile | null {
   return {
     version: 1,
     unlock: unlockOk ? (unlock as UnlockRecord) : null,
+    // `bindingHash` is required, which means a session written BEFORE the
+    // origin-scoped second factor landed (2026-08-22) is DROPPED here rather
+    // than carried forward. That is deliberate: such a record could never
+    // satisfy `checkSessionRequest`, so keeping it would only turn a clean
+    // "you have no session, click the link" into a confusing third state that
+    // says a session exists and then refuses every request it makes. One
+    // unlock link recovers it. Failing closed on an auth record is also the
+    // direction the rest of this module already takes.
     sessions: candidate.sessions.filter(
       (s): s is SessionRecord =>
-        typeof s?.tokenHash === "string" && typeof s?.expiresAt === "number",
+        typeof s?.tokenHash === "string" &&
+        typeof s?.bindingHash === "string" &&
+        typeof s?.expiresAt === "number",
     ),
     failures: candidate.failures.filter((f): f is number => typeof f === "number"),
   };
@@ -475,7 +555,19 @@ export type UnlockExchangeFailure =
   | "rate-limited";
 
 export type UnlockExchangeResult =
-  | { ok: true; sessionToken: string; expiresAt: number }
+  | {
+      ok: true;
+      sessionToken: string;
+      /**
+       * The ORIGIN-SCOPED second factor, to be handed to the browser in the
+       * RESPONSE BODY and kept in `localStorage` — never in a cookie, which is
+       * the whole point (see `SESSION_BINDING_HEADER`). Like `sessionToken`
+       * this plaintext exists only here and in the browser; the store keeps a
+       * sha256.
+       */
+      bindingToken: string;
+      expiresAt: number;
+    }
   | { ok: false; reason: UnlockExchangeFailure; retryAfterMs: number };
 
 /**
@@ -554,59 +646,138 @@ export function exchangeUnlockToken(
   if (unlock.expiresAt <= nowMs) return uncountedFailure("expired");
 
   const sessionToken = randomBytes(32).toString("base64url");
+  const bindingToken = randomBytes(32).toString("base64url");
   const expiresAt = nowMs + SESSION_TTL_MS;
   unlock.usedAt = nowMs;
-  store.sessions = [...store.sessions, { tokenHash: sha256Hex(sessionToken), expiresAt }];
+  store.sessions = [
+    ...store.sessions,
+    { tokenHash: sha256Hex(sessionToken), bindingHash: sha256Hex(bindingToken), expiresAt },
+  ];
   // Same possession argument as `mintUnlockToken`: whoever just redeemed the
   // real token is not the caller the window exists to slow down, and leaving
   // their predecessors' failed guesses on file only sets up the next accidental
   // lockout.
   store.failures = [];
   writeStore(SESSION_PATH, store, nowMs);
-  return { ok: true, sessionToken, expiresAt };
+  return { ok: true, sessionToken, bindingToken, expiresAt };
 }
 
 /**
- * Whether a presented session cookie value is a live session.
+ * Finds the live session a presented cookie value names, or `null`.
  *
- * This is the function BOTH enforcement points call — the API guard on every
- * guarded route, and the server-component page gate. It is synchronous and
- * re-reads the file on every call, for the same reason `loadSettings()` does:
- * Next does not guarantee one module instance per process, so no in-memory
- * cache can be relied on to be the only one, and the file is the single source
- * every instance converges on.
+ * The ONE lookup behind both `hasValidSession` (the page gate) and
+ * `checkSessionRequest` (the API guard). It is one function rather than two
+ * because a second copy of "is this cookie live?" is a second predicate that
+ * can drift, and the direction it would drift in — one of them accepting a
+ * session the other rejects — is a bypass.
  *
- * IDLE RENEWAL. A session found with less than half its TTL left has its expiry
- * pushed back and the store rewritten, so a browser in daily use never re-locks.
- * That write is BEST-EFFORT and its failure is swallowed: a read-only home
- * directory must not turn a session that is demonstrably valid into a 401. It is
- * bounded to at most one write per session per half-TTL, so it is not a
- * per-request write.
+ * It re-reads the file on every call, for the same reason `loadSettings()`
+ * does: Next does not guarantee one module instance per process, so no
+ * in-memory cache can be relied on to be the only one, and the file is the
+ * single source every instance converges on.
+ *
+ * IDLE RENEWAL is the caller's choice, not this function's, and that matters:
+ * see `checkSessionRequest` for why a request that presents the cookie WITHOUT
+ * the second factor must not be allowed to keep the session alive.
+ */
+function findLiveSession(
+  cookieValue: string | undefined,
+  nowMs: number,
+): { store: SessionStoreFile; match: SessionRecord } | null {
+  if (!cookieValue) return null;
+  const store = readStore(SESSION_PATH);
+  if (!store) return null;
+  const match = store.sessions.find(
+    (s) => s.expiresAt > nowMs && digestMatches(cookieValue, s.tokenHash),
+  );
+  return match ? { store, match } : null;
+}
+
+/**
+ * Pushes a more-than-half-elapsed session's expiry back, so a browser in daily
+ * use never re-locks.
+ *
+ * BEST-EFFORT, and its failure is swallowed: a read-only home directory must
+ * not turn a session that is demonstrably valid into a 401. Bounded to at most
+ * one write per session per half-TTL, so it is not a per-request write.
+ */
+function renewSession(store: SessionStoreFile, match: SessionRecord, nowMs: number): void {
+  if (match.expiresAt - nowMs >= SESSION_TTL_MS / 2) return;
+  match.expiresAt = nowMs + SESSION_TTL_MS;
+  try {
+    writeStore(SESSION_PATH, store, nowMs);
+  } catch {
+    // Renewal is a convenience. The session is valid either way, and saying
+    // otherwise because a write failed would lock the user out of a UI they
+    // are entitled to.
+  }
+}
+
+/**
+ * Whether a presented session cookie value is a live session — THE COOKIE
+ * ALONE, deliberately.
+ *
+ * This is the PAGE gate's predicate (`app/(app)/layout.tsx`, `app/page.tsx`),
+ * and it cannot be anything else: a top-level navigation carries no custom
+ * header, so the origin-scoped second factor is simply not available at page
+ * render time. Requiring it here would mean nobody could ever load the app.
+ *
+ * That split is safe for one specific, checkable reason, and if that reason
+ * ever stops holding this comment is wrong: every page under `(app)/` is a
+ * client component with ZERO server-side data fetching, so the most a
+ * cookie-only pass can yield is the static app shell. Every byte of mail,
+ * settings and queue data is fetched afterwards, by the browser, through the
+ * API guards — which DO require the second factor (`checkSessionRequest`).
+ * The page gate is UX; the API guard is the enforcement.
+ *
+ * The API guard must NOT call this. It calls `checkSessionRequest`.
  */
 export function hasValidSession(
   cookieValue: string | undefined,
   nowMs: number = Date.now(),
 ): boolean {
-  if (!cookieValue) return false;
-  const store = readStore(SESSION_PATH);
-  if (!store) return false;
-
-  const match = store.sessions.find(
-    (s) => s.expiresAt > nowMs && digestMatches(cookieValue, s.tokenHash),
-  );
-  if (!match) return false;
-
-  if (match.expiresAt - nowMs < SESSION_TTL_MS / 2) {
-    match.expiresAt = nowMs + SESSION_TTL_MS;
-    try {
-      writeStore(SESSION_PATH, store, nowMs);
-    } catch {
-      // Renewal is a convenience. The session is valid either way, and saying
-      // otherwise because a write failed would lock the user out of a UI they
-      // are entitled to.
-    }
-  }
+  const found = findLiveSession(cookieValue, nowMs);
+  if (!found) return false;
+  renewSession(found.store, found.match, nowMs);
   return true;
+}
+
+/**
+ * What a guarded API request presented: a live session, no session at all, or
+ * a live session cookie WITHOUT the matching origin-scoped second factor.
+ *
+ * The third state is the one that exists on purpose. It is exactly what a
+ * sibling loopback port replaying a captured cookie sends (see
+ * `SESSION_BINDING_HEADER`), and it is also what an honest browser sends when
+ * its `localStorage` has been cleared — the two are indistinguishable from
+ * here, so the answer must be one a real user can recover from without being
+ * told something false about having no session.
+ */
+export type SessionCheck = "ok" | "no-session" | "binding-required";
+
+/**
+ * The API guard's predicate: the session cookie AND the origin-scoped second
+ * factor, both.
+ *
+ * WHY RENEWAL ONLY ON `"ok"`. `hasValidSession` renews whenever the cookie
+ * matches. Doing that here would let a caller holding nothing but a captured
+ * cookie keep the session alive indefinitely by replaying it — it would never
+ * get data, but it would stop the session from ever idling out from under the
+ * thief. Renewing only for a request that also proved same-origin possession
+ * means an unaccompanied cookie decays on schedule.
+ */
+export function checkSessionRequest(
+  cookieValue: string | undefined,
+  bindingValue: string | undefined,
+  nowMs: number = Date.now(),
+): SessionCheck {
+  const found = findLiveSession(cookieValue, nowMs);
+  if (!found) return "no-session";
+  if (!bindingValue || !digestMatches(bindingValue, found.match.bindingHash)) {
+    return "binding-required";
+  }
+  renewSession(found.store, found.match, nowMs);
+  return "ok";
 }
 
 /**
