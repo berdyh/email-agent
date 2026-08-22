@@ -18,6 +18,7 @@ For a visual view of the same map (areas and their dependencies), open [`module-
 | Web app/API | Next pages and route adapters | `packages/web/src/app/MODULE.md` |
 | Web API module | Request validation and API-local contracts | `packages/web/src/modules/api/MODULE.md` |
 | Web actions UI | Action list, creation, editing, and chat components | `packages/web/src/components/actions/MODULE.md` |
+| Web auth UI | The unlock-token exchange and the static `/unlock` recovery screen | `packages/web/src/components/auth/MODULE.md` |
 | Web mail UI | Inbox layout, toolbar, list, display, content, and summaries | `packages/web/src/components/mail/MODULE.md` |
 | Web shared/UI primitives | Navigation, error boundary, base UI controls | `packages/web/src/components/shared/MODULE.md`, `packages/web/src/components/ui/MODULE.md` |
 | Web hooks/store | Client query hooks and Zustand state | `packages/web/src/hooks/MODULE.md`, `packages/web/src/store/MODULE.md` |
@@ -32,7 +33,7 @@ For a visual view of the same map (areas and their dependencies), open [`module-
 - Action generation: web action chat -> `/api/actions/generate` -> skill docs -> `core/agents`.
 - Analysis: web analysis routes -> `core/analysis` -> `core/agents` or `core/db`.
 - Settings: web settings route and CLI config command -> `core/config`.
-- Web mutations: browser-origin writes must pass `modules/api` mutation-origin checks before touching Gmail, DB, config, or user action files; mail-returning reads must pass `readGuardResponse`.
+- Web mutations: browser-origin writes must pass `modules/api` mutation-origin checks before touching Gmail, DB, config, or user action files; mail-returning reads must pass `readGuardResponse`. Since 2026-08-22 both guards additionally require a session cookie obtained by redeeming a one-time unlock token printed by `email-agent serve`/`email-agent unlock` (`core/config/session.ts`, mint/exchange/validate; `modules/api/validation.ts`'s `sessionViolation`, enforcement; `(app)/layout.tsx`, the page-level UX gate) — `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses this the same way it bypasses the header checks.
 - Action recovery: CLI `actions snapshots` and `/api/actions/user/snapshots` -> `core/actions` `listSnapshots`/`restoreSnapshot`; restore re-validates through the save-time source guard, so a pre-guard snapshot can be refused.
 
 ## Validation
