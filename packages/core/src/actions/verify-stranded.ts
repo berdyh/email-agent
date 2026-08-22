@@ -603,3 +603,43 @@ export async function verifyStrandedApplyingOperations(
   }
   return result;
 }
+
+/**
+ * How many of the rows this pass looked at are STILL left for a human,
+ * whether or not `unresolved` says so.
+ *
+ * `unresolved.length === 0` is NOT the same claim, and a caller that treats it
+ * as one can tell a user "nothing left to look at" while a row sits in
+ * `applying`, unlisted anywhere. The gap: `appliedIds`/`requeuedIds` record
+ * every row the READ half of the pass decided on, but the two `adjudicate`
+ * calls at the end can write FEWER rows than that — `adjudicateStranded
+ * Operations` re-checks the staleness cutoff at write time, so a row an
+ * in-flight apply re-claims (re-stamping `claimedAt`) between the read and
+ * the write matches nothing there. That row was never pushed to `unresolved`
+ * (the read succeeded and produced a verdict), and it was never actually
+ * recorded either — it is exactly as stuck as before this pass ran, and
+ * nothing here will surface it unless a caller checks for this.
+ *
+ * Every row this pass looked at lands in exactly one of three buckets:
+ * `appliedIds`, `requeuedIds`, or `unresolved` — so structurally `checked ===
+ * appliedIds.length + requeuedIds.length + unresolved.length`. Recorded
+ * counts can only be LOWER than the decided-id-array lengths (a write can
+ * lose a race; it cannot invent a row), so:
+ *
+ *   checked - appliedRecorded - requeuedRecorded
+ *     = unresolved.length + (decided - recorded)
+ *     >= unresolved.length
+ *
+ * with equality — zero extra — only when every decided row's write actually
+ * landed. Zero is the only value that means "nothing here needs a human";
+ * anything above it does, even with an empty `unresolved` array.
+ *
+ * A caller acting on a non-zero result should re-read the current stranded
+ * list rather than trust `appliedIds`/`requeuedIds` for row DATA: those
+ * arrays carry ids only, and a row can leave `applying` for reasons unrelated
+ * to this pass (another surface adjudicated it, a fresh apply re-claimed it)
+ * between this call returning and the caller acting on it.
+ */
+export function strandedRowsRemaining(result: StrandedVerificationResult): number {
+  return result.checked - result.appliedRecorded - result.requeuedRecorded;
+}

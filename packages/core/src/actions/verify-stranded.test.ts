@@ -5,6 +5,7 @@ import type { MessageLabelRead } from "../gmail/read.js";
 import {
   verdictFromLabels,
   verifyStrandedApplyingOperations,
+  strandedRowsRemaining,
   type StrandedVerificationDeps,
 } from "./verify-stranded.js";
 
@@ -507,6 +508,49 @@ describe("verifying stranded rows", () => {
     });
     assert.deepEqual(result.appliedIds, ["a", "b"]);
     assert.equal(result.appliedRecorded, 1);
+  });
+
+  it("strandedRowsRemaining sees a write that lost its race even when unresolved is empty", async () => {
+    // THE EXACT SCENARIO A CALLER MUST NOT MISS: the read half of the pass
+    // classifies the row (notApplied — no residual, so `unresolved` stays
+    // empty), but between that read and `adjudicate`'s write an in-flight
+    // apply re-claims the row and re-stamps `claimedAt`. The write's own
+    // staleness re-check then matches zero rows. A caller gating only on
+    // `unresolved.length === 0` would report this row resolved; it is not —
+    // it is exactly as stuck as it was before this pass ran.
+    const rows = [row({ id: "raced", type: "markRead" })];
+    const state = recorder(rows, {
+      "msg-raced": { kind: "labels", labelIds: ["INBOX", "UNREAD"] }, // -> notApplied
+    });
+
+    const result = await verifyStrandedApplyingOperations({
+      ...state.deps,
+      adjudicate: async () => 0, // the write matched nothing
+    });
+
+    assert.deepEqual(result.requeuedIds, ["raced"]);
+    assert.equal(result.requeuedRecorded, 0);
+    assert.deepEqual(result.unresolved, [], "the read succeeded — nothing was pushed as residual");
+    assert.equal(
+      strandedRowsRemaining(result),
+      1,
+      "one row is still left for a human, even though unresolved says zero",
+    );
+  });
+
+  it("strandedRowsRemaining is zero once every decided row's write actually landed", async () => {
+    const rows = [
+      row({ id: "a", type: "markRead" }),
+      row({ id: "b", type: "markRead" }),
+    ];
+    const state = recorder(rows, {
+      "msg-a": { kind: "labels", labelIds: ["INBOX"] }, // -> applied
+      "msg-b": { kind: "labels", labelIds: ["INBOX", "UNREAD"] }, // -> notApplied
+    });
+
+    const result = await verifyStrandedApplyingOperations(state.deps);
+
+    assert.equal(strandedRowsRemaining(result), 0);
   });
 });
 
