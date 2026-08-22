@@ -5,6 +5,7 @@ import {
   normalizeAutoApplyConsent,
   SESSION_COOKIE_NAME,
   UNLOCK_REQUIRED_CODE,
+  warnIfUnlockGateDisabled,
   type AppConfig,
 } from "@email-agent/core/config";
 import type { FetchOptions } from "@email-agent/core/gmail";
@@ -717,6 +718,33 @@ function isAllowedOrigin(origin: string, authority: RequestAuthority): boolean {
 }
 
 /**
+ * EVERY read of `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` in the web process goes
+ * through here, and that is the point of the function rather than a tidy-up:
+ * observing the flag and ANNOUNCING it are now one action, so a future guard
+ * that consults the escape hatch cannot forget to say the escape hatch is
+ * open. It replaced two hand-written `process.env[...] === "1"` comparisons
+ * that between them disarmed the header checks, the fetch-metadata
+ * requirement, the session requirement and the page gate, in silence.
+ *
+ * `warnIfUnlockGateDisabled` returns immediately when the gate is ON (the
+ * normal case) and prints at most once per process when it is off, so this is
+ * a boolean read on the request path, not a log line per request. The startup
+ * announcement (`src/instrumentation.ts` -> `unlock-gate-notice.ts`) normally
+ * gets there first and shares the same once-flag; this is what makes the
+ * guarantee hold anyway if it does not, since Next calling `register()` is
+ * Next's contract rather than something this repo can test.
+ *
+ * Spelled as the negation of `isUnlockGateEnabled()` rather than as its own
+ * string comparison so the web package never names the variable itself: core
+ * owns that name, and `session.test.ts` fails if a second environment variable
+ * appears there.
+ */
+function remoteAccessAllowed(): boolean {
+  warnIfUnlockGateDisabled();
+  return !isUnlockGateEnabled();
+}
+
+/**
  * Header-level checks shared by the mutation and read guards.
  *
  * IMPORTANT — what this is and is not. Every input here is a request header,
@@ -747,7 +775,7 @@ function localRequestViolation(
   // off rather than a subset: the checks all assume a loopback-only deployment,
   // and leaving the origin comparison on while the bind is open is how the LAN
   // browser used to get a 403 from a server it was allowed to reach.
-  if (process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] === "1") return undefined;
+  if (remoteAccessAllowed()) return undefined;
 
   const authority = requestAuthority(request);
   if (!authority || !isLocalHostname(authority.hostname)) {
@@ -803,7 +831,7 @@ function mutationHeaderViolation(request: Request): Response | undefined {
   // who adds the header still gets through. This is a speed bump, not the
   // boundary; the boundary is the loopback bind (see `localRequestViolation`).
   if (
-    process.env["EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS"] !== "1" &&
+    !remoteAccessAllowed() &&
     !request.headers.get("origin") &&
     !request.headers.get("sec-fetch-site")
   ) {
@@ -948,7 +976,7 @@ export function unlockExchangeGuardResponse(request: Request): Response | undefi
  * for; this is the file the logic already lives in.
  */
 export function isSessionUnlocked(cookieValue: string | undefined): boolean {
-  return !isUnlockGateEnabled() || hasValidSession(cookieValue);
+  return remoteAccessAllowed() || hasValidSession(cookieValue);
 }
 
 export { SESSION_COOKIE_NAME };
