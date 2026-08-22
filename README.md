@@ -222,8 +222,16 @@ reading the value, and the thing holding it is an HTTP server. So the unlock
 exchange also issues an opaque second value, which the browser keeps in
 `localStorage` — scoped by *origin*, which does include the port — and sends
 back in a request header on every API call. A neighbouring port cannot read
-it, so a captured cookie on its own buys nothing; both together are what a
-normal unlocked browser holds. The consequence you may
+it, so a captured cookie on its own no longer reaches any of your mail,
+settings or queued changes — every data route refuses it. It is not *inert*,
+though, and the difference is worth stating rather than rounding off: a
+top-level navigation cannot carry a request header, so the page gate has to
+run on the cookie alone, and a replayed cookie therefore still renders the
+empty app shell and still pushes the session's 24-hour window back. Someone
+holding only the cookie can keep the session alive with bare page loads —
+what they are keeping alive is half a credential, because every request that
+shell then makes is refused. Both values together are what a normal unlocked
+browser holds. The consequence you may
 notice: clearing this site's data, or blocking storage for it, means one more
 `npx email-agent unlock`, even though you are technically still signed in.
 The page you land on says so. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses this gate the
