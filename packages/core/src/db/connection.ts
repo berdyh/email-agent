@@ -1,5 +1,5 @@
 import { connect, type Connection } from "@lancedb/lancedb";
-import { mkdir } from "node:fs/promises";
+import { ensurePrivateDir } from "../shared/private-files.js";
 import {
   Schema,
   Field,
@@ -26,7 +26,20 @@ export function getDb(): Promise<Connection> {
   // first callers share a single connect() instead of each racing their own.
   if (!dbPromise) {
     dbPromise = (async () => {
-      await mkdir(LANCEDB_DIR, { recursive: true });
+      // NOT a bare mkdir. This is the largest and most sensitive thing the app
+      // stores — mail bodies and their embeddings — and a plain
+      // `mkdir(LANCEDB_DIR, { recursive: true })` created `~/.email-agent`,
+      // `data/` and `data/lancedb/` at the process umask, i.e. `0755` under the
+      // common `umask 022` (measured on a throwaway $HOME, both orderings).
+      // That was order-dependent and therefore worse than it looked: on a fresh
+      // install where `email-agent fetch` runs before anything writes settings,
+      // this call created the ROOT too, so even the `0700` shield that
+      // `private-files.ts` puts on `~/.email-agent` did not exist yet.
+      //
+      // LanceDB creates the `*.lance` table directories itself, and their modes
+      // are not ours to set. A `0700` ancestor is the whole protection: another
+      // local user cannot traverse into `data/lancedb/` to reach them.
+      await ensurePrivateDir(LANCEDB_DIR);
       return connect(LANCEDB_DIR);
     })().catch((err) => {
       // Don't cache a rejected promise — allow the next caller to retry.
