@@ -183,7 +183,21 @@ namespace) previously got the whole app for free on an open port; now it
 gets the lock screen. It does **not** raise the bar against a process running
 AS you: that can already read the OAuth tokens directly from
 `~/.email-agent/accounts/` and call Gmail without this app at all, unlock
-token or not. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses this gate the
+token or not.
+
+**Two things travel with an unlocked browser, not one.** The session cookie
+is a bearer credential, and cookies are scoped by host with no port
+component — so every other program listening on a loopback port shares this
+app's cookie jar, and one that could steer your browser to it would receive
+a working cookie. `httpOnly` does not help there: it stops page scripts
+reading the value, and the thing holding it is an HTTP server. So the unlock
+exchange also issues an opaque second value, which the browser keeps in
+`localStorage` — scoped by *origin*, which does include the port — and sends
+back in a request header on every API call. A neighbouring port cannot read
+it, so a captured cookie on its own buys nothing. The consequence you may
+notice: clearing this site's data, or blocking storage for it, means one more
+`npx email-agent unlock`, even though you are technically still signed in.
+The page you land on says so. `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1` bypasses this gate the
 same way it bypasses the header checks below — a LAN deployment via
 `serve --host 0.0.0.0` never prints a token, because nothing is checking for
 one.
