@@ -73,7 +73,16 @@ export type UnlockExchangeErrorCode =
   | "invalid-token"
   | "token-expired"
   | "token-already-used"
-  | "rate-limited";
+  | "rate-limited"
+  /**
+   * Another Email Agent process held the session store's lock for the whole
+   * acquisition budget, so the token was never even compared.
+   *
+   * It is a separate code rather than folded into `invalid-token` because the
+   * user's link is UNTOUCHED on this branch — "not valid, mint a fresh one" is
+   * the wrong instruction, and a retry is the right one.
+   */
+  | "store-busy";
 
 /**
  * Structurally the same union as core's `UnlockExchangeFailure`
@@ -83,7 +92,12 @@ export type UnlockExchangeErrorCode =
  * the real value without a runtime import: if core's union ever changes shape,
  * passing a value of the old type here stops compiling.
  */
-export type UnlockExchangeFailureReason = "invalid" | "expired" | "used" | "rate-limited";
+export type UnlockExchangeFailureReason =
+  | "invalid"
+  | "expired"
+  | "used"
+  | "rate-limited"
+  | "busy";
 
 /** Maps core's failure reason onto the wire code the client branches on. */
 export function unlockExchangeErrorCode(
@@ -96,6 +110,8 @@ export function unlockExchangeErrorCode(
       return "token-already-used";
     case "rate-limited":
       return "rate-limited";
+    case "busy":
+      return "store-busy";
     case "invalid":
       return "invalid-token";
   }
@@ -122,6 +138,11 @@ export function describeUnlockExchangeError(code: UnlockExchangeErrorCode): stri
       // double-clicks could cause. Naming the command is now the fastest way
       // out, not an invitation to another doomed attempt.
       return "Too many attempts. Run `npx email-agent unlock` for a fresh link — minting one clears the limit.";
+    case "store-busy":
+      // Deliberately does NOT recommend minting a fresh link: this link still
+      // works. Telling the user to replace a credential that was never spent is
+      // how a transient condition turns into a support question.
+      return "Another Email Agent process is using the session file. Nothing was used up — try this link again in a moment.";
     case "invalid-token":
       return "That link or token is not valid. Run `npx email-agent unlock` for a fresh one.";
   }

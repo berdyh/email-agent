@@ -74,24 +74,48 @@
  * event loop two concurrent exchanges of the same token cannot both observe it
  * unburned. Do not introduce an `await` into that function.
  *
- * ─── CONCURRENCY, HONESTLY ───────────────────────────────────────────────────
+ * ─── CONCURRENCY, ACROSS PROCESSES AS WELL AS WITHIN ONE ─────────────────────
  *
- * Within one process the sequences here are atomic (previous paragraph). ACROSS
- * processes they are read-modify-write over one file with no lock: `email-agent
- * unlock` minting while the server is writing a session can lose one of the two
- * updates. Writes go through `writePrivateFileSync`, which renames a complete
- * temp file over the target, so a reader never sees a half-written store — but a
- * lost update is possible and is not defended against. The realistic trigger is
- * a user running `unlock` in the same second as their own browser exchanging a
- * token, and the failure mode is "run `unlock` again". This is the same class of
- * accepted race the approval queue's enqueue dedupe already documents; do not
- * describe it as atomic, and do not add a lock without a real reason.
+ * Within one process the sequences here are atomic for free (previous
+ * paragraph). ACROSS processes they were not, and that was a real defect rather
+ * than an accepted race: every mutator is a read-modify-write over one file, so
+ * two processes could both read a token unburned and both mint a session from a
+ * link the user was told works ONCE. Two processes over this store is the
+ * ordinary setup, not an exotic one — `email-agent serve` beside `npm run dev`,
+ * two `serve`s on two ports, `unlock` run while the browser is redeeming.
+ * MEASURED against the pre-lock code by `session-cross-process.race.test.ts`
+ * (two forked processes, barrier-synchronised): TWENTY of twenty rounds saw both
+ * processes redeem the same token, and every rate-limit round recorded one of
+ * the two failed guesses instead of two.
+ *
+ * Every mutator now runs inside `withStoreLock` (`config/session-lock.ts`),
+ * which holds an `O_EXCL` lock file for the whole read-modify-write. Read the
+ * header there before touching it: it carries the argument against the two
+ * other shapes, the single-winner stale-lock takeover, and the reason this is
+ * not the deleted `db/migration-lock.ts` returning.
+ *
+ * THE LOCK MUST WRAP THE READ, NOT JUST THE WRITE. Reading outside it and
+ * writing inside is the same lost update wearing a hat — `renewSession` is the
+ * instructive case: it used to write back the whole store object that
+ * `findLiveSession` had read, so a renewal could resurrect a token another
+ * process had burned in between, and drop the session that burn created. It
+ * re-reads inside the lock and touches one record.
+ *
+ * WHAT CONTENTION MEANS IS EACH CALLER'S DECISION, and they differ on purpose:
+ * the exchange fails CLOSED (nothing was burned, so retrying is free and honest
+ * — hence the `busy` reason rather than a silent "invalid"); minting proceeds
+ * WITHOUT the lock, because it is the recovery path and already fails open on a
+ * corrupt store; renewal SKIPS, because it is best-effort by design; revocation
+ * THROWS, because a revoke that quietly failed to revoke is the worst answer
+ * available. Reads (`findLiveSession`) take no lock at all — writes land by
+ * rename, so a reader always sees one whole store or another.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { SESSION_PATH } from "./defaults.js";
 import { writePrivateFileSync } from "../shared/private-files.js";
+import { withStoreLock } from "./session-lock.js";
 
 // ─── Fixed limits. Deliberately NOT settings.json keys. ──────────────────────
 //
@@ -491,8 +515,27 @@ function writeStore(path: string, store: SessionStoreFile, nowMs: number): void 
 /** A freshly minted unlock token, and when it stops being redeemable. */
 export interface UnlockMint {
   /**
-   * The plaintext token. It exists in this process's memory and on its stdout,
-   * and nowhere else — only its sha256 is written to disk.
+   * The plaintext token. Only its sha256 is written to disk — but do NOT
+   * shorten that to "memory and stdout, and nowhere else", which is what this
+   * comment used to say and which was false when it was written.
+   *
+   * WHERE IT ACTUALLY GOES, all of it:
+   *  - this process's memory, and its stdout (the printed link, and therefore
+   *    the terminal's scrollback for as long as the user keeps it);
+   *  - the browser, in the URL FRAGMENT of the printed link
+   *    (`/unlock#token=…`, see `packages/cli/src/unlock-url.ts`), then in the
+   *    body of one POST to `/api/auth/unlock`;
+   *  - the browser's own local history/omnibox database, which can record the
+   *    navigated URL including its fragment BEFORE any script runs, and
+   *    therefore before the unlock page clears the hash.
+   *
+   * A fragment is never SENT to a server by any browser, which is the property
+   * that matters here: the token cannot reach the request logger `next dev`
+   * installs (`node_modules/next/dist/server/dev/log-requests.js` prints the
+   * complete `request.url`), any proxy log, or a `Referer` header. It travelled
+   * in the QUERY STRING until 2026-08-22, and the dev server printed it on
+   * every unlock — this comment claimed otherwise for that whole period, which
+   * is the reason it now enumerates rather than summarises.
    */
   token: string;
   expiresAt: number;
@@ -532,14 +575,28 @@ export interface UnlockMint {
  *
  * Note what is NOT cleared: live sessions (above) and the burn state of the
  * token being replaced. Only the failure counters go.
+ *
+ * ─── IT FAILS OPEN ON LOCK CONTENTION TOO, FOR THE SAME REASON ───────────────
+ *
+ * If `withStoreLock` cannot take the lock within its budget, this mints anyway,
+ * unlocked. That is the pre-lock behaviour for this one function, and it is the
+ * right call for the same narrow reason the corrupt-store branch above fails
+ * open: this is the recovery path, and a user who cannot get back in is not
+ * helped by a correctness property. The exposure is bounded and benign — a lost
+ * update here loses a session record or a competing mint, and the answer to both
+ * is to run `unlock` again. Contrast `exchangeUnlockToken`, which fails CLOSED,
+ * because the thing it would get wrong is burning a one-time token twice.
  */
 export function mintUnlockToken(nowMs: number = Date.now()): UnlockMint {
   const token = randomBytes(32).toString("base64url");
-  const store = readStore(SESSION_PATH) ?? emptyStore();
   const expiresAt = nowMs + UNLOCK_TOKEN_TTL_MS;
-  store.unlock = { tokenHash: sha256Hex(token), expiresAt, usedAt: null };
-  store.failures = [];
-  writeStore(SESSION_PATH, store, nowMs);
+  const write = (): void => {
+    const store = readStore(SESSION_PATH) ?? emptyStore();
+    store.unlock = { tokenHash: sha256Hex(token), expiresAt, usedAt: null };
+    store.failures = [];
+    writeStore(SESSION_PATH, store, nowMs);
+  };
+  withStoreLock(SESSION_PATH, nowMs, write, write);
   return { token, expiresAt };
 }
 
@@ -552,7 +609,18 @@ export type UnlockExchangeFailure =
   /** Matched, but a previous exchange already burned it. */
   | "used"
   /** Too many recent failures; nothing was compared. */
-  | "rate-limited";
+  | "rate-limited"
+  /**
+   * Another process held the store lock for the whole acquisition budget, so
+   * nothing was read, compared or burned — see `config/session-lock.ts`.
+   *
+   * This exists so that contention cannot be reported as `invalid`. A user's
+   * one-time link is untouched on this branch and works on the next attempt,
+   * which is the opposite of what "not valid, mint a fresh one" tells them to
+   * do; and `invalid` is the one reason that COUNTS against the rate-limit
+   * window, so the lie would also spend their budget.
+   */
+  | "busy";
 
 export type UnlockExchangeResult =
   | {
@@ -596,7 +664,19 @@ export type UnlockExchangeResult =
  * process as the router server, so two concurrent exchanges are two tasks on one
  * event loop and only one can observe the token unburned. A caller must not put
  * an `await` between reading a request body and calling this — read the body
- * first, then call this once.
+ * first, then call this once. It is ALSO what makes the cross-process lock
+ * deadlock-proof: a process inside the section runs nothing else, so it can
+ * never block on its own lock.
+ *
+ * ─── THE SINGLE-EVENT-LOOP ARGUMENT ONLY EVER COVERED ONE PROCESS ────────────
+ *
+ * It is correct and it is not enough. Two SEPARATE processes over one
+ * `session.json` — `serve` beside `npm run dev`, two `serve`s, `unlock` racing
+ * the browser — both read the token unburned and both mint a session; measured
+ * at twenty of twenty rounds before the lock existed. The whole read-check-burn
+ * sequence therefore runs inside `withStoreLock`, and the store is read INSIDE
+ * it: reading first and locking only the write would be the same lost update.
+ * On contention the answer is `busy`, never `invalid` — see that reason.
  *
  * The failure reasons are distinguished (`used` vs `expired` vs `invalid`)
  * because the recovery differs and the user has to be told which one to do. What
@@ -608,6 +688,21 @@ export function exchangeUnlockToken(
   token: string,
   nowMs: number = Date.now(),
 ): UnlockExchangeResult {
+  return withStoreLock(
+    SESSION_PATH,
+    nowMs,
+    () => exchangeHoldingLock(token, nowMs),
+    () => ({ ok: false, reason: "busy", retryAfterMs: 0 }),
+  );
+}
+
+/**
+ * The body of `exchangeUnlockToken`, run with the store lock held.
+ *
+ * Split out only so the lock's scope is visible at a glance; it has no other
+ * caller and must never acquire the lock itself.
+ */
+function exchangeHoldingLock(token: string, nowMs: number): UnlockExchangeResult {
   const store = readStore(SESSION_PATH);
   if (!store) return { ok: false, reason: "invalid", retryAfterMs: 0 };
 
@@ -679,18 +774,26 @@ export function exchangeUnlockToken(
  * IDLE RENEWAL is the caller's choice, not this function's, and that matters:
  * see `checkSessionRequest` for why a request that presents the cookie WITHOUT
  * the second factor must not be allowed to keep the session alive.
+ *
+ * IT RETURNS THE RECORD, NOT THE STORE IT CAME OUT OF, and that is deliberate.
+ * It used to hand back both, and `renewSession` wrote that whole store object
+ * back — a read-modify-write straddling the lock boundary, which could resurrect
+ * a token another process had burned in between and drop the session that burn
+ * created. Renewal now re-reads under the lock and touches one record, so there
+ * is no stale store here for anyone to write back.
+ *
+ * NO LOCK IS TAKEN. This only reads, and every write lands by rename, so the
+ * worst it can see is the whole store from one moment or the whole store from
+ * the next.
  */
-function findLiveSession(
-  cookieValue: string | undefined,
-  nowMs: number,
-): { store: SessionStoreFile; match: SessionRecord } | null {
+function findLiveSession(cookieValue: string | undefined, nowMs: number): SessionRecord | null {
   if (!cookieValue) return null;
   const store = readStore(SESSION_PATH);
   if (!store) return null;
-  const match = store.sessions.find(
-    (s) => s.expiresAt > nowMs && digestMatches(cookieValue, s.tokenHash),
+  return (
+    store.sessions.find((s) => s.expiresAt > nowMs && digestMatches(cookieValue, s.tokenHash)) ??
+    null
   );
-  return match ? { store, match } : null;
 }
 
 /**
@@ -700,17 +803,43 @@ function findLiveSession(
  * BEST-EFFORT, and its failure is swallowed: a read-only home directory must
  * not turn a session that is demonstrably valid into a 401. Bounded to at most
  * one write per session per half-TTL, so it is not a per-request write.
+ *
+ * IT TAKES THE LOCK AND RE-READS, rather than writing back the store its caller
+ * already read. That is not tidiness — the old shape was a third instance of the
+ * cross-process lost update the review found in the burn: `findLiveSession`
+ * reads the store, another process exchanges a token (burning it and appending
+ * a session), and then this writes the pre-exchange store back over the top,
+ * UN-BURNING the one-time token and deleting the session it created. Re-reading
+ * inside the lock and touching one record by its digest makes that impossible.
+ *
+ * ON CONTENTION IT SKIPS. Renewal is already best-effort, so waiting out a
+ * three-second budget on a request path to extend an expiry that has hours left
+ * would be the wrong trade — the session stays valid and the next request
+ * renews it.
  */
-function renewSession(store: SessionStoreFile, match: SessionRecord, nowMs: number): void {
+function renewSession(match: SessionRecord, nowMs: number): void {
   if (match.expiresAt - nowMs >= SESSION_TTL_MS / 2) return;
-  match.expiresAt = nowMs + SESSION_TTL_MS;
-  try {
-    writeStore(SESSION_PATH, store, nowMs);
-  } catch {
-    // Renewal is a convenience. The session is valid either way, and saying
-    // otherwise because a write failed would lock the user out of a UI they
-    // are entitled to.
-  }
+  withStoreLock(
+    SESSION_PATH,
+    nowMs,
+    () => {
+      try {
+        const store = readStore(SESSION_PATH);
+        if (!store) return;
+        // By DIGEST, not by object identity: this is a different read of the
+        // file, so `match` is not in it.
+        const current = store.sessions.find((s) => s.tokenHash === match.tokenHash);
+        if (!current || current.expiresAt <= nowMs) return;
+        current.expiresAt = nowMs + SESSION_TTL_MS;
+        writeStore(SESSION_PATH, store, nowMs);
+      } catch {
+        // Renewal is a convenience. The session is valid either way, and saying
+        // otherwise because a write failed would lock the user out of a UI they
+        // are entitled to.
+      }
+    },
+    () => {},
+  );
 }
 
 /**
@@ -738,7 +867,7 @@ export function hasValidSession(
 ): boolean {
   const found = findLiveSession(cookieValue, nowMs);
   if (!found) return false;
-  renewSession(found.store, found.match, nowMs);
+  renewSession(found, nowMs);
   return true;
 }
 
@@ -781,10 +910,10 @@ export function checkSessionRequest(
 ): SessionCheck {
   const found = findLiveSession(cookieValue, nowMs);
   if (!found) return "no-session";
-  if (!bindingValue || !digestMatches(bindingValue, found.match.bindingHash)) {
+  if (!bindingValue || !digestMatches(bindingValue, found.bindingHash)) {
     return "binding-required";
   }
-  renewSession(found.store, found.match, nowMs);
+  renewSession(found, nowMs);
   return "ok";
 }
 
@@ -795,10 +924,29 @@ export function checkSessionRequest(
  * that revocation is a property of this design rather than a thing it lacks, and
  * so a caller does not reach for deleting the file by hand (which would also
  * discard the rate-limit window).
+ *
+ * THROWS if the store lock cannot be taken — the only caller here that does.
+ * See the `onBusy` branch for why.
  */
 export function revokeAllSessions(nowMs: number = Date.now()): void {
-  const store = readStore(SESSION_PATH) ?? emptyStore();
-  store.unlock = null;
-  store.sessions = [];
-  writeStore(SESSION_PATH, store, nowMs);
+  withStoreLock(
+    SESSION_PATH,
+    nowMs,
+    () => {
+      const store = readStore(SESSION_PATH) ?? emptyStore();
+      store.unlock = null;
+      store.sessions = [];
+      writeStore(SESSION_PATH, store, nowMs);
+    },
+    () => {
+      // THE ONE CALLER THAT THROWS ON CONTENTION. Minting fails open and
+      // renewal skips because losing either costs a retry; a revoke that
+      // silently did not revoke tells the user every session is dead when they
+      // are all still live, which is the worst answer this module could give.
+      throw new Error(
+        "Could not revoke sessions: another Email Agent process is holding " +
+          `${SESSION_PATH}. Nothing was changed; try again.`,
+      );
+    },
+  );
 }

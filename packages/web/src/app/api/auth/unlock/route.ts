@@ -68,6 +68,16 @@ export async function POST(request: NextRequest): Promise<Response> {
         },
       );
     }
+    if (result.reason === "busy") {
+      // 503, not 401: nothing about the caller's credential was wrong — the
+      // server could not reach its own store. A 401 would send `apiFetch` and
+      // the unlock screen down the "your token is bad" path for a token that is
+      // still perfectly good.
+      return NextResponse.json(
+        { error: describeUnlockExchangeError("store-busy"), code: "store-busy" },
+        { status: 503, headers: { "Retry-After": "1" } },
+      );
+    }
     const code = unlockExchangeErrorCode(result.reason);
     return NextResponse.json(
       { error: describeUnlockExchangeError(code), code },
