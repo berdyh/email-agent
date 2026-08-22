@@ -160,8 +160,8 @@ for a server already running under `npm run dev`.
 Since 2026-08-22, opening [http://localhost:3847](http://localhost:3847) or
 [http://127.0.0.1:3847](http://127.0.0.1:3847) with a fresh browser lands on
 an unlock screen, not the mail UI directly. `npx email-agent serve` prints a
-**one-time link** — `http://<host>:<port>/?token=…`, good for ten minutes —
-before it starts the server. Open it once and the browser stays unlocked: the
+**one-time link** — `http://<host>:<port>/unlock?exchange=1#token=…`, good for
+ten minutes — before it starts the server. Open it once and the browser stays unlocked: the
 resulting session is a rolling 24-hour idle window that renews itself on
 daily use, so it does not re-lock on its own as long as you keep using the
 app. If the link is lost, expired, or you're running `npm run dev` directly
@@ -174,13 +174,41 @@ npx email-agent unlock
 from the project directory — it works whether or not a server is currently
 running, and does not require restarting one that already is. The unlock
 page also accepts the link or the bare token pasted into a form, for when
-only the token was copied.
+only the token was copied, or when a terminal or mail client truncated the
+link at the `#`.
+
+**The token is after the `#` on purpose.** A URL fragment is never sent to a
+server by any browser, so it cannot land in a server log, a proxy log, or a
+`Referer` header — the browser reads it locally and posts it in a request
+body. That is not cosmetic: `serve` runs Next's dev server, whose request
+logger prints the complete URL of every request, so while the token rode in
+the query string (`/?token=…`, before 2026-08-22) every unlock echoed the
+live token straight back into the terminal. What a fragment does *not* fix,
+and this is worth knowing rather than assuming: the token is still in your
+terminal's scrollback, in your clipboard if you copied it, and possibly in
+your browser's own history database, which can record the URL — fragment
+included — before the page's script gets a chance to strip it. All of those
+are on the machine that printed the token in the first place; what moved is
+the copy that used to reach a *server*.
+
+**"One time" holds across processes, not just within one.** The token's burn,
+the sessions it mints and the failed-attempt counter all live in one file, and
+a second Email Agent process — `serve` beside `npm run dev`, two `serve`s, or
+`unlock` run while the browser is redeeming — used to be able to read and
+write it at the same moment as the first, so both could redeem the same link.
+Measured, before the fix: twenty of twenty attempts. Writes now take a lock,
+and a lock left behind by a killed process is detected by asking the operating
+system whether its owner still exists, so a crash can never leave you unable
+to unlock. If two processes genuinely collide, the link is refused with "try
+again in a moment" and is *not* spent.
 
 This raises the bar from "anything that can reach the port" to "anything
 that can read your home directory" — a process on this machine that is NOT
 running as you (a different Unix user, a container sharing the network
 namespace) previously got the whole app for free on an open port; now it
-gets the lock screen. It does **not** raise the bar against a process running
+gets the lock screen. That sentence was an overclaim until the second factor
+below landed: a neighbouring loopback port could be handed the session cookie
+by your own browser and replay it, without reading anything of yours at all. It does **not** raise the bar against a process running
 AS you: that can already read the OAuth tokens directly from
 `~/.email-agent/accounts/` and call Gmail without this app at all, unlock
 token or not.

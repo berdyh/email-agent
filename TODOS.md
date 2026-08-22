@@ -1085,8 +1085,11 @@ numbered points shipped, plus two items the owner added beyond them (D1:
 D2: an automated real-browser test, not just a manual pass).
 
 **What shipped, in one paragraph.** `email-agent serve` mints a one-time token
-and prints `http://<bound host>:<port>/?token=…` before spawning the Next
-child (D4: the child inherits stdio, so the parent cannot watch it for a
+and prints `http://<bound host>:<port>/unlock?exchange=1#token=…` before
+spawning the Next child (the token moved out of the query string and into the
+URL FRAGMENT on 2026-08-22: `next dev`'s request logger prints the complete
+`request.url`, so the query-string shape echoed every live token back into the
+terminal — see the unlock-link bullet in AGENTS.md) (D4: the child inherits stdio, so the parent cannot watch it for a
 readiness line without switching to pipes — the printed block says the link
 works once the server reports ready instead). `POST /api/auth/unlock`
 (`packages/web/src/app/api/auth/unlock/route.ts`) exchanges it for an
