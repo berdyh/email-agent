@@ -1084,6 +1084,65 @@ existing import needed the fallback.
 
 ## Completed
 
+### `~/.email-agent/` was writable-only-by-owner in name, not in fact — the mail database and `oauth.json` were world-readable
+**Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-22)
+
+The first hardening pass (see "Unlock the local UI..." below) made `token.json`,
+`settings.json`, and `session.json` `0600` inside `0700` and the instruction
+file recorded that as an absolute: "everything under `~/.email-agent/` is
+`0600` inside `0700`." It was false in three places, all measured on throwaway
+`$HOME`s at `umask 022`:
+
+1. **The mail database.** `db/connection.ts` created `~/.email-agent/data/lancedb`
+   with a bare recursive `mkdir`, so `data/` and `lancedb/` sat at `0755`. Worse,
+   on a fresh install `initDb()` runs before anything writes settings, so that
+   same bare `mkdir` created the app's own **root** directory at `0755` too —
+   the one shield that would have made everything below it unreachable was
+   absent, and every message body and embedding was readable by any other
+   local user on the box.
+2. **`~/.email-agent/actions`** and its user-action files/snapshots, at
+   `0755`/`0644` — `copyFile` reproduces the source's mode, so a loose mode
+   propagated forward one snapshot at a time.
+3. **`oauth.json`** — the Google OAuth client id and secret — written by
+   `setup.sh`'s `mkdir -p` + `cat >` at the process umask. `settings.json` got
+   repaired by accident the first time the app saved settings; nothing in the
+   app ever rewrites `oauth.json`, so this credential stayed world-readable for
+   the life of the install.
+
+**Fix, three bounded commits:** `02b3d24` extends `shared/private-files.ts` so
+`ensurePrivateDir` forces `0700` on every level from the app root down to the
+requested directory, on every write (not once at startup — self-healing a tree
+an older version, or an `rsync`/backup restore, left loose), and wires
+`db/connection.ts` through it. `0aa1f30` routes user action files/snapshots
+through the same writer. `850aaa1` gives `setup.sh` its own bash twin of the
+same two choices (`ensure_private_dir`/`write_private_file`) for `oauth.json`,
+since it runs before core is reliably built and cannot import the TS module.
+
+**What this does NOT cover, and never will:** LanceDB creates the `*.lance`
+table directories and their `0644` manifests itself, at its own modes —
+`emails.lance` is still `0755` after the fix. Nothing here touches those; they
+are protected by being unreachable (POSIX requires execute permission on every
+directory in a path to traverse it), which is a property of the `0700`
+ancestors, not of their own bits. The instruction file's "everything is
+`0600`" claim is corrected to say this precisely, not replaced with a new
+overclaim.
+
+**Tests:** `shared/private-dir-tree.test.ts` (chain walk, containment bound,
+symlink stop), `db/connection-permissions.fresh.test.ts` (db-first),
+`db/connection-permissions.upgrade.test.ts` (settings-first + pre-existing
+`0755`), `actions/user-actions-permissions.test.ts`, and
+`shared/setup-sh-private-writes.test.ts` (extracts the marked block from the
+real `setup.sh` and executes it under a real bash at a pinned umask, rather
+than grepping for `chmod 600`). Mutation-checked: reverting `connection.ts` to
+a bare `mkdir` fails 3/0; chmod-ing the leaf only instead of the whole chain
+fails 4/3; deleting the symlink guard fails 1/5 (and chmods the symlink
+target — the exact out-of-tree write the guard exists to prevent); reverting
+`user-actions.ts` fails 3/0; reverting the `setup.sh` helpers fails 2/1.
+
+Found by: fact-checking the product explainer (`email-agent-explainer.html`)
+against source — writing the documentation is what surfaced the bug, not a
+security pass looking for one.
+
 ### `listAccounts()` fails open, and can route writes to a different mailbox
 **Priority:** CLOSED — feature/todos-w11-bugfixes (2026-08-21)
 `listAccounts()` (`gmail/account-manager.ts`) no longer wraps `loadSettings()`
