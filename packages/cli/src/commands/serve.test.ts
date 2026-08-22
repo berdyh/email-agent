@@ -104,9 +104,39 @@ describe("the unlock link serve prints", () => {
     // The session cookie has no Domain attribute, so it is host-only:
     // localhost:3847 and 127.0.0.1:3847 hold separate sessions. Printing the
     // wrong spelling costs the user a second token.
-    assert.equal(buildUnlockUrl("127.0.0.1", "3847", "abc"), "http://127.0.0.1:3847/?token=abc");
-    assert.equal(buildUnlockUrl("localhost", "9000", "abc"), "http://localhost:9000/?token=abc");
-    assert.equal(buildUnlockUrl("::1", "3847", "abc"), "http://[::1]:3847/?token=abc");
+    assert.equal(
+      buildUnlockUrl("127.0.0.1", "3847", "abc"),
+      "http://127.0.0.1:3847/unlock?exchange=1#token=abc",
+    );
+    assert.equal(
+      buildUnlockUrl("localhost", "9000", "abc"),
+      "http://localhost:9000/unlock?exchange=1#token=abc",
+    );
+    assert.equal(
+      buildUnlockUrl("::1", "3847", "abc"),
+      "http://[::1]:3847/unlock?exchange=1#token=abc",
+    );
+  });
+
+  it("keeps the token in the FRAGMENT, where no browser will send it to a server", () => {
+    // The regression test for the shape itself, stated as the property rather
+    // than as a string match: everything from `#` onwards is never transmitted,
+    // so the token must be on that side of it and nothing else may be. It rode
+    // in the query string until 2026-08-22, and `next dev`'s request logger
+    // printed the complete `request.url` on every unlock.
+    const url = buildUnlockUrl("127.0.0.1", "3847", "s3cr3t-token-value");
+    const [sent, fragment] = url.split("#");
+
+    assert.ok(fragment, "the link must carry a fragment");
+    assert.match(fragment, /^token=s3cr3t-token-value$/);
+    assert.doesNotMatch(
+      sent as string,
+      /s3cr3t-token-value/,
+      "the part of the URL the browser SENDS must not contain the token",
+    );
+    // The marker that survives into the request log says only that somebody is
+    // unlocking, which is what lets the page render the right thing first time.
+    assert.equal(sent, "http://127.0.0.1:3847/unlock?exchange=1");
   });
 
   it("tells the reader the link is one-time, expiring, and how to get another", () => {
@@ -114,7 +144,7 @@ describe("the unlock link serve prints", () => {
       pendingServerStart: true,
     }).join("\n");
 
-    assert.match(block, /http:\/\/127\.0\.0\.1:3847\/\?token=tok/);
+    assert.match(block, /http:\/\/127\.0\.0\.1:3847\/unlock\?exchange=1#token=tok/);
     assert.match(block, /ONCE/);
     assert.match(block, /10 minutes/);
     assert.match(block, /email-agent unlock/);

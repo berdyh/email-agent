@@ -34,7 +34,7 @@ const CORE_ENTRY = pathToFileURL(join(PACKAGES, "core", "dist", "index.js")).hre
 const cli = await startCli("unlock");
 const storePath = join(cli.home, ".email-agent", "session.json");
 
-const LINK = /http:\/\/(\[[^\]]+\]|[^:/\s]+):(\d+)\/\?token=([A-Za-z0-9_-]+)/;
+const LINK = /http:\/\/(\[[^\]]+\]|[^:\/\s]+):(\d+)\/unlock\?exchange=1#token=([A-Za-z0-9_-]+)/;
 
 function linkFrom(output: string): RegExpMatchArray {
   const match = output.match(LINK);

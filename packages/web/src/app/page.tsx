@@ -1,52 +1,40 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { isSessionUnlocked, SESSION_COOKIE_NAME } from "@/modules/api/validation";
-import { UnlockExchange } from "@/components/auth/unlock-exchange";
 
 /**
- * The unlock landing dispatcher. Next 15 layouts do not receive
- * `searchParams` — only pages do — so the `?token=…` handoff has to live
- * here rather than in `(app)/layout.tsx`, which is why this page exists
- * instead of the old bare `redirect("/mail")`.
+ * The root dispatcher: already unlocked -> `/mail`, otherwise -> `/unlock`.
  *
- * Three outcomes, checked in this order:
- *  1. A `token` query param is present -> hand it to the client component
- *     that POSTs it to the exchange route. That call has to happen in the
- *     browser: the exchange route sets an httpOnly cookie via `Set-Cookie`
- *     AND returns the origin-scoped second factor in its body for the client
- *     to put in `localStorage`, and only a client fetch can do either.
- *  2. Already unlocked (`isSessionUnlocked` is the PAGE gate's predicate —
- *     the cookie alone, bypass included) -> `/mail`.
- *  3. Neither -> `/unlock`, the static recovery page.
+ * ─── IT NO LONGER HANDLES THE UNLOCK TOKEN, AND MUST NOT AGAIN ───────────────
  *
- * ─── WHY THE TOKEN BRANCH MUST COME FIRST ────────────────────────────────────
+ * It used to accept `?token=…` and mount the exchange component. Two things
+ * killed that, in order:
  *
- * It used to come second, so that an already-unlocked user clicking a stale
- * link never saw a failure. That ordering became a TRAP the moment the API
- * guards started requiring a second factor the server cannot see here: a
- * browser holding a valid cookie and no factor (every browser that unlocked
- * before that landed, or any that has had its site storage cleared) would
- * short-circuit to `/mail`, get 401 `binding-required` on its first API call,
- * be sent to `/unlock`, be told to click the printed link, arrive back here,
- * and short-circuit to `/mail` again. Forever. The paste box would still work,
- * but the recovery this app recommends everywhere would be a loop.
+ *  1. A token in the query string is SENT TO THE SERVER, and `email-agent
+ *     serve` runs `next dev`, whose request logger prints the complete
+ *     `request.url` — so every unlock echoed the live token into the terminal.
+ *     The token now travels in the URL FRAGMENT, which no browser ever sends,
+ *     and a fragment is invisible to a server component. There is nothing left
+ *     here to dispatch ON. See `packages/cli/src/unlock-url.ts`.
+ *  2. Handling it here forced an awkward ordering. Because a top-level
+ *     navigation carries no custom header, this page cannot know whether the
+ *     browser in front of it holds the origin-scoped second factor, so a
+ *     cookie-first branch order sent every factorless browser into a loop
+ *     (`/mail` -> 401 `binding-required` -> `/unlock` -> "click the printed
+ *     link" -> here -> `/mail` -> …), and a token-first order made a stale link
+ *     fail for a browser that was working fine.
  *
- * A top-level navigation carries no custom header, so this dispatcher CANNOT
- * know whether `/mail` will actually work for the browser in front of it.
- * Given that, spending a live token is the outcome that always terminates.
- * The cost is that a fully-working browser clicking a STALE link now sees the
- * "already used" screen instead of landing silently on `/mail`; that screen
- * carries an "Open the app" link for exactly this case.
+ * Redemption now happens on `/unlock`, which renders without a session, makes
+ * no guarded calls, and — unlike this page — never redirects a valid-cookie
+ * browser away before its script has read the hash. Both problems go with it:
+ * there is no branch order left to get wrong, and a factorless browser that
+ * clicks the printed link is redeemed where it lands.
+ *
+ * `isSessionUnlocked` is the PAGE gate's predicate — the cookie alone, bypass
+ * included, and deliberately NOT the same predicate `sessionViolation` uses.
+ * See `hasValidSession` in core for why that split is safe here.
  */
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ token?: string }>;
-}) {
-  const { token } = await searchParams;
-  if (token) {
-    return <UnlockExchange token={token} />;
-  }
+export default async function Home() {
   const jar = await cookies();
   if (isSessionUnlocked(jar.get(SESSION_COOKIE_NAME)?.value)) {
     redirect("/mail");

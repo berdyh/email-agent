@@ -63,7 +63,7 @@ const PACKAGES = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", ".
 const CLI_BIN = join(PACKAGES, "cli", "dist", "index.js");
 const SEED_BIN = join(PACKAGES, "core", "dist", "testing", "seed-cli.js");
 
-const LINK = /http:\/\/(\[[^\]]+\]|[^:/\s]+):(\d+)\/\?token=([A-Za-z0-9_-]+)/;
+const LINK = /http:\/\/(\[[^\]]+\]|[^:\/\s]+):(\d+)\/unlock\?exchange=1#token=([A-Za-z0-9_-]+)/;
 
 /**
  * Same discovery order documented in the module header. Checked in this
@@ -125,6 +125,14 @@ async function waitForHttp(url: string, deadlineMs: number): Promise<void> {
 interface ServeHandle {
   origin: string;
   unlockUrl: string;
+  /**
+   * Everything the `serve` process tree has printed so far — the CLI parent AND
+   * the `next dev` child, which is spawned with `stdio: "inherit"` and so
+   * writes down these same pipes. That is precisely what makes the token-leak
+   * assertion possible: the child's request logger prints the complete
+   * `request.url` for every request it serves.
+   */
+  output: () => string;
   stop: () => Promise<void>;
 }
 
@@ -153,6 +161,9 @@ async function startServe(): Promise<ServeHandle> {
     { env, cwd: PACKAGES, stdio: ["ignore", "pipe", "pipe"], detached: true },
   );
 
+  // Accumulated for the whole lifetime of the process, not just until the link
+  // appears: the request-log lines this test cares about are printed later,
+  // once the browser starts navigating.
   let output = "";
   const unlockUrl = await new Promise<string>((resolvePromise, rejectPromise) => {
     const timer = setTimeout(() => {
@@ -191,7 +202,7 @@ async function startServe(): Promise<ServeHandle> {
     await rm(home, { recursive: true, force: true });
   };
 
-  return { origin: `http://127.0.0.1:${port}`, unlockUrl, stop };
+  return { origin: `http://127.0.0.1:${port}`, unlockUrl, output: () => output, stop };
 }
 
 describe("email-agent serve — real browser (M2 Tier 2)", () => {
@@ -337,6 +348,39 @@ describe("email-agent serve — real browser (M2 Tier 2)", () => {
       } finally {
         await replayContext.close();
       }
+
+      // Leg 4 — THE TOKEN NEVER REACHED THE SERVER'S LOG.
+      //
+      // This is the assertion for the fix that moved the token out of the query
+      // string and into the URL fragment. `serve` runs `next dev`, whose
+      // request logger prints the complete `request.url` for every request
+      // (`next/dist/server/dev/log-requests.js`), and the child inherits these
+      // pipes — so if the token were still a query parameter, it would be
+      // sitting in `handle.output()` right now, printed by the server into the
+      // same terminal a moment after the user clicked. A fragment is never
+      // transmitted by any browser, so no request line can contain it.
+      //
+      // Both browsers above have now navigated the link, so the requests that
+      // would carry it have certainly been served.
+      const token = new URL(handle.unlockUrl).hash.replace(/^#token=/, "");
+      assert.ok(token.length > 20, "could not recover the token from the printed link");
+      const logged = handle
+        .output()
+        .split("\n")
+        .filter((line) => line.includes(token) && /\b(GET|POST|HEAD)\s/.test(line));
+      assert.deepEqual(
+        logged,
+        [],
+        "the unlock token appeared in the server's request log — it must travel " +
+          "in the URL fragment, which no browser sends",
+      );
+      // The link the CLI printed is of course still in the output; the point is
+      // that it is there ONCE, from the parent, and not echoed back by the
+      // child for every navigation.
+      assert.ok(
+        handle.output().includes(handle.unlockUrl),
+        "sanity check: the printed link itself should be in the captured output",
+      );
     } finally {
       await browser?.close();
       await handle.stop();

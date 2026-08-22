@@ -10,24 +10,51 @@
 import { UNLOCK_GATE_DISABLED_LINES } from "@email-agent/core";
 
 /**
- * `http://<host>:<port>/?token=<token>`, with an IPv6 host bracketed.
+ * `http://<host>:<port>/unlock?exchange=1#token=<token>`, with an IPv6 host
+ * bracketed.
+ *
+ * ─── THE TOKEN IS IN THE FRAGMENT, AND THAT IS THE WHOLE POINT ───────────────
+ *
+ * It was in the QUERY STRING until 2026-08-22, and the comment here argued for
+ * that shape on the grounds that the cost was "any access log a future version
+ * might keep". There was no future version: `email-agent serve` spawns `next
+ * dev`, whose installed request logger prints the COMPLETE `request.url`
+ * (`node_modules/next/dist/server/dev/log-requests.js`, `logIncomingRequests`),
+ * so every unlock printed the live token a second time, into the same terminal
+ * and into anything capturing that server's output.
+ *
+ * A fragment is never SENT to a server by any browser — not to this one, not to
+ * a proxy, and not in a `Referer` header. So it cannot reach that logger, or any
+ * other. The unlock page reads `location.hash` in the browser, POSTs the token
+ * to the exchange route in a request BODY, and clears the hash.
+ *
+ * `?exchange=1` is a NON-SECRET marker that lets the server-rendered page know
+ * this navigation is carrying a token it cannot see, so it renders the exchange
+ * component directly instead of flashing the lock screen first. It is safe to
+ * log, because it says only that somebody is unlocking.
+ *
+ * ─── WHAT A FRAGMENT DOES NOT FIX, STATED RATHER THAN GLOSSED ────────────────
+ *
+ * The token still reaches the browser, and the browser is on this machine. After
+ * `history.replaceState` clears the hash, what remains is: the terminal
+ * scrollback that printed the link; the clipboard, if it was copied; and the
+ * browser's own history/omnibox database, which can record the navigated URL —
+ * fragment included — at navigation commit, BEFORE any script runs, and
+ * therefore before the page can clear it. `replaceState` rewrites the current
+ * session-history entry, not necessarily every trace of the URL the browser has
+ * already persisted. All of that is local to the user whose terminal printed the
+ * token in the first place; what the fragment removes is the copy that reached a
+ * SERVER.
  *
  * The host is printed EXACTLY as the server bound it, and that matters more
  * than it looks: the session cookie carries no `Domain`, so it is host-only.
  * `localhost:3847` and `127.0.0.1:3847` hold separate sessions, and unlocking
  * one does not unlock the other. Printing the address the user should actually
  * use is what keeps that from costing them a second token.
- *
- * The token does travel in a query string, which is a real cost and worth
- * naming: it lands in the browser's history entry for that navigation, and in
- * any access log a future version might keep. Against that: the link is burned
- * on first use, it expires in ten minutes unused, and the alternative — asking
- * a person to copy a 43-character token out of a terminal into a form — is worse
- * for the same threat model. This is Jupyter's shape, for the same reasons.
  */
 export function buildUnlockUrl(host: string, port: string, token: string): string {
   const authority = host.includes(":") ? `[${host}]` : host;
-  return `http://${authority}:${port}/?token=${token}`;
+  return `http://${authority}:${port}/unlock?exchange=1#token=${token}`;
 }
 
 /**

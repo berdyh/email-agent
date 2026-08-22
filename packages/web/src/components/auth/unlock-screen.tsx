@@ -5,26 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   describeUnlockExchangeError,
+  extractUnlockToken,
   type UnlockExchangeErrorCode,
 } from "@/modules/api/auth-contract";
 import { storeSessionBinding } from "@/lib/session-binding";
-
-/**
- * Pulls a redeemable token out of either a full unlock URL or a bare pasted
- * value, so a user who copied `http://127.0.0.1:3847/?token=…` out of a
- * terminal does not have to trim it down by hand.
- */
-function extractToken(raw: string): string {
-  const trimmed = raw.trim();
-  try {
-    const url = new URL(trimmed);
-    const fromQuery = url.searchParams.get("token");
-    if (fromQuery) return fromQuery;
-  } catch {
-    // Not parseable as a URL — treat the whole trimmed string as the token.
-  }
-  return trimmed;
-}
 
 /**
  * The unlock page's content. Reachable by definition with NO session — another
@@ -58,7 +42,7 @@ export function UnlockScreen({
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const token = extractToken(value);
+    const token = extractUnlockToken(value);
     if (!token) return;
 
     setChecking(true);
@@ -120,7 +104,9 @@ export function UnlockScreen({
             If{" "}
             <code className="rounded bg-muted px-1 py-0.5 text-xs">email-agent serve</code>{" "}
             is still running, check its terminal for a line starting with{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">http://…/?token=</code>,
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">
+              http://…/unlock?exchange=1#token=
+            </code>,
             and open it.
           </p>
           <p className="mt-2 text-muted-foreground">
@@ -139,7 +125,7 @@ export function UnlockScreen({
             id="unlock-token"
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="http://127.0.0.1:3847/?token=… or just the token"
+            placeholder="http://127.0.0.1:3847/unlock?exchange=1#token=… or the token"
             autoComplete="off"
             spellCheck={false}
           />

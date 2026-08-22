@@ -68,6 +68,23 @@ export const SESSION_BINDING_STORAGE_KEY = "email-agent.session-binding";
 export const UNLOCK_REASON_PARAM = "reason";
 export const UNLOCK_REASON_BINDING = "binding";
 
+/**
+ * The NON-SECRET marker the printed unlock link carries
+ * (`/unlock?exchange=1#token=…`), and the fragment key the token itself is in.
+ *
+ * The token travels in the FRAGMENT because a fragment is never sent to a
+ * server — see `packages/cli/src/unlock-url.ts` for the full argument and for
+ * what a fragment does NOT fix. The consequence is that the server-rendered
+ * `/unlock` page cannot see whether this navigation carries a token, so it
+ * would have to render the lock screen and let the client swap it out, which
+ * flashes the wrong screen at somebody who is unlocking correctly. This
+ * parameter is that missing bit of information, and it is safe in a request log
+ * because it says only that somebody is unlocking, never what with.
+ */
+export const UNLOCK_EXCHANGE_PARAM = "exchange";
+export const UNLOCK_EXCHANGE_MARKER = "1";
+export const UNLOCK_TOKEN_FRAGMENT_KEY = "token";
+
 /** The `code` field on every failure response from `POST /api/auth/unlock`. */
 export type UnlockExchangeErrorCode =
   | "invalid-token"
@@ -147,3 +164,40 @@ export function describeUnlockExchangeError(code: UnlockExchangeErrorCode): stri
       return "That link or token is not valid. Run `npx email-agent unlock` for a fresh one.";
   }
 }
+
+/**
+ * Pulls a redeemable token out of a full unlock URL or a bare pasted value, so
+ * a user who copied a link out of a terminal does not have to trim it by hand.
+ *
+ * BOTH SHAPES ARE ACCEPTED, and the query one is not vestigial: the printed
+ * link carries the token in the FRAGMENT since 2026-08-22
+ * (`/unlock?exchange=1#token=…`, see `packages/cli/src/unlock-url.ts`), but a
+ * link minted by an older build has it in the query string, and this box is
+ * exactly where such a link should still work. Parsing a pasted string happens
+ * entirely in the browser — nothing is logged either way — so accepting the old
+ * shape here costs nothing and closes the one gap removing the old `?token=`
+ * route left.
+ *
+ * IT LIVES HERE, NOT BESIDE THE PASTE BOX IT SERVES, for a testing reason
+ * worth stating: there is no component testing library in this repo, so
+ * anything inside `unlock-screen.tsx` can only be type-checked and read. This
+ * is the documented fallback for every link a terminal or a mail client
+ * mangles, which is too load-bearing to leave untested — and it is wire-format
+ * parsing, which is what this file is for.
+ */
+export function extractUnlockToken(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    const url = new URL(trimmed);
+    // The fragment first: that is where a current link carries it.
+    const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    const fromFragment = new URLSearchParams(hash).get(UNLOCK_TOKEN_FRAGMENT_KEY);
+    if (fromFragment) return fromFragment;
+    const fromQuery = url.searchParams.get(UNLOCK_TOKEN_FRAGMENT_KEY);
+    if (fromQuery) return fromQuery;
+  } catch {
+    // Not parseable as a URL — treat the whole trimmed string as the token.
+  }
+  return trimmed;
+}
+
