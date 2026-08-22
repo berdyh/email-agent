@@ -893,6 +893,23 @@ setup DELIBERATELY, noted here so nobody reads them as missed:
     (`groupOperationsByBatch`, `describeUnlockScreenCopy`, and others) is
     tested both as pure functions AND as the choice a rendered component makes
     between them.
+    **Adversarially re-checked, feature/todos-w11-bugfixes (2026-08-22):** the
+    five most important component tests were re-mutated by a verifier who had
+    not written them, using mutations the authors had NOT tried. Nine mutations
+    in total; seven went red at the named test. TWO SURVIVED, and both were
+    live safety behaviours documented only in a code comment: `ApprovalPanel`'s
+    default-DENY selection (replacing the effect's
+    `prev.has(id) || (isFirstLoad && !seen.has(id))` with an unconditional
+    `next.add(id)` left all 11 tests green, so a row arriving on a background
+    refetch could have started ticked and been swept into a bulk Apply
+    unreviewed) and the settings page's "Auto-apply is currently ON" banner
+    (re-sourcing it from `local` instead of `settings` left all 5 tests green,
+    reintroducing the shipped bug where flipping the switch off hid the warning
+    while the server was still auto-applying). Both now have their own
+    mutation-checked test. The generalisable finding: a component test written
+    by the same pass that wrote the component covers the branches its author
+    was thinking about, and the invariant stated only in a comment is the one
+    left unheld — check those first on any future component.
   - **Next itself.** The harness drives handlers, not the framework: routing,
     middleware, streaming responses and server-component rendering are outside
     it.
