@@ -1,7 +1,10 @@
 import {
   defaultConfig,
+  BINDING_REQUIRED_CODE,
+  checkSessionRequest,
   hasValidSession,
   isUnlockGateEnabled,
+  SESSION_BINDING_HEADER,
   normalizeAutoApplyConsent,
   SESSION_COOKIE_NAME,
   UNLOCK_REQUIRED_CODE,
@@ -888,22 +891,57 @@ function readSessionCookie(request: Request): string | undefined {
 }
 
 /**
- * The session half of the guards. Since 2026-08-22 a local, same-origin
- * caller is no longer enough on its own — it must also present a session
- * cookie obtained by redeeming a one-time unlock token
- * (`packages/core/src/config/session.ts`). This is what narrows "another
- * process on this machine" down to "another process running as THIS user";
- * it does not, and cannot, narrow it further — code already running as this
- * user reads the OAuth tokens under `~/.email-agent/accounts/` directly and
- * never touches this app or this cookie.
+ * The session half of the guards: the unlock cookie AND the origin-scoped
+ * second factor that goes with it.
+ *
+ * Since 2026-08-22 a local, same-origin caller is not enough on its own — it
+ * must present a session cookie obtained by redeeming a one-time unlock token
+ * (`packages/core/src/config/session.ts`). Since later the same day it must
+ * ALSO echo the second factor that exchange issued, from `localStorage`, in
+ * `SESSION_BINDING_HEADER`.
+ *
+ * WHY THE SECOND FACTOR EXISTS, in one paragraph (the full argument is on
+ * `SESSION_BINDING_HEADER` in core). Cookies are scoped by HOST, never by
+ * PORT, so every loopback port shares this cookie jar: another local user can
+ * bind `127.0.0.1:<anything>`, be handed this `Lax` cookie by a cross-site
+ * top-level GET, and replay it here as a bearer credential. `httpOnly` is no
+ * help — it stops page script READING the value, and the party holding it is
+ * an HTTP server. Web storage IS scoped by origin, port included, so the
+ * second factor is the half that a sibling port cannot obtain.
+ *
+ * THREE OUTCOMES, and the third is why this is not a boolean:
+ *  - `ok` — pass;
+ *  - `no-session` — 401 `unlock-required`, "you are not unlocked";
+ *  - `binding-required` — 401 `binding-required`, "this browser has a session
+ *    but not for this address". Same 401 so the header/origin 403s stay
+ *    distinguishable by status, different `code` so `apiFetch` can send the
+ *    user somewhere that explains the actual situation rather than telling
+ *    them they have no session when they demonstrably do.
  *
  * Re-reads `EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS` itself via
- * `isUnlockGateEnabled()` rather than trusting call order: the header checks
+ * `remoteAccessAllowed()` rather than trusting call order: the header checks
  * above return `undefined` both when the flag is on and when they merely
- * passed, so this cannot assume which happened.
+ * passed, so this cannot assume which happened. The flag bypasses BOTH halves,
+ * exactly as it did when there was only one.
  */
 function sessionViolation(request: Request): Response | undefined {
-  if (isSessionUnlocked(readSessionCookie(request))) return undefined;
+  if (remoteAccessAllowed()) return undefined;
+
+  const check = checkSessionRequest(
+    readSessionCookie(request),
+    request.headers.get(SESSION_BINDING_HEADER) ?? undefined,
+  );
+  if (check === "ok") return undefined;
+  if (check === "binding-required") {
+    return Response.json(
+      {
+        error:
+          "This browser has a session, but not one issued for this address. Unlock it again.",
+        code: BINDING_REQUIRED_CODE,
+      },
+      { status: 401 },
+    );
+  }
   return Response.json(
     { error: "This browser has not unlocked the Email Agent UI.", code: UNLOCK_REQUIRED_CODE },
     { status: 401 },
@@ -962,11 +1000,24 @@ export function unlockExchangeGuardResponse(request: Request): Response | undefi
 }
 
 /**
- * The same predicate `sessionViolation` uses, exposed for the one place
- * outside `app/api` that also needs it: `(app)/layout.tsx` and the root
- * `page.tsx` dispatcher, which gate PAGE navigation the same way the guards
- * above gate the API (see AGENTS.md's H6 — that page gate is UX, not the
- * enforcement; the API guards above are).
+ * The PAGE gate's predicate — the session cookie ALONE, and DELIBERATELY not
+ * the same predicate `sessionViolation` uses any more.
+ *
+ * A top-level navigation cannot carry `SESSION_BINDING_HEADER`: the browser
+ * sends what the URL and the cookie jar give it, and `localStorage` reaches
+ * neither. So the page gate has to run on the cookie or run on nothing, and
+ * requiring the second factor here would mean nobody could ever load the app.
+ *
+ * That split is safe for a reason that is a property of THIS app rather than a
+ * general one, so it is stated where it can be checked: every page under
+ * `(app)/` is a client component with zero server-side data fetching, so the
+ * most a cookie-only pass yields is the static app shell. Every byte of mail,
+ * settings and queue data is fetched afterwards through the guards above,
+ * which do require both factors. If a page ever starts fetching data on the
+ * server, this comment is wrong and that page is a hole.
+ *
+ * Used by `(app)/layout.tsx` and the root `page.tsx` dispatcher (see AGENTS
+ * .md's H6 — the page gate is UX, the API guards are the enforcement).
  *
  * Lives here, not a bare re-export next to the page code, because
  * `scripts/check-module-boundaries.mjs` sanctions exactly two places for a

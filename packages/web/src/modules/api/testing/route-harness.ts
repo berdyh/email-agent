@@ -55,7 +55,9 @@ let aliasesRegistered = false;
  * entirely in THIS file, which production code never imports — a route
  * handler has no way to reach it, in a test or otherwise.
  */
-let currentSession: { cookieName: string; cookieValue: string } | undefined;
+let currentSession:
+  | { cookieName: string; cookieValue: string; bindingHeader: string; bindingValue: string }
+  | undefined;
 
 /**
  * Installs the tsconfig `paths` aliases for subsequent dynamic imports.
@@ -76,6 +78,10 @@ export interface RouteHarness {
   db: typeof import("@email-agent/core/testing");
   /** The plaintext value `buildRequest` folds in by default — see `session`. */
   sessionCookieValue: string;
+  /** The header name the origin-scoped second factor travels in. */
+  sessionBindingHeader: string;
+  /** The plaintext second factor `buildRequest` folds in — see `binding`. */
+  sessionBindingValue: string;
 }
 
 /**
@@ -108,12 +114,19 @@ export async function startRouteHarness(label: string): Promise<RouteHarness> {
   const { SESSION_COOKIE_NAME } = (await import(
     "@email-agent/core/config"
   )) as typeof import("@email-agent/core/config");
-  currentSession = { cookieName: SESSION_COOKIE_NAME, cookieValue: session.cookieValue };
+  currentSession = {
+    cookieName: SESSION_COOKIE_NAME,
+    cookieValue: session.cookieValue,
+    bindingHeader: session.bindingHeader,
+    bindingValue: session.bindingValue,
+  };
 
   return {
     home: home.path,
     db,
     sessionCookieValue: session.cookieValue,
+    sessionBindingHeader: session.bindingHeader,
+    sessionBindingValue: session.bindingValue,
     load: async <T,>(relativePath: string): Promise<T> => {
       const target = relativePath.startsWith("@/")
         ? relativePath
@@ -158,6 +171,18 @@ export interface RequestOptions {
    * if `cookies` already sets this exact cookie name explicitly.
    */
   session?: boolean;
+  /**
+   * Whether to fold in the harness's real second factor
+   * (`SESSION_BINDING_HEADER`), which the API guards require ALONGSIDE the
+   * cookie. Default true, mirroring `session`.
+   *
+   * `binding: false` WITH the default session is not a convenience knob — it
+   * is the sibling-loopback-port replay itself: a request carrying a valid
+   * session cookie and nothing else is exactly what another local port sends
+   * after being handed this app's cookie by a top-level navigation (cookies
+   * are not scoped by port). Tests that assert the refusal use it.
+   */
+  binding?: boolean;
 }
 
 /**
@@ -182,6 +207,14 @@ export function buildRequest(
   if (options.sameOrigin !== false) {
     if (!headers.has("origin")) headers.set("origin", TEST_ORIGIN);
     if (!headers.has("sec-fetch-site")) headers.set("sec-fetch-site", "same-origin");
+  }
+
+  if (
+    options.binding !== false &&
+    currentSession &&
+    !headers.has(currentSession.bindingHeader)
+  ) {
+    headers.set(currentSession.bindingHeader, currentSession.bindingValue);
   }
 
   const cookies = Object.entries(options.cookies ?? {});

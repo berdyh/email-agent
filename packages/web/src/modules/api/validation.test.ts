@@ -45,9 +45,8 @@ const {
   unlockExchangeGuardResponse,
 } = (await import("./validation.js")) as typeof import("./validation.js");
 
-const { SESSION_COOKIE_NAME, UNLOCK_REQUIRED_CODE } = (await import(
-  "@email-agent/core/config"
-)) as typeof import("@email-agent/core/config");
+const { BINDING_REQUIRED_CODE, SESSION_BINDING_HEADER, SESSION_COOKIE_NAME, UNLOCK_REQUIRED_CODE } =
+  (await import("@email-agent/core/config")) as typeof import("@email-agent/core/config");
 
 // Minted ONCE for the whole file, through the REAL mint+exchange against this
 // file's temp `$HOME` — not a stub, not a value `hasValidSession` treats
@@ -548,6 +547,12 @@ describe("web API validation", () => {
       method?: string;
       /** Attach the minted session cookie. Default true. */
       session?: boolean;
+      /**
+       * Attach the origin-scoped second factor the guards require alongside
+       * the cookie. Default true. `binding: false` with the default cookie is
+       * the sibling-loopback-port replay — see the tests that use it.
+       */
+      binding?: boolean | string;
     },
   ): Request {
     const headers: Record<string, string> = { host: options.host };
@@ -555,6 +560,11 @@ describe("web API validation", () => {
     if (options.fetchSite !== undefined) headers["sec-fetch-site"] = options.fetchSite;
     if (options.session !== false) {
       headers["cookie"] = `${SESSION_COOKIE_NAME}=${guardSession.cookieValue}`;
+    }
+    if (typeof options.binding === "string") {
+      headers[SESSION_BINDING_HEADER] = options.binding;
+    } else if (options.binding !== false) {
+      headers[SESSION_BINDING_HEADER] = guardSession.bindingValue;
     }
     return new Request(`${NEXT_URL}${path}`, {
       method: options.method ?? "GET",
@@ -829,6 +839,7 @@ describe("web API validation", () => {
         host: "localhost:3847",
         "sec-fetch-site": "none",
         cookie: `${SESSION_COOKIE_NAME}=%E0%A4%A; ${SESSION_COOKIE_NAME}=${guardSession.cookieValue}`,
+        [SESSION_BINDING_HEADER]: guardSession.bindingValue,
       },
     });
     assert.equal(readGuardResponse(mixed), undefined);
@@ -883,10 +894,150 @@ describe("web API validation", () => {
     assert.equal(unlockExchangeGuardResponse(noSession), undefined);
   });
 
+  it("REFUSES A VALID COOKIE WITH NO SECOND FACTOR — the sibling-port replay", async () => {
+    // THE CASE THIS GUARD CHANGE EXISTS FOR, on both guards. Cookies are not
+    // scoped by TCP port (RFC 6265 §8.5), so another local user binding
+    // 127.0.0.1:<anything> can be handed this app's session cookie by a
+    // cross-site top-level GET and replay it here. A replayed cookie is ALL
+    // such a server has: the second factor lives in localStorage, which is
+    // scoped by ORIGIN — port included — so it cannot read ours.
+    //
+    // What this request looks like on the wire is a genuine, live session
+    // cookie and no `x-email-agent-session-binding` header at all.
+    const replayedRead = serverRequest("/api/approvals", {
+      host: "localhost:3847",
+      fetchSite: "none",
+      binding: false,
+    });
+    const readResponse = readGuardResponse(replayedRead);
+    assert.equal(readResponse?.status, 401);
+    assert.equal(((await readResponse?.json()) as { code: string }).code, BINDING_REQUIRED_CODE);
+
+    const replayedMutation = serverRequest("/api/approvals/apply", {
+      method: "POST",
+      host: "localhost:3847",
+      origin: "http://localhost:3847",
+      fetchSite: "same-origin",
+      binding: false,
+    });
+    const mutationResponse = mutationGuardResponse(replayedMutation);
+    assert.equal(mutationResponse?.status, 401);
+    assert.equal(
+      ((await mutationResponse?.json()) as { code: string }).code,
+      BINDING_REQUIRED_CODE,
+    );
+  });
+
+  it("refuses a valid cookie with the WRONG second factor", async () => {
+    const wrongFactor = serverRequest("/api/approvals", {
+      host: "localhost:3847",
+      fetchSite: "none",
+      binding: "not-the-binding",
+    });
+    const response = readGuardResponse(wrongFactor);
+    assert.equal(response?.status, 401);
+    assert.equal(((await response?.json()) as { code: string }).code, BINDING_REQUIRED_CODE);
+  });
+
+  it("accepts the cookie and the second factor together", () => {
+    // The positive control. Without it the two refusals above would also pass
+    // against a guard that refuses everything.
+    assert.equal(
+      readGuardResponse(serverRequest("/api/approvals", { host: "localhost:3847", fetchSite: "none" })),
+      undefined,
+    );
+    assert.equal(
+      mutationGuardResponse(
+        serverRequest("/api/approvals/apply", {
+          method: "POST",
+          host: "localhost:3847",
+          origin: "http://localhost:3847",
+          fetchSite: "same-origin",
+        }),
+      ),
+      undefined,
+    );
+  });
+
+  it("distinguishes a missing second factor from a missing session by code, not status", async () => {
+    // Both 401, so the header/origin 403s stay distinguishable by status
+    // alone — but the CODES differ, because `apiFetch` routes them to
+    // different copy. Telling a user with a live session that they are not
+    // unlocked, when they can see the app shell, reads as a broken app.
+    const noSession = readGuardResponse(
+      serverRequest("/api/approvals", {
+        host: "localhost:3847",
+        fetchSite: "none",
+        session: false,
+        binding: false,
+      }),
+    );
+    assert.equal(noSession?.status, 401);
+    assert.equal(((await noSession?.json()) as { code: string }).code, UNLOCK_REQUIRED_CODE);
+
+    // A second factor with NO cookie is still just "no session" — the factor
+    // is additive, never a credential on its own.
+    const factorOnly = readGuardResponse(
+      serverRequest("/api/approvals", {
+        host: "localhost:3847",
+        fetchSite: "none",
+        session: false,
+      }),
+    );
+    assert.equal(factorOnly?.status, 401);
+    assert.equal(((await factorOnly?.json()) as { code: string }).code, UNLOCK_REQUIRED_CODE);
+  });
+
+  it("EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1 still bypasses the second factor too", () => {
+    // The escape hatch has to relax the WHOLE gate or a LAN deployment
+    // (`serve --host 0.0.0.0`, which mints no token at all) is a permanent
+    // lockout — and now that there are two factors, relaxing only the cookie
+    // half would be exactly that lockout with an extra step.
+    withRemoteAllowed(() => {
+      assert.equal(
+        readGuardResponse(
+          serverRequest("/api/approvals", {
+            host: "example.com",
+            session: false,
+            binding: false,
+          }),
+        ),
+        undefined,
+      );
+      assert.equal(
+        mutationGuardResponse(
+          serverRequest("/api/approvals/apply", {
+            method: "POST",
+            host: "example.com",
+            session: false,
+            binding: false,
+          }),
+        ),
+        undefined,
+      );
+    });
+  });
+
   it("isSessionUnlocked is the same predicate the page gate relies on", () => {
     assert.equal(isSessionUnlocked(undefined), false);
     assert.equal(isSessionUnlocked("garbage"), false);
     assert.equal(isSessionUnlocked(guardSession.cookieValue), true);
+    // AND IT IS COOKIE-ONLY, deliberately: a top-level navigation carries no
+    // custom header, so a page gate that demanded the second factor would let
+    // nobody load the app at all. Safe only because every page under (app)/ is
+    // a client component with zero server-side data fetching — the API guards
+    // above are the enforcement.
+    assert.equal(
+      readGuardResponse(
+        serverRequest("/api/approvals", {
+          host: "localhost:3847",
+          fetchSite: "none",
+          binding: false,
+        }),
+      )?.status,
+      401,
+      "the same browser state the page gate admits is refused by the API guard",
+    );
 
     withRemoteAllowed(() => {
       // The page gate's bypass has to match the API's exactly, or a LAN

@@ -12,8 +12,12 @@
  * is for: that the token the CLI parent prints is the same one the Next
  * CHILD process (a second process, spawned the way `serve` really spawns it)
  * accepts; that Chromium actually stores and returns the cookie under these
- * exact attributes over real `http://127.0.0.1`; and that a locked page
- * renders the unlock screen a person can act on rather than a bare failure.
+ * exact attributes over real `http://127.0.0.1`; that the exchange really
+ * leaves the ORIGIN-SCOPED second factor in that browser's own
+ * `localStorage`, and that the cookie WITHOUT it — the sibling-loopback-port
+ * replay, since cookies are not scoped by port — is refused; and that a
+ * locked page renders the unlock screen a person can act on rather than a
+ * bare failure.
  *
  * `puppeteer-core`, NOT `puppeteer` — the latter downloads its own Chromium on
  * install, which is a devDependency none of this repo's other tests carry.
@@ -245,6 +249,7 @@ describe("email-agent serve — real browser (M2 Tier 2)", () => {
       // received really matches the token the PARENT printed.
       const unlockContext = await browser.createBrowserContext();
       let sessionCookieValue: string | undefined;
+      let sessionBindingValue: string | undefined;
       try {
         const unlockPage = await unlockContext.newPage();
         await unlockPage.goto(handle.unlockUrl, {
@@ -263,15 +268,48 @@ describe("email-agent serve — real browser (M2 Tier 2)", () => {
         assert.equal(sessionCookie?.secure, false, "must be a plain-http cookie on loopback");
         assert.equal(sessionCookie?.path, "/");
         sessionCookieValue = sessionCookie?.value;
+
+        // The ORIGIN-SCOPED second factor the exchange issued, read out of the
+        // real browser's real localStorage — not a value this test minted.
+        sessionBindingValue =
+          (await unlockPage.evaluate(() =>
+            (globalThis as any).localStorage.getItem("email-agent.session-binding"),
+          )) ?? undefined;
+        assert.ok(
+          sessionBindingValue,
+          "the unlock exchange did not leave a second factor in localStorage",
+        );
+        assert.notEqual(sessionBindingValue, sessionCookieValue);
       } finally {
         await unlockContext.close();
       }
 
-      // Same claim from the API side: the cookie the browser stored actually
-      // authorizes the guarded read.
+      // THE SIBLING-LOOPBACK-PORT REPLAY, against a real browser's real
+      // cookie. Cookies are not scoped by TCP port (RFC 6265 §8.5), so another
+      // process binding 127.0.0.1:<anything> can be handed this exact value by
+      // a cross-site top-level GET and replay it here — which is all this
+      // request is. It must be refused, because the second factor lives in
+      // localStorage, which IS scoped by origin, port included.
+      //
+      // This assertion used to expect 200. That was not a test bug at the
+      // time — it was an accurate test of a contract that had this hole in it.
       assert.ok(sessionCookieValue, "cookie value missing — cannot check the API side");
-      const authedRead = await fetch(`${handle.origin}/api/approvals`, {
+      const replayedRead = await fetch(`${handle.origin}/api/approvals`, {
         headers: { cookie: `email_agent_session=${sessionCookieValue}` },
+      });
+      assert.equal(replayedRead.status, 401, "a bare cookie replay must not read mail");
+      assert.equal(
+        ((await replayedRead.json()) as { code?: string }).code,
+        "binding-required",
+        "and it must say WHY, so the browser can be sent somewhere recoverable",
+      );
+
+      // Both halves together — what the real UI sends — authorizes the read.
+      const authedRead = await fetch(`${handle.origin}/api/approvals`, {
+        headers: {
+          cookie: `email_agent_session=${sessionCookieValue}`,
+          "x-email-agent-session-binding": sessionBindingValue as string,
+        },
       });
       assert.equal(authedRead.status, 200);
 
