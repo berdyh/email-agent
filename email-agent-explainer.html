@@ -1,0 +1,2436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="How Email Agent, a local AI tool with write access to a Gmail inbox, is built as an apparatus for not trusting the model.">
+<title>The machine that must not act</title>
+
+<style>
+  /* ============================================================
+     Docket — the visual language of a record held pending a decision.
+     Palette on bare :root (complete), then only the changed tokens
+     under the dark media query and the two explicit data-theme roots.
+     ============================================================ */
+
+  :root {
+    --ground: #F3F2EF;
+    --surface: #FFFFFF;
+    --ink: #171614;
+    --muted: #6A655D;
+    --faint: #8C867C;
+    --rule: #DFDCD5;
+    --rule-strong: #C3BDB2;
+    --code-bg: #EAE8E2;
+
+    --hold: #9A5B12;
+    --hold-bg: #FAF1E1;
+    --applied: #1B6B5B;
+    --applied-bg: #E2EFEA;
+    --refused: #A6362B;
+    --refused-bg: #F8E8E5;
+
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --measure: 68ch;
+    --wide: 980px;
+    --gutter: 8.5rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121110;
+      --surface: #1A1917;
+      --ink: #EDEAE4;
+      --muted: #A29A8E;
+      --faint: #756E64;
+      --rule: #2C2A26;
+      --rule-strong: #474339;
+      --code-bg: #201E1B;
+
+      --hold: #E3A64A;
+      --hold-bg: #2A2013;
+      --applied: #54BFA6;
+      --applied-bg: #11251F;
+      --refused: #EF8A80;
+      --refused-bg: #2C1613;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #121110;
+    --surface: #1A1917;
+    --ink: #EDEAE4;
+    --muted: #A29A8E;
+    --faint: #756E64;
+    --rule: #2C2A26;
+    --rule-strong: #474339;
+    --code-bg: #201E1B;
+
+    --hold: #E3A64A;
+    --hold-bg: #2A2013;
+    --applied: #54BFA6;
+    --applied-bg: #11251F;
+    --refused: #EF8A80;
+    --refused-bg: #2C1613;
+  }
+
+  :root[data-theme="light"] {
+    --ground: #F3F2EF;
+    --surface: #FFFFFF;
+    --ink: #171614;
+    --muted: #6A655D;
+    --faint: #8C867C;
+    --rule: #DFDCD5;
+    --rule-strong: #C3BDB2;
+    --code-bg: #EAE8E2;
+
+    --hold: #9A5B12;
+    --hold-bg: #FAF1E1;
+    --applied: #1B6B5B;
+    --applied-bg: #E2EFEA;
+    --refused: #A6362B;
+    --refused-bg: #F8E8E5;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 1.0625rem;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.25rem 7rem;
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .wrap { max-width: var(--wide); margin: 0 auto; }
+  .col { max-width: var(--measure); }
+
+  @media (min-width: 1080px) {
+    .wrap { padding-left: var(--gutter); }
+  }
+
+  /* ---- type ---- */
+
+  h1 {
+    font-size: clamp(2.25rem, 6.2vw, 3.9rem);
+    line-height: 1.03;
+    letter-spacing: -0.025em;
+    font-weight: 800;
+    text-wrap: balance;
+    margin: 0 0 1.1rem;
+  }
+
+  h2 {
+    font-size: clamp(1.5rem, 3.4vw, 2.1rem);
+    line-height: 1.12;
+    letter-spacing: -0.022em;
+    font-weight: 750;
+    text-wrap: balance;
+    margin: 0 0 1.1rem;
+  }
+
+  h3 {
+    font-size: 1.15rem;
+    line-height: 1.3;
+    letter-spacing: -0.012em;
+    font-weight: 700;
+    margin: 2.6rem 0 0.8rem;
+  }
+
+  p { margin: 0 0 1.05rem; }
+  em { font-style: italic; }
+  strong { font-weight: 680; }
+
+  .eyebrow, .secnum, .fignum, .tag, .chip, figcaption, code, kbd, th, .gloss b, dt {
+    font-family: var(--mono);
+  }
+
+  .eyebrow {
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 1.4rem;
+  }
+
+  .secnum {
+    display: block;
+    font-size: 0.7rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--hold);
+    margin-bottom: 0.55rem;
+  }
+
+  @media (min-width: 1080px) {
+    section { position: relative; }
+    .secnum {
+      position: absolute;
+      left: calc(-1 * var(--gutter));
+      width: calc(var(--gutter) - 1.5rem);
+      text-align: right;
+      margin-top: 0.55rem;
+    }
+  }
+
+  .lede {
+    font-size: clamp(1.1rem, 2.2vw, 1.3rem);
+    line-height: 1.44;
+    color: var(--ink);
+    margin-bottom: 1.4rem;
+  }
+
+  .meta {
+    font-family: var(--mono);
+    font-size: 0.775rem;
+    line-height: 1.7;
+    color: var(--muted);
+    letter-spacing: 0.005em;
+  }
+
+  code {
+    font-size: 0.855em;
+    background: var(--code-bg);
+    padding: 0.1em 0.34em;
+    border-radius: 2px;
+    overflow-wrap: break-word;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    background: var(--code-bg);
+    border-left: 3px solid var(--rule-strong);
+    padding: 0.85rem 1rem;
+    margin: 0 0 1.05rem;
+    overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+
+  a { color: var(--hold); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover, a:focus-visible { border-bottom-color: currentColor; }
+
+  ul.plain { margin: 0 0 1.05rem; padding-left: 1.15rem; }
+  ul.plain li { margin-bottom: 0.4rem; }
+
+  header.hero { padding: clamp(3rem, 9vw, 6.5rem) 0 2.2rem; }
+
+  /* ---- the interval mark between sections ---- */
+
+  .interval {
+    max-width: var(--wide);
+    margin: 3.4rem auto;
+    border-top: 1px solid var(--rule);
+    position: relative;
+  }
+  .interval span {
+    position: absolute;
+    top: -4px;
+    left: 0;
+    width: 7px;
+    height: 7px;
+    background: var(--hold);
+    border-radius: 50%;
+  }
+
+  /* ---- callouts ---- */
+
+  .naive, .breaks, .refuses, .measured {
+    max-width: var(--measure);
+    padding: 0.85rem 1.05rem;
+    margin: 0 0 1.05rem;
+    border-left: 3px solid var(--rule-strong);
+    background: var(--surface);
+  }
+  .naive  { border-left-color: var(--rule-strong); }
+  .breaks { border-left-color: var(--refused); background: var(--refused-bg); }
+  .refuses{ border-left-color: var(--hold); background: var(--hold-bg); }
+  .measured { border-left-color: var(--applied); background: var(--applied-bg); }
+
+  .naive p:last-child, .breaks p:last-child,
+  .refuses p:last-child, .measured p:last-child,
+  .refuses ul:last-child { margin-bottom: 0; }
+
+  .tag {
+    display: block;
+    font-size: 0.665rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+    color: var(--muted);
+  }
+  .breaks .tag  { color: var(--refused); }
+  .refuses .tag { color: var(--hold); }
+  .measured .tag{ color: var(--applied); }
+
+  /* ---- glosses ---- */
+
+  .gloss {
+    max-width: var(--measure);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: var(--muted);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 0.7rem 0;
+    margin: 0 0 1.05rem;
+  }
+  .gloss b {
+    display: block;
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--hold);
+    font-weight: 400;
+    margin-bottom: 0.2rem;
+  }
+
+  /* ---- status chips: rubber stamps ---- */
+
+  .chip {
+    display: inline-block;
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0.1em 0.42em;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    vertical-align: 0.06em;
+    white-space: nowrap;
+  }
+  .c-hold { color: var(--hold); background: var(--hold-bg); }
+  .c-applied { color: var(--applied); background: var(--applied-bg); }
+  .c-refused { color: var(--refused); background: var(--refused-bg); }
+
+  /* ---- tables ---- */
+
+  .tablescroll { overflow-x: auto; margin: 0 0 1.3rem; max-width: 100%; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 34rem;
+    font-size: 0.895rem;
+    line-height: 1.5;
+  }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 0.6rem 0.85rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  th {
+    font-size: 0.665rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 400;
+    border-bottom-color: var(--rule-strong);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ---- figures ---- */
+
+  figure { margin: 2rem 0 2.4rem; }
+  .figscroll { overflow-x: auto; max-width: 100%; }
+  .figscroll svg {
+    display: block;
+    width: 100%;
+    min-width: 34rem;
+    height: auto;
+    color: var(--ink);
+  }
+  figcaption {
+    max-width: var(--measure);
+    font-size: 0.83rem;
+    line-height: 1.55;
+    color: var(--muted);
+    margin-top: 0.85rem;
+  }
+  .fignum {
+    color: var(--hold);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+  }
+
+  /* svg token bindings — no stroke or fill colour is ever hard-coded */
+  .f-surface { fill: var(--surface); }
+  .f-ground  { fill: var(--ground); }
+  .f-hold    { fill: var(--hold-bg); }
+  .f-applied { fill: var(--applied-bg); }
+  .f-refused { fill: var(--refused-bg); }
+  .f-none    { fill: none; }
+  .f-ink     { fill: currentColor; }
+  .st-rule   { stroke: var(--rule-strong); fill: none; }
+  .st-ink    { stroke: currentColor; fill: none; }
+  .s-hold    { color: var(--hold); }
+  .s-applied { color: var(--applied); }
+  .s-refused { color: var(--refused); }
+  .s-muted   { color: var(--muted); }
+  .lbl { font-size: 12px; fill: currentColor; }
+  .lbl-sm { font-size: 11px; fill: currentColor; }
+  .lbl-b { font-size: 12.5px; font-weight: 700; fill: currentColor; }
+  .lbl-cap { font-size: 10.5px; font-weight: 700; letter-spacing: 1.1px; fill: currentColor; }
+
+  /* ---- glossary ---- */
+
+  .glossary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 0 2.5rem;
+  }
+  .glossary dl { margin: 0; }
+  .glossary dt {
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    color: var(--hold);
+    margin-top: 1rem;
+  }
+  .glossary dd {
+    margin: 0.15rem 0 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  details {
+    max-width: var(--wide);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    padding: 0.8rem 0;
+    margin: 1.6rem 0;
+  }
+  summary {
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--hold);
+  }
+  details[open] summary { margin-bottom: 0.9rem; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="col">
+    <p class="eyebrow">Email Agent — a field guide</p>
+    <h1>The machine that must not act</h1>
+    <p class="lede">A local AI tool that reads your Gmail, decides what is junk, and then goes to
+    considerable lengths to avoid touching anything. This is why.</p>
+    <p class="meta">Written against <code>main</code> at 823 Node tests and 45 component tests,
+    all passing · every claim checked against source · nine merged pull requests plus a
+    four-milestone wave of context</p>
+  </div>
+</header>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 01 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 01</span>
+    <h2>Would you let a language model into your inbox?</h2>
+
+    <p>Most people say yes with a caveat: <em>sure, as long as it asks me first.</em> A dialog
+    appears, you read it, you click Approve, the change happens. That instinct is right, and it is
+    also the entire problem, because of one detail that sounds pedantic until it destroys your
+    mail.</p>
+
+    <p><strong>&ldquo;I click Approve&rdquo; and &ldquo;Gmail changes&rdquo; are not the same
+    instant.</strong> Between them sits a database write, a process boundary, and a network call to
+    Google that can take a second or hang for fifteen minutes. Everything peculiar about this
+    codebase &mdash; a queue, a claim token, a hand-written parser for TypeScript, a five-line
+    comment about a database returning ten rows &mdash; lives inside that interval.</p>
+
+    <aside class="gloss"><b>Gmail API</b>Google&rsquo;s HTTP interface to a mailbox. Moving a
+    message to Trash is a request that either succeeds or does not; there is no transaction
+    spanning it and your local database.</aside>
+
+    <p>So read this page with one reframing in mind. This is not an AI email tool with a safety
+    feature bolted on. It is <strong>an apparatus for not trusting the model</strong>, and the AI
+    is a component inside it.</p>
+
+    <p>One message is carried the whole way through, so that nothing here is abstract:
+    <code>m18f3</code>, subject <em>&ldquo;Your weekly deals from Nordpost&rdquo;</em>, unread,
+    from <code>news@nordpost.example</code>. It gets fetched, embedded, read by an action, proposed
+    for archiving, queued, approved, applied. When a section is about failure, it is
+    <code>m18f3</code> that fails.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 258" role="img" aria-label="A timeline from the user clicking Approve to Gmail mutating, crossed by a database write, a process boundary and a network call, with two real defects that occurred inside that interval.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="62" y="40" class="lbl-b" text-anchor="middle">you</text>
+        <text x="62" y="58" class="lbl s-muted" text-anchor="middle">click Approve</text>
+        <circle cx="62" cy="96" r="7" class="f-ink"/>
+
+        <text x="838" y="40" class="lbl-b" text-anchor="middle">Gmail</text>
+        <text x="838" y="58" class="lbl s-muted" text-anchor="middle">mail moves</text>
+        <circle cx="838" cy="96" r="7" class="f-ink"/>
+
+        <line x1="70" y1="96" x2="828" y2="96" class="st-ink" stroke-width="1.5" marker-end="url(#a1)"/>
+
+        <g class="st-rule" stroke-width="1" stroke-dasharray="3 3">
+          <line x1="252" y1="80" x2="252" y2="112"/>
+          <line x1="452" y1="80" x2="452" y2="112"/>
+          <line x1="652" y1="80" x2="652" y2="112"/>
+        </g>
+        <text x="252" y="132" class="lbl s-muted" text-anchor="middle">database write</text>
+        <text x="452" y="132" class="lbl s-muted" text-anchor="middle">process boundary</text>
+        <text x="652" y="132" class="lbl s-muted" text-anchor="middle">network call</text>
+
+        <g class="s-refused">
+          <rect x="150" y="162" width="600" height="74" rx="3" class="f-refused" stroke="currentColor" stroke-width="1"/>
+          <text x="170" y="184" class="lbl-cap">THINGS THAT ACTUALLY WENT WRONG IN HERE</text>
+          <text x="170" y="205" class="lbl">a second surface cancelled the change — and the cancellation was overwritten</text>
+          <text x="170" y="223" class="lbl">the process died mid-batch — no screen could say which mail had moved</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 1</span> &nbsp; Approval is not an instant, it is an
+    interval &mdash; and intervals have races. Both failures listed here are real defects that were
+    found and fixed in this codebase, not hypotheticals.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 02 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 02</span>
+    <h2>One machine, one user, no server</h2>
+
+    <p>Everything runs on your laptop. There is no backend, no user account, no multi-tenancy.
+    The &ldquo;web UI&rdquo; is a Next.js app bound to <code>127.0.0.1</code> that only your machine
+    can reach; the database is a directory under <code>~/.email-agent</code>; your Gmail credentials
+    sit in a file next to it. There <em>is</em> now a browser session &mdash; you unlock the UI once
+    with a printed one-time link &mdash; but that is a lock on a door, not an identity. Nobody signs
+    in as anybody. <a href="#browser">§&thinsp;08</a> is entirely about why that lock exists and
+    exactly how little it buys.</p>
+
+    <aside class="gloss"><b>loopback</b>The <code>127.0.0.1</code> address, which only the local
+    machine can connect to. Binding here is a real boundary: an off-box process cannot open the
+    socket at all, whatever headers it would have sent.</aside>
+
+    <p>Everything under <code>~/.email-agent/</code> is written mode <code>0600</code> inside a
+    <code>0700</code> directory. It was <code>0644</code> inside <code>0755</code> until August 2026
+    &mdash; measured, not assumed: neither the settings writer nor the token writer passed a mode,
+    and the default umask is 022. Among the world-readable files was the Gmail <strong>refresh
+    token</strong>, which needs no password and stays valid until somebody revokes it.</p>
+
+    <p>The code is a <strong>monorepo</strong> of three packages, and the split matters because it
+    is also a trust split.</p>
+
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th>Package</th><th>Owns</th><th>Notably does <em>not</em> own</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>@email-agent/core</code></td>
+            <td>Gmail access, the database, the AI executors, the action system, the approval queue</td>
+            <td>Any user interface</td>
+          </tr>
+          <tr>
+            <td><code>@email-agent/web</code></td>
+            <td>The Next.js UI and its API routes &mdash; mail list, actions page, approvals panel, settings. Reachable only after a browser has completed the unlock exchange.</td>
+            <td>Direct Gmail writes; it goes through core&rsquo;s queue like everything else</td>
+          </tr>
+          <tr>
+            <td><code>@email-agent/cli</code></td>
+            <td>The <code>email-agent</code> command &mdash; setup, fetch, run-action, approvals, unlock, serve</td>
+            <td>Deep imports into core; it may only use the public barrel</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>One recent wrinkle is worth naming because it is the sort of thing an architecture diagram
+    hides: <code>serve</code> used to be a thin wrapper that spawned the Next.js server and got out
+    of the way, with no dependency on core at all. It now opens the database first, to run a check
+    described in <a href="#gate">§&thinsp;07</a>. Starting the web UI is no longer free.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 330" role="img" aria-label="A map of the machine showing three packages and local storage inside a boundary, with exactly two connections leaving it: Gmail, and an optional model provider.">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <rect x="20" y="30" width="560" height="278" rx="5" class="f-ground st-rule" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="38" y="54" class="lbl-cap s-muted">YOUR MACHINE</text>
+
+        <rect x="46" y="76" width="152" height="58" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="122" y="99" class="lbl-b" text-anchor="middle">web UI</text>
+        <text x="122" y="117" class="lbl-sm s-muted" text-anchor="middle">127.0.0.1:3847 · locked</text>
+
+        <rect x="46" y="154" width="152" height="58" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="122" y="177" class="lbl-b" text-anchor="middle">CLI</text>
+        <text x="122" y="195" class="lbl-sm s-muted" text-anchor="middle">email-agent …</text>
+
+        <rect x="256" y="100" width="152" height="110" rx="3" class="f-surface st-ink" stroke-width="1.8"/>
+        <text x="332" y="140" class="lbl-b" text-anchor="middle">core</text>
+        <text x="332" y="160" class="lbl-sm s-muted" text-anchor="middle">queue · db · gmail</text>
+        <text x="332" y="177" class="lbl-sm s-muted" text-anchor="middle">executors · actions</text>
+
+        <rect x="448" y="100" width="112" height="110" rx="3" class="f-surface st-rule" stroke-width="1.2"/>
+        <text x="504" y="132" class="lbl-b" text-anchor="middle">~/.email-agent</text>
+        <text x="504" y="152" class="lbl-sm s-muted" text-anchor="middle">database</text>
+        <text x="504" y="169" class="lbl-sm s-muted" text-anchor="middle">tokens</text>
+        <text x="504" y="186" class="lbl-sm s-muted" text-anchor="middle">0600 / 0700</text>
+
+        <line x1="198" y1="105" x2="250" y2="130" class="st-ink" stroke-width="1.3" marker-end="url(#a2)"/>
+        <line x1="198" y1="182" x2="250" y2="170" class="st-ink" stroke-width="1.3" marker-end="url(#a2)"/>
+        <line x1="408" y1="155" x2="442" y2="155" class="st-ink" stroke-width="1.3" marker-end="url(#a2)"/>
+
+        <rect x="700" y="76" width="176" height="58" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="788" y="99" class="lbl-b" text-anchor="middle">Gmail</text>
+        <text x="788" y="117" class="lbl-sm s-muted" text-anchor="middle">read &amp; write mail</text>
+
+        <rect x="700" y="176" width="176" height="58" rx="3" class="f-surface st-rule" stroke-width="1.2" stroke-dasharray="5 3"/>
+        <text x="788" y="199" class="lbl-b" text-anchor="middle">model provider</text>
+        <text x="788" y="217" class="lbl-sm s-muted" text-anchor="middle">optional</text>
+
+        <line x1="580" y1="122" x2="694" y2="105" class="st-ink" stroke-width="1.5" marker-end="url(#a2)"/>
+        <text x="637" y="100" class="lbl-sm s-muted" text-anchor="middle">HTTPS</text>
+
+        <line x1="580" y1="188" x2="694" y2="202" class="st-ink" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#a2)"/>
+        <text x="637" y="232" class="lbl-sm s-muted" text-anchor="middle">only if you pick</text>
+        <text x="637" y="247" class="lbl-sm s-muted" text-anchor="middle">a hosted model</text>
+
+        <text x="450" y="296" class="lbl s-muted" text-anchor="middle">Exactly two connections leave the machine. One of them is optional.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 2</span> &nbsp; The whole system. Your mail is copied to a
+    local database and analysed there; the only outbound traffic is Gmail itself and &mdash; if you
+    choose a hosted model rather than a local one &mdash; the model provider.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 03 ══════════════════════════════════════ -->
+<section id="password">
+  <div class="col">
+    <span class="secnum">§ 03</span>
+    <h2>Why there is no password field</h2>
+
+    <p>The app never sees your Google password, and could not use it if you gave it one. Instead
+    Google hands out two different pieces of paper.</p>
+
+    <aside class="gloss"><b>OAuth2</b>A protocol for granting an app narrow, revocable access to
+    your account without sharing your password. You approve once, on Google&rsquo;s own site.</aside>
+
+    <p>An <strong>access token</strong> is a short-lived pass &mdash; roughly an hour &mdash; that
+    proves the app may act on your mailbox right now. A <strong>refresh token</strong> is the
+    long-lived stub that lets the app mint fresh access tokens without asking you again. Both live
+    in <code>~/.email-agent/accounts/{email}/token.json</code>, now at mode <code>0600</code>.</p>
+
+    <p>Two properties follow, and they are the whole reason for the complexity. The grant is
+    <strong>scoped</strong>: this app asks for Gmail modification and nothing else, so the same
+    credential cannot read your Drive. And it is <strong>revocable independently</strong>: you can
+    kill this app&rsquo;s access from Google&rsquo;s security page without changing your password or
+    disturbing anything else you have signed in to.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 210" role="img" aria-label="Two lifetime bars: one consent given once, above a row of hourly access tokens minted from a refresh token. Revoking the consent stops the minting.">
+        <text x="20" y="34" class="lbl-cap s-muted">WHAT YOU DO</text>
+        <rect x="20" y="46" width="860" height="34" rx="3" class="f-applied" stroke="currentColor" stroke-width="1"/>
+        <text x="40" y="68" class="lbl-b">consent, once, on Google&rsquo;s site — revocable there at any moment</text>
+
+        <text x="20" y="116" class="lbl-cap s-muted">WHAT THE APP HOLDS</text>
+        <g class="s-hold">
+          <rect x="20" y="128" width="200" height="30" rx="3" class="f-hold" stroke="currentColor" stroke-width="1"/>
+          <text x="120" y="148" class="lbl" text-anchor="middle">refresh token (long-lived)</text>
+        </g>
+        <g class="st-rule" stroke-width="1">
+          <rect x="240" y="128" width="98" height="30" rx="3" class="f-surface"/>
+          <rect x="348" y="128" width="98" height="30" rx="3" class="f-surface"/>
+          <rect x="456" y="128" width="98" height="30" rx="3" class="f-surface"/>
+          <rect x="564" y="128" width="98" height="30" rx="3" class="f-surface"/>
+          <rect x="672" y="128" width="98" height="30" rx="3" class="f-surface"/>
+          <rect x="780" y="128" width="100" height="30" rx="3" class="f-surface"/>
+        </g>
+        <text x="289" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+        <text x="397" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+        <text x="505" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+        <text x="613" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+        <text x="721" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+        <text x="830" y="148" class="lbl-sm" text-anchor="middle">access ~1h</text>
+
+        <text x="20" y="190" class="lbl s-muted">Your password appears nowhere in this picture, and the top bar can be cut without touching it.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 3</span> &nbsp; What the refresh token buys: you approve
+    once, the app works indefinitely, and neither your password nor unlimited access was ever handed
+    over. Revoking the top bar stops the bottom one.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>Which mailbox, exactly?</h3>
+
+    <p>The tool supports several Gmail accounts, so every operation has to answer a question that
+    turns out to be safety-critical: <em>whose mailbox is this?</em> Getting it wrong does not throw
+    an error &mdash; it archives the right message in the wrong account.</p>
+
+    <aside class="gloss"><b>ADC</b>Application Default Credentials &mdash; whatever identity the
+    <code>gcloud</code> command-line tool is currently signed in as. Convenient for developers,
+    ambient, and easy to change without noticing.</aside>
+
+    <div class="refuses">
+      <span class="tag">The refusal is the feature</span>
+      <p>If you name an account and its stored credentials are missing or broken, the client
+      <strong>throws</strong>. It does not quietly fall back to whatever <code>gcloud</code> happens
+      to be signed in as. A fallback here would send writes to a different mailbox than the one you
+      asked for, and every message id would still resolve, because ids are per-mailbox.</p>
+    </div>
+
+    <p>The empty string <code>""</code> is a deliberate sentinel meaning <em>unscoped &mdash; use
+    ambient credentials</em>. It is a legitimate mode, and it carries a documented cost that has
+    grown rather than shrunk: a row queued under <code>""</code> is resolved against ambient identity
+    at <strong>three</strong> separate moments now &mdash; when it is queued, when it is approved,
+    and when the verification pass in <a href="#gate">§&thinsp;07</a> reads it back. ADC can have
+    moved between any two of them.</p>
+
+    <p>On the apply path that is survivable, and for a reason worth being precise about: Gmail
+    message ids are per-mailbox, so a call aimed at the wrong account simply 404s and the row
+    resolves <span class="chip c-refused">failed</span>. That is a property of Gmail&rsquo;s id
+    space, not a guard this code implements, and the difference matters &mdash; on the
+    <em>read-back</em> path it does not hold, which is why the verifier is forbidden from ever
+    recording an <code>""</code> row as applied.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 300" role="img" aria-label="A decision tree for choosing Gmail credentials. Three branches lead to working outcomes; the fourth edge — a named account with broken credentials falling back to ambient credentials — is drawn as a wall, because it does not exist.">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <rect x="16" y="118" width="146" height="56" rx="3" class="f-surface st-ink" stroke-width="1.4"/>
+        <text x="89" y="142" class="lbl-b" text-anchor="middle">a Gmail call</text>
+        <text x="89" y="160" class="lbl-sm s-muted" text-anchor="middle">which mailbox?</text>
+
+        <line x1="164" y1="132" x2="222" y2="66" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+        <line x1="164" y1="146" x2="222" y2="146" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+        <line x1="164" y1="160" x2="222" y2="234" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+
+        <rect x="228" y="30" width="176" height="54" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="316" y="54" class="lbl-b" text-anchor="middle">a named account</text>
+        <text x="316" y="71" class="lbl-sm s-muted" text-anchor="middle">accounts/{email}/token.json</text>
+
+        <rect x="228" y="120" width="176" height="54" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="316" y="144" class="lbl-b" text-anchor="middle">no account named</text>
+        <text x="316" y="161" class="lbl-sm s-muted" text-anchor="middle">absent, not empty</text>
+
+        <rect x="228" y="210" width="176" height="54" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="316" y="234" class="lbl-b" text-anchor="middle">the "" sentinel</text>
+        <text x="316" y="251" class="lbl-sm s-muted" text-anchor="middle">explicitly unscoped</text>
+
+        <line x1="406" y1="46" x2="592" y2="34" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+        <text x="498" y="28" class="lbl-sm s-muted" text-anchor="middle">tokens present</text>
+        <g class="s-applied">
+          <rect x="598" y="12" width="196" height="48" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.3"/>
+          <text x="696" y="42" class="lbl-b" text-anchor="middle">that mailbox</text>
+        </g>
+
+        <g class="s-refused">
+          <line x1="406" y1="70" x2="592" y2="92" class="st-ink" stroke="currentColor" stroke-width="1.3" marker-end="url(#a4)"/>
+          <text x="490" y="108" class="lbl-sm" text-anchor="middle">tokens missing or unreadable</text>
+          <rect x="598" y="72" width="196" height="48" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.3"/>
+          <text x="696" y="94" class="lbl-b" text-anchor="middle">throws</text>
+          <text x="696" y="110" class="lbl-sm" text-anchor="middle">the caller finds out</text>
+        </g>
+
+        <line x1="406" y1="146" x2="592" y2="146" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+        <rect x="598" y="122" width="196" height="48" rx="3" class="f-surface st-ink" stroke-width="1.3"/>
+        <text x="696" y="146" class="lbl-b" text-anchor="middle">default account</text>
+        <text x="696" y="162" class="lbl-sm s-muted" text-anchor="middle">else ambient</text>
+
+        <line x1="406" y1="238" x2="592" y2="238" class="st-ink" stroke-width="1.3" marker-end="url(#a4)"/>
+        <g class="s-hold">
+          <rect x="598" y="214" width="196" height="48" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.3"/>
+          <text x="696" y="238" class="lbl-b" text-anchor="middle">ambient mailbox</text>
+          <text x="696" y="254" class="lbl-sm" text-anchor="middle">re-resolved every time</text>
+        </g>
+
+        <g class="s-refused">
+          <path d="M794 96 L836 96 L836 238 L800 238" class="st-ink" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a4)"/>
+          <rect x="818" y="160" width="36" height="14" class="f-refused" stroke="currentColor" stroke-width="1.8"/>
+          <text x="836" y="196" class="lbl-cap" text-anchor="middle">NO</text>
+          <text x="836" y="212" class="lbl-cap" text-anchor="middle">FALLBACK</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 4</span> &nbsp; The credential router. The interesting edge
+    is the one that does not exist: a named account never degrades to ambient credentials, because
+    silently writing to a different mailbox is worse than failing.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 04 ══════════════════════════════════════ -->
+<section id="database">
+  <div class="col">
+    <span class="secnum">§ 04</span>
+    <h2>Turning an email into 768 numbers</h2>
+
+    <p>Fetched mail lands in <strong>LanceDB</strong>, an embedded vector database &mdash; a library
+    that reads and writes files in a directory, not a server you connect to. Alongside the subject
+    and sender, each row stores an <strong>embedding</strong>.</p>
+
+    <aside class="gloss"><b>embedding</b>A list of numbers &mdash; here 768 of them &mdash; produced
+    by a model from a piece of text, arranged so that texts with similar meaning land near each
+    other in that 768-dimensional space.</aside>
+
+    <div class="naive">
+      <span class="tag">Naive design</span>
+      <p>Search the mail by keyword. Find every message containing &ldquo;unsubscribe&rdquo;.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks</span>
+      <p>A newsletter that says &ldquo;manage your preferences&rdquo; is invisible. Keywords match
+      spelling, and the thing you actually want to match is meaning.</p>
+    </div>
+
+    <p>The embedding solves that by making meaning geometric: two emails that a person would call
+    similar end up close together, whatever words they used. Distance becomes a proxy for
+    similarity.</p>
+
+    <p>And now the honest beat, which is more interesting than the capability. <strong>This repo
+    builds that vector space and never searches it.</strong> There is no nearest-neighbour query
+    anywhere in the product &mdash; not one call to LanceDB&rsquo;s vector search API. The only code
+    that walks the space at all is the clusterer, which runs k-means over the stored vectors using
+    plain Euclidean distance. A capability that is built is not a capability that is used, and it is
+    worth saying so out loud rather than letting &ldquo;vector database&rdquo; imply the rest.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 300" role="img" aria-label="Emails plotted as points in a plane, with similar messages clustering together, annotated with the note that no similarity query is ever issued against this space.">
+        <rect x="20" y="24" width="500" height="252" rx="4" class="f-surface st-rule" stroke-width="1.2"/>
+        <text x="38" y="48" class="lbl-cap s-muted">MEANING, AS GEOMETRY</text>
+
+        <g class="s-hold">
+          <circle cx="140" cy="110" r="7" fill="currentColor"/>
+          <circle cx="176" cy="132" r="7" fill="currentColor"/>
+          <circle cx="122" cy="148" r="7" fill="currentColor"/>
+          <text x="150" y="92" class="lbl" text-anchor="middle">newsletters</text>
+          <text x="150" y="182" class="lbl-sm" text-anchor="middle">&ldquo;manage preferences&rdquo;</text>
+          <text x="150" y="198" class="lbl-sm" text-anchor="middle">&ldquo;unsubscribe&rdquo;</text>
+          <text x="150" y="214" class="lbl-sm" text-anchor="middle">&ldquo;weekly deals&rdquo;</text>
+        </g>
+
+        <g>
+          <circle cx="386" cy="196" r="7" class="f-ink"/>
+          <circle cx="420" cy="176" r="7" class="f-ink"/>
+          <circle cx="404" cy="222" r="7" class="f-ink"/>
+          <text x="404" y="158" class="lbl" text-anchor="middle">from people</text>
+          <text x="404" y="252" class="lbl-sm s-muted" text-anchor="middle">no shared vocabulary</text>
+          <text x="404" y="268" class="lbl-sm s-muted" text-anchor="middle">with the cluster on the left</text>
+        </g>
+
+        <g class="s-hold">
+          <circle cx="140" cy="110" r="15" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <text x="240" y="112" class="lbl-sm">m18f3 lands here, next to mail</text>
+          <text x="240" y="128" class="lbl-sm">it shares no keywords with</text>
+        </g>
+
+        <g class="s-muted">
+          <rect x="548" y="80" width="332" height="140" rx="4" class="f-ground" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="568" y="108" class="lbl-cap">WHAT IS NOT HERE</text>
+          <text x="568" y="134" class="lbl">No nearest-neighbour search is ever issued</text>
+          <text x="568" y="152" class="lbl">against this space by any part of the product.</text>
+          <text x="568" y="178" class="lbl">One consumer walks it: k-means clustering,</text>
+          <text x="568" y="196" class="lbl">with Euclidean distance.</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 5</span> &nbsp; Meaning becomes geometry &mdash; which is
+    what makes the vector worth storing. But a capability that is built is not necessarily a
+    capability that is used: searching this space is not something the product does.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>Five things this database is not</h3>
+
+    <p>Each of these contradicts a reasonable assumption, each was established by running the
+    database rather than reading about it, and each cost something real.</p>
+
+    <aside class="gloss"><b>MVCC</b>Multi-version concurrency control. Writers do not lock; each
+    commit produces a new version, and a conflicting writer is refused rather than silently
+    interleaved.</aside>
+
+    <div class="tablescroll">
+      <table>
+        <thead>
+          <tr><th style="width:26%">You would assume</th><th style="width:37%">What was measured</th><th>What it cost</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A query returns all matching rows.</td>
+            <td><strong>Any query without an explicit limit returns 10 rows.</strong> Not just vector searches &mdash; all of them. <code>limit(0)</code> is not &ldquo;no limit&rdquo;; it is zero rows.</td>
+            <td>15 of every 25 queued changes were invisible on every screen. Worse, a safety read-back was capped at 10 while batches were exactly 10, so an apply could mutate Gmail for rows it never learned it owned.</td>
+          </tr>
+          <tr>
+            <td>Filters combine.</td>
+            <td>Calling the filter method twice <em>replaces</em> the first condition instead of adding to it, silently. <code>where(A).where(B)</code> matches B alone.</td>
+            <td>Every filter now has to be assembled into one string by hand. The two filter builders return arrays for exactly that reason &mdash; so a caller has something to join with <code>AND</code> and cannot chain by accident.</td>
+          </tr>
+          <tr>
+            <td>A table handle stays current.</td>
+            <td>A handle is pinned to the version it was opened at. Stale reads return old rows <em>silently</em>; stale writes throw.</td>
+            <td>The retention sweep quietly stopped running whenever anything else was writing.</td>
+          </tr>
+          <tr>
+            <td>Column names are case-sensitive.</td>
+            <td>The SQL parser lowercases unquoted identifiers, so <code>accountId</code> becomes <code>accountid</code> and does not exist.</td>
+            <td>Every camelCase column has to be written in backticks, forever.</td>
+          </tr>
+          <tr>
+            <td>It cannot add a column to an existing table.</td>
+            <td>It can. <code>addColumns</code> adds in place, preserving every row.</td>
+            <td>The belief that it could not caused ~950 lines of crash-recovery machinery to be written, reviewed adversarially twice, then deleted.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>There is one more that has no defensive workaround, only awareness: there are <strong>no
+    parameterised queries</strong>. Every filter is assembled as text, so every value that reaches
+    one has to be escaped by hand.</p>
+
+    <p>Every one of those five is a fact about one version of one library. They are written down
+    that way on purpose, with the version number attached, because the next upgrade invalidates all
+    of them at once.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 292" role="img" aria-label="Twenty-five queued rows in a table, a query returning only ten of them, and two consequences: the user sees ten of twenty-five, and the safety read-back sees ten of twenty-five.">
+        <defs>
+          <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="34" class="lbl-cap s-muted">PENDING_OPERATIONS — 25 ROWS</text>
+        <g class="st-rule" stroke-width="1">
+          <rect x="20" y="48" width="12" height="150" class="f-applied"/>
+        </g>
+        <g>
+          <rect x="20" y="48" width="230" height="150" rx="3" class="f-none st-rule" stroke-width="1.2"/>
+          <text x="44" y="70" class="lbl s-applied">rows 1–10 &nbsp; returned</text>
+          <text x="44" y="112" class="lbl s-refused">rows 11–25 &nbsp; not returned,</text>
+          <text x="44" y="130" class="lbl s-refused">not mentioned, no error</text>
+          <line x1="32" y1="86" x2="250" y2="86" class="st-rule" stroke-width="1" stroke-dasharray="4 3"/>
+        </g>
+
+        <line x1="252" y1="122" x2="330" y2="122" class="st-ink" stroke-width="1.4" marker-end="url(#a6)"/>
+        <text x="291" y="112" class="lbl-sm s-muted" text-anchor="middle">query</text>
+        <text x="291" y="142" class="lbl-sm s-muted" text-anchor="middle">no limit</text>
+
+        <rect x="336" y="96" width="150" height="52" rx="3" class="f-surface st-ink" stroke-width="1.4"/>
+        <text x="411" y="127" class="lbl-b" text-anchor="middle">10 rows</text>
+
+        <g class="s-refused">
+          <line x1="488" y1="110" x2="596" y2="66" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a6)"/>
+          <rect x="602" y="34" width="278" height="62" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.2"/>
+          <text x="620" y="58" class="lbl-b">you see 10 of 25</text>
+          <text x="620" y="78" class="lbl-sm">the other 15 changes are simply not on screen</text>
+
+          <line x1="488" y1="134" x2="596" y2="190" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a6)"/>
+          <rect x="602" y="158" width="278" height="80" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.2"/>
+          <text x="620" y="182" class="lbl-b">the claim read-back sees 10 of 25</text>
+          <text x="620" y="202" class="lbl-sm">so Gmail is mutated for rows the run</text>
+          <text x="620" y="220" class="lbl-sm">never learned it owned</text>
+        </g>
+
+        <text x="20" y="238" class="lbl s-muted">It survived every test in the suite, because every test used fewer than ten rows.</text>
+        <text x="20" y="262" class="lbl s-muted">A comment in the code asserted the opposite as fact. It had never been checked.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 6</span> &nbsp; A default buried in a database driver
+    became a correctness bug in a safety mechanism. Scale was the test condition nobody varied.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 250" role="img" aria-label="Two handles opened on the same table. One commits a new version. The other's read silently returns old rows, while its write throws a commit conflict.">
+        <defs>
+          <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="34" class="lbl-cap s-muted">BOTH HANDLES OPENED AT VERSION 4</text>
+
+        <rect x="20" y="52" width="180" height="48" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="110" y="82" class="lbl-b" text-anchor="middle">handle A</text>
+
+        <rect x="20" y="156" width="180" height="48" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="110" y="186" class="lbl-b" text-anchor="middle">handle B</text>
+
+        <line x1="202" y1="76" x2="316" y2="76" class="st-ink" stroke-width="1.4" marker-end="url(#a7)"/>
+        <text x="259" y="66" class="lbl-sm s-muted" text-anchor="middle">writes</text>
+        <rect x="322" y="52" width="200" height="48" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.2"/>
+        <text x="422" y="82" class="lbl-b s-applied" text-anchor="middle">table is now version 5</text>
+
+        <g class="s-muted">
+          <line x1="250" y1="102" x2="250" y2="146" stroke="currentColor" stroke-width="1" stroke-dasharray="4 3"/>
+          <text x="262" y="126" class="lbl-sm">B is never told</text>
+        </g>
+
+        <line x1="202" y1="170" x2="316" y2="150" class="st-ink" stroke-width="1.4" marker-end="url(#a7)"/>
+        <line x1="202" y1="192" x2="316" y2="212" class="st-ink" stroke-width="1.4" marker-end="url(#a7)"/>
+
+        <g class="s-refused">
+          <rect x="322" y="124" width="360" height="50" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.4"/>
+          <text x="342" y="146" class="lbl-b">B reads → version 4 rows, no error at all</text>
+          <text x="342" y="164" class="lbl-sm">the dangerous direction is the quiet one</text>
+        </g>
+        <g class="s-hold">
+          <rect x="322" y="190" width="360" height="50" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.4"/>
+          <text x="342" y="212" class="lbl-b">B writes → throws &ldquo;commit conflict for version 4&rdquo;</text>
+          <text x="342" y="230" class="lbl-sm">loud, and therefore fine</text>
+        </g>
+
+        <text x="700" y="142" class="lbl s-refused">Being answered from</text>
+        <text x="700" y="160" class="lbl s-refused">a stale snapshot</text>
+        <text x="700" y="178" class="lbl s-refused">is not safe.</text>
+        <text x="700" y="212" class="lbl s-hold">Being refused</text>
+        <text x="700" y="230" class="lbl s-hold">is the safe outcome.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 7</span> &nbsp; The asymmetry is the lesson. Any multi-step
+    read-then-write over one handle has to refresh between the steps, or a sequence meant to degrade
+    into &ldquo;my condition now matches nothing&rdquo; explodes instead &mdash; and a read taken to
+    count what a write reached can be a snapshot from before somebody else&rsquo;s commit.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 05 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 05</span>
+    <h2>Two shapes wearing one interface</h2>
+
+    <p>An <strong>action</strong> is a prompt plus a name. Running one means sending your mail and
+    that prompt to a language model. The tool can reach a model in two fundamentally different ways,
+    and the difference is not cosmetic.</p>
+
+    <p>It can <strong>spawn a command-line tool as a subprocess</strong> &mdash; the
+    <code>claude</code>, <code>codex</code> or <code>gemini</code> CLI you already have installed.
+    Or it can <strong>make an HTTP request</strong> to a provider API with your key. A strategy
+    interface hides which, and a router picks by availability.</p>
+
+    <p>&ldquo;Available&rdquo; had to be tightened, and the reason is a good illustration of the
+    difference between the two shapes. The gemini check originally asked <em>is the binary
+    installed?</em> With the CLI present and never signed in, that answered yes, the router chose it,
+    and the CLI blocked on an interactive browser consent screen until a 120-second timeout &mdash;
+    one dead run per attempt, reported as a timeout. The question a subprocess executor has to answer
+    is <em>can this run a prompt?</em>, so it now also requires credential material to exist and
+    spawns with browser-opening disabled, failing in about four seconds with a message that names the
+    fix. Neither check proves the credentials <em>work</em>. Only a real call can, and no successful
+    gemini run has ever been observed from this project.</p>
+
+    <h3>The word &ldquo;token&rdquo; means five different things here</h3>
+
+    <p>This is worth pausing on, because the collision is genuinely confusing and the codebase hits
+    all five within a few files of each other. It was three when this page was first drafted; the
+    browser unlock work added two more, which is its own small lesson about vocabulary.</p>
+
+    <div class="tablescroll">
+      <table>
+        <thead><tr><th style="width:24%">Which token</th><th>Means</th></tr></thead>
+        <tbody>
+          <tr><td>OAuth token</td><td>A credential from Google &mdash; access or refresh. <a href="#password">§&thinsp;03</a>.</td></tr>
+          <tr><td>LLM token</td><td>A chunk of text, roughly &frac34; of a word, that a model bills and limits by. This section.</td></tr>
+          <tr><td>claim token</td><td>A fresh identifier stamped on queue rows so one apply can prove which rows it owns. <a href="#gate">§&thinsp;07</a> &mdash; and it is the load-bearing one.</td></tr>
+          <tr><td>unlock token</td><td>A one-time, ten-minute secret printed on your terminal that opens the web UI in a browser. <a href="#browser">§&thinsp;08</a>.</td></tr>
+          <tr><td>session &amp; binding tokens</td><td>The pair the unlock exchange returns: one in a cookie, one in origin-scoped browser storage. Counted as one sense because they are two halves of one credential. <a href="#browser">§&thinsp;08</a>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The LLM sense produced a real defect. There is one integer column recording tokens used, and
+    five executors were each writing a different measurement into it. The Claude CLI executor
+    recorded output tokens alone. Codex summed a cached-input field that was already <em>inside</em>
+    the input count, double-billing itself. Gemini read a total-count field its CLI does not emit,
+    and so recorded <code>0</code> forever.</p>
+
+    <div class="measured">
+      <span class="tag">Measured &mdash; a live one-word reply from the Claude CLI</span>
+      <p><code>input 2 · cache_creation 13901 · cache_read 15242 · output 4</code>. The executor
+      recorded <strong>4</strong>. The real total is <strong>29,149</strong>.</p>
+    </div>
+
+    <p>The root cause is that providers disagree about whether cached input is <em>included in</em>
+    or <em>additional to</em> the input count. Anthropic&rsquo;s cache fields are additive;
+    codex&rsquo;s cached field is a subset. So one module now owns a single definition &mdash;
+    <em>all input at full weight plus all output; a measure of work, not of money; <code>0</code>
+    means &ldquo;not reported&rdquo;, never &ldquo;free&rdquo;</em> &mdash; with one normaliser per
+    provider family. Rows written before that change are not comparable with rows written after, and
+    nothing in a row says which side of the line it is on except its timestamp.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 300" role="img" aria-label="Two executor shapes side by side: a spawned subprocess with its own failure modes, and an HTTP request with different ones, both producing the same result type.">
+        <defs>
+          <marker id="a8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <rect x="20" y="30" width="410" height="196" rx="4" class="f-surface st-rule" stroke-width="1.2"/>
+        <text x="40" y="56" class="lbl-cap s-muted">SHAPE 1 — SPAWN A SUBPROCESS</text>
+        <text x="40" y="82" class="lbl-b">claude · codex · gemini</text>
+        <g class="s-refused">
+          <text x="40" y="112" class="lbl">it must be installed <em>and usable</em></text>
+          <text x="40" y="134" class="lbl">stdout has to be parsed, per tool</text>
+          <text x="40" y="156" class="lbl">a huge system-prompt argument hangs it</text>
+          <text x="40" y="178" class="lbl">the runtime may kill a long-running child</text>
+          <text x="40" y="200" class="lbl">an unauthenticated CLI waits for a browser</text>
+        </g>
+
+        <rect x="470" y="30" width="410" height="196" rx="4" class="f-surface st-rule" stroke-width="1.2"/>
+        <text x="490" y="56" class="lbl-cap s-muted">SHAPE 2 — POST TO AN HTTP API</text>
+        <text x="490" y="82" class="lbl-b">direct API · OpenRouter</text>
+        <g class="s-hold">
+          <text x="490" y="112" class="lbl">a key has to exist and be valid</text>
+          <text x="490" y="134" class="lbl">the network can fail in the middle</text>
+          <text x="490" y="156" class="lbl">rate limits arrive as a status code</text>
+          <text x="490" y="178" class="lbl">the usage envelope differs per provider</text>
+          <text x="490" y="200" class="lbl">every call costs money</text>
+        </g>
+
+        <line x1="225" y1="228" x2="380" y2="262" class="st-ink" stroke-width="1.4" marker-end="url(#a8)"/>
+        <line x1="675" y1="228" x2="520" y2="262" class="st-ink" stroke-width="1.4" marker-end="url(#a8)"/>
+
+        <rect x="240" y="264" width="420" height="30" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.2"/>
+        <text x="450" y="284" class="lbl-b s-applied" text-anchor="middle">one result type: { text, agentUsed, tokensUsed, durationMs }</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 8</span> &nbsp; Why a strategy interface earns its keep:
+    the two shapes fail in entirely different ways, so the thing they share has to be the contract,
+    not the implementation. Note what the fallback is <em>not</em> &mdash; if the chosen executor
+    throws, nothing retries with another. Fallback is availability-based only.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 06 ══════════════════════════════════════ -->
+<section id="actions">
+  <div class="col">
+    <span class="secnum">§ 06</span>
+    <h2>An LLM writes code that runs as you</h2>
+
+    <p>You can ask the chat UI for a new action in English &mdash; <em>&ldquo;flag anything from my
+    landlord&rdquo;</em> &mdash; and a model writes it. Follow what that actually means:</p>
+
+    <ul class="plain">
+      <li>You describe the action in the browser.</li>
+      <li>A model writes a TypeScript file.</li>
+      <li>The file is saved to <code>~/.email-agent/actions/</code>.</li>
+      <li>Later, the app loads it.</li>
+    </ul>
+
+    <aside class="gloss"><b>ESM</b>The JavaScript module system. Its <code>import</code> does not
+    just read a file &mdash; it evaluates it. Any code at the top level of the file runs
+    immediately.</aside>
+
+    <div class="naive">
+      <span class="tag">Naive design</span>
+      <p>To load the action, <code>import()</code> the file and read its exported object.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks</span>
+      <p><strong>Importing <em>is</em> executing.</strong> The moment that file is imported, anything
+      at its top level runs &mdash; with your permissions, in the same process that holds your Gmail
+      tokens. And the file was written by a language model.</p>
+    </div>
+
+    <p>The first defence was a denylist: scan the source for dangerous names before loading it. It
+    was defeated in one line.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 258" role="img" aria-label="One expression put to two guards. It walks straight past a denylist of four forbidden names because it spells none of them, and is refused by an allowlist because it is not a permitted shape.">
+        <defs>
+          <marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <rect x="20" y="20" width="380" height="112" rx="4" class="f-surface st-rule" stroke-width="1.2"/>
+        <text x="40" y="44" class="lbl-cap s-muted">THE DENYLIST — FORBIDDEN NAMES</text>
+        <text x="40" y="68" class="lbl">refuse &ldquo;process&rdquo; &nbsp;·&nbsp; refuse &ldquo;child_process&rdquo;</text>
+        <text x="40" y="88" class="lbl">refuse &ldquo;eval&rdquo; &nbsp;·&nbsp; refuse &ldquo;require&rdquo;</text>
+        <text x="40" y="116" class="lbl-b s-refused">walked straight past — it spells none of them</text>
+
+        <g class="s-applied">
+          <rect x="500" y="20" width="380" height="112" rx="4" class="f-applied" stroke="currentColor" stroke-width="1.4"/>
+          <text x="520" y="44" class="lbl-cap">THE ALLOWLIST — PERMITTED SHAPES</text>
+          <text x="520" y="68" class="lbl">permit: literal data &nbsp;·&nbsp; permit: type-only imports</text>
+          <text x="520" y="88" class="lbl">refuse: calls, member access, new, functions…</text>
+          <text x="520" y="116" class="lbl-b">refused — a call is not a permitted shape</text>
+        </g>
+
+        <line x1="210" y1="182" x2="210" y2="140" class="st-ink" stroke-width="1.4" marker-end="url(#a9)"/>
+        <line x1="690" y1="182" x2="690" y2="140" class="st-ink" stroke-width="1.4" marker-end="url(#a9)"/>
+
+        <g class="s-refused">
+          <rect x="20" y="188" width="860" height="44" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.4"/>
+          <text x="450" y="216" class="lbl-b" text-anchor="middle">({}).constructor.constructor("return process")()</text>
+        </g>
+
+        <text x="450" y="252" class="lbl s-muted" text-anchor="middle">A language has unbounded ways to name the same value, and a finite list can never enumerate them.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 9</span> &nbsp; Why an allowlist. A list of forbidden
+    spellings can always be walked around; a list of permitted shapes cannot. That one line, and a
+    data-URI re-export that smuggled a module in through an export clause, are both regression tests
+    now.</figcaption>
+  </figure>
+
+  <div class="col">
+    <p>The real fix went further than checking the file before importing it. <strong>The file is
+    never imported at all.</strong> It is parsed, and the action object is computed directly from the
+    syntax tree &mdash; so the code never enters the module system and never has an opportunity to
+    run.</p>
+
+    <aside class="gloss"><b>AST</b>Abstract syntax tree &mdash; a program represented as structured
+    data rather than text. Analysing this is precise where scanning text is guesswork.</aside>
+
+    <p>One subtlety is worth carrying away, because it is the sharpest idea in the codebase. An
+    earlier version of the allowlist accepted this line:</p>
+
+    <pre><code>declare const process = "safe"</code></pre>
+
+    <p>It looks like it binds a harmless string to the name <code>process</code>. It does not.
+    <code>declare</code> is a TypeScript <em>ambient declaration</em> &mdash; it asserts that
+    something exists elsewhere and is erased entirely at runtime, so every later mention of
+    <code>process</code> reaches the real, global one. The guard had recorded the name as safe
+    data.</p>
+
+    <div class="refuses">
+      <span class="tag">The lesson</span>
+      <p>When judging whether a piece of syntax is safe, the question is not &ldquo;does this look
+      inert?&rdquo; but <strong>&ldquo;does this bind what it appears to bind at run
+      time?&rdquo;</strong> The same question refuses <code>using</code> (whose disposal hook is a
+      call the file never spells) and <code>__proto__</code> as an object key (which sets a prototype
+      rather than binding a property).</p>
+    </div>
+
+    <p>Not executing the file is only half the contract. The value the parser hands back has to be
+    the value Node <em>would</em> have produced, or the evaluator is describing a different module
+    than the one on disk. So a named export is read as a live binding at the end of the walk, while
+    a default export snapshots its operand where it stands; and a file the runtime would reject
+    outright is refused rather than evaluated, because the parser&rsquo;s syntax pass does not catch
+    the errors a strict-mode module would raise. Where the semantics cannot be matched, the rule is
+    to refuse, never to guess.</p>
+
+    <p>One code path does all of this. The save-time guard, the loader, and the reader that extracts
+    an action&rsquo;s id are literally the same traversal &mdash; the guard is the extractor with the
+    values thrown away. The web package kept its own regular expression for reading an id until
+    recently, and deleting it was not a tidy-up: <strong>a second implementation of a safety rule
+    drifts, and the drift is the bypass.</strong></p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 250" role="img" aria-label="Before and after. Before: the file enters the module graph and its top-level code runs. After: the file is parsed into a syntax tree and an object is read out of it, and the module graph is never touched.">
+        <defs>
+          <marker id="a10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="32" class="lbl-cap s-muted">BEFORE</text>
+        <rect x="20" y="44" width="150" height="44" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="95" y="71" class="lbl" text-anchor="middle">junk.action.ts</text>
+        <line x1="172" y1="66" x2="248" y2="66" class="st-ink" stroke-width="1.3" marker-end="url(#a10)"/>
+        <text x="210" y="58" class="lbl-sm s-muted" text-anchor="middle">import()</text>
+        <g class="s-refused">
+          <rect x="254" y="44" width="190" height="44" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.3"/>
+          <text x="349" y="71" class="lbl-b" text-anchor="middle">module graph</text>
+          <line x1="446" y1="66" x2="522" y2="66" stroke="currentColor" stroke-width="1.3" marker-end="url(#a10)"/>
+          <rect x="528" y="44" width="352" height="44" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.3"/>
+          <text x="548" y="71" class="lbl-b">top-level code runs, as you, beside your tokens</text>
+        </g>
+
+        <line x1="20" y1="116" x2="880" y2="116" class="st-rule" stroke-width="1" stroke-dasharray="4 4"/>
+
+        <text x="20" y="150" class="lbl-cap s-muted">AFTER</text>
+        <rect x="20" y="162" width="150" height="44" rx="3" class="f-surface st-ink" stroke-width="1.2"/>
+        <text x="95" y="189" class="lbl" text-anchor="middle">junk.action.ts</text>
+        <line x1="172" y1="184" x2="248" y2="184" class="st-ink" stroke-width="1.3" marker-end="url(#a10)"/>
+        <text x="210" y="176" class="lbl-sm s-muted" text-anchor="middle">parse</text>
+        <rect x="254" y="162" width="190" height="44" rx="3" class="f-surface st-ink" stroke-width="1.3"/>
+        <text x="349" y="189" class="lbl-b" text-anchor="middle">syntax tree</text>
+        <line x1="446" y1="184" x2="522" y2="184" class="st-ink" stroke-width="1.3" marker-end="url(#a10)"/>
+        <text x="484" y="176" class="lbl-sm s-muted" text-anchor="middle">walk</text>
+        <g class="s-applied">
+          <rect x="528" y="162" width="352" height="44" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.3"/>
+          <text x="548" y="189" class="lbl-b">a plain object — { id, name, prompt }</text>
+        </g>
+        <text x="349" y="228" class="lbl-sm s-muted" text-anchor="middle">the module graph is never touched</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 10</span> &nbsp; Loading and executing used to be the same
+    act. Separating them means a hostile file, or one hand-dropped into the directory before the
+    guard existed, cannot run either &mdash; it simply fails to load, loudly, with the rules it
+    broke.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 07 ══════════════════════════════════════ -->
+<section id="gate">
+  <div class="col">
+    <span class="secnum">§ 07</span>
+    <h2>Never do the thing. Write down that you would like to.</h2>
+
+    <p>Here is the heart of it. Our message &mdash; <code>m18f3</code>, &ldquo;Your weekly deals from
+    Nordpost&rdquo; &mdash; has been fetched, embedded, stored, and read by the junk action, which
+    has decided it should be archived. What happens next <em>is</em> the product.</p>
+
+    <div class="naive">
+      <span class="tag">Naive design 1</span>
+      <p>Apply the change, then show the user a report of what was done.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks</span>
+      <p>The user never got to say no. A model that is wrong two percent of the time, over a batch of
+      four hundred, is eight mailbox changes a run that nobody consented to.</p>
+    </div>
+
+    <div class="naive">
+      <span class="tag">Naive design 2 — the one most people would ship</span>
+      <p>Write the proposals to a table. Show them. When the user clicks Approve, read the pending
+      rows and call Gmail for each one.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks — and this is the important one</span>
+      <p>There are two surfaces. Suppose you hit Apply in the browser, and while those Gmail calls
+      are in flight you change your mind and run <code>email-agent approvals reject</code> in a
+      terminal. The reject looks at the table, sees rows still marked pending, marks them rejected,
+      and tells you: <em>&ldquo;3 changes rejected.&rdquo;</em> Then the apply finishes and writes
+      <em>applied</em> over the top.</p>
+      <p><strong>Your mail was destroyed after you personally refused it, and the record says you
+      approved.</strong> That is the exact failure this whole feature exists to prevent, reproduced
+      by the feature itself.</p>
+    </div>
+
+    <aside class="gloss"><b>claim token</b>A freshly generated identifier stamped onto rows at the
+    moment they are taken, so a worker can prove which rows are <em>its</em>. The third of the five
+    unrelated meanings of &ldquo;token&rdquo; on this page.</aside>
+
+    <h3>Move 3: claim the rows before you touch Gmail</h3>
+
+    <p>A row does not go straight from <span class="chip c-hold">pending</span> to
+    <span class="chip c-applied">applied</span>. It passes through
+    <span class="chip c-hold">applying</span>, and it gets there by a single atomic update whose
+    condition requires that the row is <em>still pending</em>. That update stamps a freshly minted
+    claim token onto whatever it moved. The caller then reads back by that token &mdash; and that is
+    how it learns which rows it actually won.</p>
+
+    <p>Now the race resolves correctly. The reject arrives, looks for pending rows, finds none, and
+    says so honestly.</p>
+
+    <p>This is also why both surfaces distinguish &ldquo;this run claimed nothing&rdquo; from a
+    no-op. When the web UI reports rows as <em>skipped</em>, or the CLI calls them
+    <em>unclaimed</em>, the number means exactly one thing: <strong>this call did not claim these
+    rows.</strong> Not &ldquo;already applied&rdquo;, not &ldquo;already rejected&rdquo; &mdash; the
+    row might be mid-apply in a request that is still running, might have failed earlier, or might
+    not exist. Both messages offer those as possibilities and assert nothing further.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 330" role="img" aria-label="Two parallel timelines of the same race. Without a claim, the reject succeeds and is then overwritten by the apply. With a claim, the reject finds no pending rows and loses honestly.">
+        <defs>
+          <marker id="a11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="30" class="lbl-cap s-refused">WITHOUT THE CLAIM</text>
+        <line x1="20" y1="46" x2="880" y2="46" class="st-rule" stroke-width="1"/>
+
+        <text x="30" y="76" class="lbl-b">web: Apply</text>
+        <text x="30" y="94" class="lbl-sm s-muted">reads pending rows</text>
+        <line x1="120" y1="70" x2="700" y2="70" class="st-ink" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#a11)"/>
+        <text x="410" y="62" class="lbl-sm s-muted" text-anchor="middle">Gmail calls in flight</text>
+
+        <g class="s-refused">
+          <text x="330" y="128" class="lbl-b">CLI: reject</text>
+          <text x="330" y="146" class="lbl-sm">sees rows still &ldquo;pending&rdquo; → marks rejected → &ldquo;3 changes rejected&rdquo;</text>
+          <line x1="410" y1="104" x2="410" y2="76" stroke="currentColor" stroke-width="1.4" marker-end="url(#a11)"/>
+          <rect x="706" y="52" width="174" height="38" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.4"/>
+          <text x="793" y="76" class="lbl-b" text-anchor="middle">applied — overwrites</text>
+          <text x="20" y="176" class="lbl">Mail destroyed after you personally refused it, with a record saying you approved.</text>
+        </g>
+
+        <line x1="20" y1="196" x2="880" y2="196" class="st-rule" stroke-width="1" stroke-dasharray="4 4"/>
+
+        <text x="20" y="226" class="lbl-cap s-applied">WITH THE CLAIM</text>
+        <line x1="20" y1="242" x2="880" y2="242" class="st-rule" stroke-width="1"/>
+
+        <text x="30" y="272" class="lbl-b">web: Apply</text>
+        <text x="30" y="290" class="lbl-sm s-muted">claims → applying</text>
+        <line x1="140" y1="266" x2="700" y2="266" class="st-ink" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#a11)"/>
+
+        <g class="s-hold">
+          <text x="330" y="316" class="lbl-b">CLI: reject</text>
+          <text x="418" y="316" class="lbl-sm">finds no pending rows → reports honestly that it changed nothing</text>
+          <line x1="410" y1="300" x2="410" y2="272" stroke="currentColor" stroke-width="1.4" marker-end="url(#a11)"/>
+        </g>
+        <g class="s-applied">
+          <rect x="706" y="248" width="174" height="38" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.4"/>
+          <text x="793" y="272" class="lbl-b" text-anchor="middle">applied — uncontested</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 11</span> &nbsp; The whole product in one figure. Claiming
+    before mutating is what makes a second surface&rsquo;s answer either win cleanly or lose
+    honestly &mdash; never win and then get overwritten.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>The states, named by what they mean to you</h3>
+
+    <p>Five states, and the interesting thing about them is which edges exist. A row can be
+    approved, rejected, or applied. It can also end up <span class="chip c-hold">applying</span>
+    with nobody left to finish it &mdash; the state a crash invents. Leaving <em>that</em> state
+    takes evidence, and the queue records which kind of evidence it was.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 380" role="img" aria-label="The queue's state machine. Pending leads to applying by a claim, and applying leads to applied or failed. A crash strands a row in applying, from which a machine-readable end-state match and a person's word both lead to applied, and a requeue leads back to pending. A fourth edge leaves for a residual only a person can answer.">
+        <defs>
+          <marker id="a12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <g class="s-hold">
+          <rect x="20" y="58" width="150" height="54" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.4"/>
+          <text x="95" y="82" class="lbl-b" text-anchor="middle">pending</text>
+          <text x="95" y="99" class="lbl-sm" text-anchor="middle">awaiting your decision</text>
+        </g>
+
+        <line x1="172" y1="76" x2="244" y2="76" class="st-ink" stroke-width="1.4" marker-end="url(#a12)"/>
+        <text x="208" y="66" class="lbl-sm s-muted" text-anchor="middle">claim</text>
+
+        <g class="s-hold">
+          <rect x="250" y="50" width="164" height="54" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.4"/>
+          <text x="332" y="74" class="lbl-b" text-anchor="middle">applying</text>
+          <text x="332" y="91" class="lbl-sm" text-anchor="middle">token stamped, in flight</text>
+        </g>
+
+        <line x1="416" y1="66" x2="552" y2="52" class="st-ink" stroke-width="1.4" marker-end="url(#a12)"/>
+        <g class="s-applied">
+          <rect x="558" y="24" width="180" height="52" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.4"/>
+          <text x="648" y="46" class="lbl-b" text-anchor="middle">applied</text>
+          <text x="648" y="63" class="lbl-sm" text-anchor="middle">Gmail said yes</text>
+        </g>
+
+        <line x1="416" y1="88" x2="552" y2="122" class="st-ink" stroke-width="1.4" marker-end="url(#a12)"/>
+        <g class="s-refused">
+          <rect x="558" y="106" width="180" height="52" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.4"/>
+          <text x="648" y="128" class="lbl-b" text-anchor="middle">failed</text>
+          <text x="648" y="145" class="lbl-sm" text-anchor="middle">terminal — change dropped</text>
+        </g>
+
+        <g class="s-refused">
+          <line x1="95" y1="114" x2="95" y2="228" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a12)"/>
+          <text x="106" y="176" class="lbl-sm">you refuse</text>
+          <rect x="20" y="234" width="150" height="52" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.4"/>
+          <text x="95" y="256" class="lbl-b" text-anchor="middle">rejected</text>
+          <text x="95" y="273" class="lbl-sm" text-anchor="middle">kept as audit trail</text>
+        </g>
+
+        <g class="s-hold">
+          <line x1="332" y1="106" x2="332" y2="164" class="st-ink" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#a12)"/>
+          <text x="344" y="140" class="lbl-cap">THE PROCESS DIES HERE</text>
+          <rect x="250" y="170" width="164" height="48" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <text x="332" y="199" class="lbl-b" text-anchor="middle">stranded</text>
+        </g>
+
+        <g class="s-applied">
+          <path d="M416 182 C 470 178 500 100 552 62" class="st-ink" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#a12)"/>
+          <text x="556" y="200" class="lbl-cap">EVIDENCE THAT CAN CLOSE IT</text>
+          <text x="556" y="222" class="lbl">verified-api — the machine read Gmail,</text>
+          <text x="556" y="240" class="lbl">and the labels match the intent</text>
+          <text x="556" y="264" class="lbl">user-confirmed — you looked, and said so</text>
+        </g>
+
+        <g class="s-hold">
+          <path d="M248 186 C 208 176 198 128 176 100" class="st-ink" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#a12)"/>
+          <text x="204" y="152" class="lbl-sm" text-anchor="end">requeued</text>
+          <text x="204" y="168" class="lbl-sm" text-anchor="end">either source</text>
+        </g>
+
+        <g class="s-muted">
+          <line x1="380" y1="220" x2="470" y2="306" class="st-ink" stroke="currentColor" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#a12)"/>
+          <rect x="476" y="292" width="400" height="62" rx="3" class="f-ground" stroke="currentColor" stroke-width="1.2"/>
+          <text x="496" y="316" class="lbl-b">residual — six named reasons</text>
+          <text x="496" y="336" class="lbl-sm">the machine will not answer; a person must</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 12</span> &nbsp; The queue&rsquo;s states, labelled by the
+    evidence that authorises each edge rather than by who traverses it. Both edges out of
+    <em>stranded</em> are now machine-traversable &mdash; that changed in August 2026 &mdash; but the
+    record says which kind of evidence closed the row, and a large, deliberately-bounded residual
+    still leaves the machine&rsquo;s reach entirely.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>Chunks of ten, and the bound that is easy to overstate</h3>
+
+    <p>Applies happen in chunks of ten, and each chunk claims its own rows immediately before calling
+    Gmail &mdash; the claim sits <em>inside</em> the loop, not before it. That is deliberate: it
+    makes the claimed set and the in-flight set coincide, so a crash strands at most one chunk, and
+    every later row is still <span class="chip c-hold">pending</span> and still yours to approve or
+    reject.</p>
+
+    <div class="refuses">
+      <span class="tag">The bound is per call, not per batch</span>
+      <p>Say it that way. At most one chunk <em>of this invocation</em> can be stranded, and every id
+      this invocation had not yet reached is still pending. Two concurrent applies leapfrog &mdash; A
+      claims 1&ndash;10 and starts calling; B loses those, continues, and claims 11&ndash;20 while A
+      is still in flight &mdash; so one crash with two callers strands two chunks. Nothing serialises
+      applies at batch level, and the documentation says so rather than restating the per-call bound
+      as a per-batch one.</p>
+    </div>
+
+    <p>The applies themselves are serial: one Gmail round trip at a time, one outcome per operation,
+    paired positionally with the rows that were claimed. Gmail offers a batch-modify call, and it is
+    deliberately not used &mdash; its success response body is empty, so it reports no per-message
+    result, and N rows would collapse onto one all-or-nothing status. That is exactly the ambiguity
+    this design fails closed on.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 300" role="img" aria-label="A twenty-five row batch split into three chunks. Chunk one is applied, chunk two is stranded by a crash mid-flight, and chunk three was never claimed and is still pending.">
+        <text x="20" y="32" class="lbl-cap s-muted">ONE APPLY CALL OVER A 25-ROW BATCH</text>
+
+        <g class="s-applied">
+          <rect x="20" y="48" width="270" height="66" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.4"/>
+          <text x="40" y="72" class="lbl-cap">CHUNK 1 — ROWS 1–10</text>
+          <text x="40" y="94" class="lbl-b">claimed, called, resolved applied</text>
+          <text x="40" y="110" class="lbl-sm">nothing ambiguous here</text>
+        </g>
+
+        <g class="s-hold">
+          <rect x="304" y="48" width="270" height="66" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.6"/>
+          <text x="324" y="72" class="lbl-cap">CHUNK 2 — ROWS 11–20</text>
+          <text x="324" y="94" class="lbl-b">claimed, called — then the process died</text>
+          <text x="324" y="110" class="lbl-sm">status still says &ldquo;applying&rdquo;</text>
+        </g>
+
+        <g>
+          <rect x="588" y="48" width="292" height="66" rx="3" class="f-surface st-rule" stroke-width="1.4"/>
+          <text x="608" y="72" class="lbl-cap s-muted">CHUNK 3 — ROWS 21–25</text>
+          <text x="608" y="94" class="lbl-b">never claimed, never called</text>
+          <text x="608" y="110" class="lbl-sm s-muted">still pending, still yours to decide</text>
+        </g>
+
+        <g class="s-hold">
+          <rect x="180" y="146" width="540" height="98" rx="4" class="f-hold" stroke="currentColor" stroke-width="1.4"/>
+          <text x="450" y="172" class="lbl-cap" text-anchor="middle">WHAT IS ACTUALLY UNKNOWN ABOUT CHUNK 2</text>
+          <text x="450" y="196" class="lbl" text-anchor="middle">Not the end state — Gmail can be read, and now is.</text>
+          <text x="450" y="216" class="lbl-b" text-anchor="middle">What is unknown is authorship: unattributable, not unknowable.</text>
+          <text x="450" y="234" class="lbl-sm" text-anchor="middle">A message already in Trash looks the same whether we put it there or not.</text>
+        </g>
+
+        <text x="450" y="276" class="lbl s-muted" text-anchor="middle">Two callers running at once leapfrog, and one crash strands two chunks. The bound is per call.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 13</span> &nbsp; Chunking bounds what a crash can leave
+    behind. The word to be careful with is <em>unknowable</em>: the end state is checkable, and the
+    next few pages are about checking it. What no check can establish &mdash; automated or human
+    &mdash; is who caused it.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>Move 4: the state the claim protocol invented</h3>
+
+    <p>A row left in <span class="chip c-hold">applying</span> is in a genuinely strange position. It
+    is not <em>pending</em>, so it cannot be approved or rejected &mdash; the claim protocol makes
+    sure of that, which is exactly right, because re-applying might be the second trash of an
+    already-trashed message. But it is also invisible to every screen, because every screen lists
+    <em>pending</em>.</p>
+
+    <p>So the mechanism that fixed naive design 2 created a failure mode of its own, and that failure
+    mode needed its own answer. There is a separate report of rows claimed for more than fifteen
+    minutes, and the question is what to do with it.</p>
+
+    <div class="naive">
+      <span class="tag">Naive answer 1</span>
+      <p>Retry the chunk.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks</span>
+      <p>The request may have reached Google and been recorded before the crash. A retry is a guess
+      dressed as a fix.</p>
+    </div>
+
+    <div class="naive">
+      <span class="tag">Naive answer 2 — and this one shipped</span>
+      <p>Show the user the rows and ask. Two buttons, no retry, and the confirmation says plainly
+      that the app cannot check for you.</p>
+    </div>
+
+    <div class="breaks">
+      <span class="tag">Where it breaks — quietly</span>
+      <p>The user is being asked a question the app could have answered itself, about a mailbox they
+      now have to go and inspect by hand, one message at a time. Honesty is not the same as
+      helpfulness.</p>
+    </div>
+
+    <h3>Move 4, continued: check Gmail, then ask about what is left</h3>
+
+    <p>The verification pass reads each stale row&rsquo;s <strong>current labels</strong> from Gmail
+    and compares them against what the operation was trying to achieve. This is possible for a reason
+    that is a property of the operation set rather than a clever trick: <strong>every mutation this
+    app performs is idempotent label state.</strong> Archive removes <code>INBOX</code>. Trash adds
+    <code>TRASH</code>. Spam adds <code>SPAM</code> and removes <code>INBOX</code>. There is no send,
+    no counter, no permanent delete anywhere in the write module. So &ldquo;did this land?&rdquo; has
+    an observable answer.</p>
+
+    <p>Two of the predicates are worth printing, because both were got wrong once:</p>
+
+    <ul class="plain">
+      <li><strong>spam</strong> needs <code>SPAM</code> present <em>and</em> <code>INBOX</code>
+      absent. The spam operation is one atomic modify carrying both, so that pair <em>is</em> the
+      intended end state. A draft predicate table said &ldquo;SPAM present&rdquo; alone, and was
+      wrong.</li>
+      <li><strong>trash</strong> needs <code>TRASH</code> present <em>alone</em>. Gmail drops
+      <code>INBOX</code> implicitly when a message is trashed, so requiring its absence as well would
+      manufacture false negatives.</li>
+    </ul>
+
+    <p>And the beat that makes the whole thing feel designed rather than added: the pass reads the
+    database <em>first</em>, and the database read is the gate. Zero stale rows means zero Gmail
+    calls, zero printed output, and no clock read at all. That is what lets this run unprompted on
+    every <code>fetch</code>, at every <code>serve</code> start, inline in
+    <code>approvals stranded</code>, and once per mount of the web panel &mdash; without a daemon,
+    without a poll, and without a notifications subsystem coming back from the dead.</p>
+
+    <h3>The six reasons the machine hands a row to a person</h3>
+
+    <p>It fails closed to the human path, never to a verdict. A residual row carries <em>which</em>
+    reason it hit, because a person told only &ldquo;we could not check&rdquo; cannot act on it.</p>
+
+    <div class="tablescroll">
+      <table>
+        <thead><tr><th style="width:20%">Reason</th><th>What it means</th><th style="width:20%">Will it resolve itself?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>message-missing</code></td>
+            <td>A 404 &mdash; and it is <strong>three-way ambiguous</strong>: permanently deleted, or an ambient-credential row now pointing at a different mailbox, <em>or a trash/spam that worked and was later purged</em>. So a 404 can mean <em>applied</em>, and is never auto-anything.</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td><code>credentials</code></td>
+            <td>Gmail refused the credential. Google returns <strong>403 for both permission and rate-limiting</strong>, in the same status code, so these cannot be told apart from the status alone.</td>
+            <td>Maybe</td>
+          </tr>
+          <tr>
+            <td><code>check-failed</code></td>
+            <td>The check itself failed, not the change &mdash; including a timeout.</td>
+            <td>Maybe, on a later pass</td>
+          </tr>
+          <tr>
+            <td><code>unverifiable-operation</code></td>
+            <td>A label row with an empty label list &mdash; which the apply path throws on, so this app could never have applied it &mdash; or an operation type the checker does not recognise.</td>
+            <td><strong>Never.</strong> Only a person closes it</td>
+          </tr>
+          <tr>
+            <td><code>unscoped-account</code></td>
+            <td>A row carrying the ambient-credential sentinel. It may be read, and it may be requeued; it may <strong>never</strong> be recorded applied on that evidence.</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td><code>not-checked</code></td>
+            <td>The whole-pass deadline ran out before this row. <strong>Nothing went wrong and nothing was looked at</strong> &mdash; it must not read as a failure.</td>
+            <td>Yes, next pass</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="refuses">
+      <span class="tag">Why an ambient-credential row can be read but never credited</span>
+      <p>On the apply path, a row pointed at the wrong mailbox 404s harmlessly, because Gmail message
+      ids are per-mailbox. The read-back is <strong>not symmetric</strong>. A wrong-mailbox 404 costs
+      nothing &mdash; it becomes a residual. But a wrong-mailbox message that happened to carry the
+      same id and already-matching labels would return a <em>positive</em> verdict. So such a row may
+      be requeued for approval, which costs nothing, and may never be recorded applied, which would
+      be a lie in the audit trail. One function owns that refusal, and every route to an
+      &ldquo;applied&rdquo; write goes through it &mdash; because a duplicated check is exactly how
+      the second route would silently lose it.</p>
+    </div>
+
+    <h3>Three numbers, in order, and why they exist</h3>
+
+    <p>Until August 2026 nothing under the Gmail message read supplied a timeout. A peer that
+    <em>accepted the connection and never answered</em> &mdash; a captive portal, a half-up VPN
+    &mdash; stalled the serial loop indefinitely, and with it <code>fetch</code>,
+    <code>serve</code> (which runs this pass before spawning the web server at all) and the API
+    route.</p>
+
+    <div class="measured">
+      <span class="tag">Measured &mdash; and the try/catch was no defence</span>
+      <p>A surrounding <code>try/catch</code> catches throws, not hangs. Without a timeout, a call
+      against a server that accepts and never responds was still pending at four seconds and would
+      have stayed there. The read type had declared a &ldquo;timeout&rdquo; error kind since the day
+      it was written, and nothing in the system could produce one.</p>
+    </div>
+
+    <p>Three bounds now sit in strict order: <strong>8 seconds</strong> for one HTTP request,
+    <strong>10 seconds</strong> for the whole read, <strong>20 seconds</strong> for the whole pass.
+    The honest ceiling is <strong>30 seconds, not 20</strong>, because the budget is checked
+    <em>before</em> each read and the read that starts just inside it runs to its own bound. Quoting
+    20 as the ceiling would be wrong by a third.</p>
+
+    <p>The timeout option itself is a fact about one library version. It is declared in the HTTP
+    client&rsquo;s types and never read by that client&rsquo;s own code &mdash; it works only because
+    the installed version hands its options verbatim to an underlying fetch implementation that does
+    honour it. A major upgrade would keep the option compiling and silently remove the bound.</p>
+
+    <h3>Three limits, printed as limits</h3>
+
+    <p>Do not describe either path &mdash; the machine&rsquo;s or the person&rsquo;s &mdash; as
+    recovery. Both record an end state or hand the row to a person. Nothing is re-applied and nothing
+    is rolled back. Three limits survive the design and cannot be engineered away.</p>
+
+    <div class="refuses">
+      <span class="tag">Limit 1 — attribution, and it is benign</span>
+      <p>The check reads the state <em>now</em> and cannot prove this app&rsquo;s call caused it. No
+      check, automated or human, distinguishes &ldquo;we did this&rdquo; from &ldquo;it was already
+      like that&rdquo;. A message you archived by hand five minutes earlier is credited to the app:
+      end state right, authorship wrong. This direction is harmless &mdash; the row simply
+      retires.</p>
+    </div>
+
+    <div class="refuses">
+      <span class="tag">Limit 2 — the mirror, and this is the dangerous direction</span>
+      <p>An apply that really landed and was then <em>undone</em> by you &mdash; un-archived,
+      re-marked unread, restored from Trash &mdash; verifies as <em>not applied</em> and is
+      re-proposed as an ordinary pending row needing an explicit approval. Approving it again can
+      undo your own later action. The honest sentence is this one: <strong>idempotent, therefore it
+      cannot destroy anything; it can still undo something you did in between.</strong></p>
+    </div>
+
+    <div class="refuses">
+      <span class="tag">Limit 3 — narrowed, never closed</span>
+      <p>A hung apply landing between this pass&rsquo;s read and its write can falsify a &ldquo;not
+      applied&rdquo; verdict &mdash; and only that verdict; labels the check <em>saw</em> present
+      were present, so a late apply agrees with an &ldquo;applied&rdquo; record. So every requeue
+      candidate, and <em>only</em> those, is re-read immediately before adjudication, collapsing the
+      exposure from a whole serial read pass plus two batch writes down to one read and one write.
+      Re-reading the applied set would buy nothing and spend quota. <strong>The remainder is
+      irreducible: Gmail can still land between that re-read and the write</strong>, because an
+      external system and a local database cannot be read and written atomically. Write
+      &ldquo;narrowed&rdquo;, never &ldquo;closed&rdquo;.</p>
+    </div>
+
+    <p>Two details of limit 3 are worth having. A re-read that <em>fails</em> never falls back to the
+    first read &mdash; no verdict on evidence that could not be refreshed, so the row stays put for a
+    person. And none of this could be fixed by claiming before reading: a crash between claim and
+    release would re-stamp the claim time and hide the row for another fifteen minutes, which is
+    strictly worse than the problem.</p>
+
+    <h3>A record of who said so is not a proof</h3>
+
+    <p>Two columns on the queue carry that theme, and both are worth understanding as
+    <em>documentation</em> rather than as mechanism.</p>
+
+    <p><code>approvedVia</code> records which surface claimed a row &mdash; web, CLI, auto-apply, or
+    a sentinel for unclaimed-or-legacy. It is written by the single function through which a row
+    leaves <em>pending</em>, as a required parameter with no default. It is
+    <strong>attribution only: it gates nothing and proves nothing</strong>, and must never be read as
+    a security control, because there is no unforgeable in-process caller identity to derive it from.
+    It is exactly as trustworthy as the caller that set it.</p>
+
+    <p><code>resolutionEvidence</code> records <em>how</em> a stranded row&rsquo;s resolution was
+    established &mdash; <code>verified-api</code> or <code>user-confirmed</code>. Both sources go
+    through one write path, not two functions, and the note stamped on the row differs accordingly:
+    the automatic one says plainly that it is an end-state match, not proof of causation. Its empty
+    sentinel deliberately means three things at once &mdash; unresolved, resolved by its own healthy
+    apply, or written before the column existed &mdash; and must never be rendered as
+    &ldquo;verified&rdquo;.</p>
+
+    <h3>The discipline in this corner</h3>
+
+    <ul class="plain">
+      <li>The age test lives <em>inside</em> the atomic update predicate, not as a check in
+      JavaScript beforehand. A pre-filter leaves a window between reading the age and overwriting the
+      claim token, and that stamp is destructive. The screens filter their lists by age; the ids they
+      submit are just ids.</li>
+      <li>The count of rows changed comes from a read taken <em>after</em> the write. It can
+      undercount and never overcount, and the reason is written down: <em>undercounting understates
+      what we did; overcounting claims credit for someone else&rsquo;s decision.</em></li>
+      <li>The &ldquo;it didn&rsquo;t happen&rdquo; answer puts the row back to <em>pending</em>, an
+      ordinary proposal again, with the claim timestamp cleared so a future staleness check ages it
+      from its next claim.</li>
+      <li>Every surface gives a shortfall&rsquo;s cause as one of <strong>four</strong> possibilities,
+      not three: an apply finished it; another <em>person</em> already answered it; Email
+      Agent&rsquo;s own automatic verification may have answered it in the meantime; or it was
+      requeued, re-claimed, and is too new to adjudicate. The third is offered separately from the
+      second on purpose &mdash; a user who pressed nothing themselves cannot guess that an automatic
+      check exists.</li>
+    </ul>
+
+    <div class="refuses">
+      <span class="tag">The residual, stated rather than hidden</span>
+      <p>An apply that claims a row, calls Gmail, hangs past the fifteen-minute threshold, and
+      <em>then</em> succeeds will lose its outcome &mdash; its write-back is scoped to a token the
+      adjudication has overwritten, so it matches nothing. What you would observe: the change really
+      is in Gmail, the queue row is <em>pending</em> again and re-approvable, and the audit trail says
+      it never happened. The code detects this and logs it by row id; nothing prevents it. That
+      adjudication can now come from the automatic verifier as well as from you. The alternative
+      &mdash; letting the hung apply win &mdash; would leave a resolution unable to close out a row it
+      has genuinely checked, which is the failure this surface exists to remove. The losing direction
+      is chosen deliberately.</p>
+    </div>
+
+    <p>Say what remains, not the half that is covered. Verification narrows <em>which</em> rows reach
+    that window &mdash; only the ones neither the API check nor a person has closed. It does not
+    close the window.</p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 400" role="img" aria-label="The verification pass. A database-only gate admits only stale rows; each is read from Gmail and classified into applied, requeued, or one of six residual reasons. Requeue candidates alone are re-read a second time, and an irreducible gap remains between that re-read and the write.">
+        <defs>
+          <marker id="a14" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <rect x="20" y="150" width="164" height="70" rx="3" class="f-surface st-ink" stroke-width="1.4"/>
+        <text x="102" y="176" class="lbl-b" text-anchor="middle">the cheap gate</text>
+        <text x="102" y="194" class="lbl-sm s-muted" text-anchor="middle">a database read</text>
+        <text x="102" y="210" class="lbl-sm s-muted" text-anchor="middle">stale rows?</text>
+
+        <g class="s-muted">
+          <path d="M102 222 L102 268" class="st-ink" stroke="currentColor" stroke-width="1.3" marker-end="url(#a14)"/>
+          <text x="112" y="252" class="lbl-sm">none</text>
+          <rect x="20" y="272" width="164" height="46" rx="3" class="f-ground" stroke="currentColor" stroke-width="1.2"/>
+          <text x="102" y="292" class="lbl-b" text-anchor="middle">zero Gmail calls</text>
+          <text x="102" y="308" class="lbl-sm" text-anchor="middle">zero output, no clock read</text>
+        </g>
+
+        <line x1="186" y1="176" x2="256" y2="140" class="st-ink" stroke-width="1.4" marker-end="url(#a14)"/>
+        <text x="222" y="150" class="lbl-sm s-muted" text-anchor="middle">some</text>
+
+        <rect x="262" y="102" width="176" height="70" rx="3" class="f-surface st-ink" stroke-width="1.4"/>
+        <text x="350" y="128" class="lbl-b" text-anchor="middle">pass 1 — read labels</text>
+        <text x="350" y="146" class="lbl-sm s-muted" text-anchor="middle">serial, one message at a time</text>
+        <text x="350" y="162" class="lbl-sm s-muted" text-anchor="middle">8s / 10s / 20s bounds</text>
+
+        <g class="s-applied">
+          <line x1="440" y1="118" x2="546" y2="60" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a14)"/>
+          <text x="486" y="78" class="lbl-sm" text-anchor="middle">labels match</text>
+          <rect x="552" y="30" width="328" height="52" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.4"/>
+          <text x="572" y="52" class="lbl-b">applied · evidence = verified-api</text>
+          <text x="572" y="70" class="lbl-sm">never for an ambient-credential row</text>
+        </g>
+
+        <g class="s-hold">
+          <line x1="440" y1="142" x2="546" y2="150" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a14)"/>
+          <text x="492" y="136" class="lbl-sm" text-anchor="middle">labels contradict</text>
+          <rect x="552" y="126" width="176" height="52" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.6"/>
+          <text x="640" y="148" class="lbl-b" text-anchor="middle">pass 2 — re-read</text>
+          <text x="640" y="166" class="lbl-sm" text-anchor="middle">these rows only</text>
+
+          <line x1="730" y1="152" x2="796" y2="152" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a14)"/>
+          <rect x="802" y="126" width="78" height="52" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.4"/>
+          <text x="841" y="148" class="lbl-b" text-anchor="middle">requeued</text>
+          <text x="841" y="166" class="lbl-sm" text-anchor="middle">→ pending</text>
+
+          <line x1="764" y1="182" x2="764" y2="214" class="st-ink" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <text x="764" y="230" class="lbl-sm" text-anchor="middle">a re-read that FAILS gives no verdict at all</text>
+        </g>
+
+        <g class="s-muted">
+          <line x1="380" y1="174" x2="380" y2="258" class="st-ink" stroke="currentColor" stroke-width="1.4" marker-end="url(#a14)"/>
+          <text x="392" y="220" class="lbl-sm">cannot decide</text>
+          <rect x="240" y="262" width="440" height="94" rx="3" class="f-ground" stroke="currentColor" stroke-width="1.2"/>
+          <text x="260" y="286" class="lbl-cap">RESIDUAL — SIX NAMED REASONS, HANDED TO A PERSON</text>
+          <text x="260" y="310" class="lbl">message-missing · credentials · check-failed</text>
+          <text x="260" y="330" class="lbl">unverifiable-operation · unscoped-account · not-checked</text>
+          <text x="260" y="349" class="lbl-sm">the machine will not guess; the reason is shown so a person can act</text>
+        </g>
+
+        <g class="s-refused">
+          <rect x="552" y="368" width="328" height="26" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.3"/>
+          <text x="716" y="386" class="lbl-b" text-anchor="middle">the gap between re-read and write is irreducible</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 14</span> &nbsp; The verification pass. The honest response
+    to ambiguity turned out to be neither &ldquo;ask&rdquo; nor &ldquo;guess&rdquo;: it is
+    <em>check what is checkable, requeue what is contradicted, and be precise about the shape of what
+    is left</em>. The second read exists only on the requeue arrow, because that is the only verdict a
+    late apply can falsify.</figcaption>
+  </figure>
+
+  <div class="col">
+    <h3>The escape hatch, and its two locks</h3>
+
+    <p>You can turn all of this off. One setting applies each batch the moment an action finishes. It
+    is guarded by a second, separate setting &mdash; a recorded acknowledgement that you read the
+    warnings &mdash; and the normalisation is one line:</p>
+
+    <pre><code>autoApplyActions: autoApplyAcknowledged &amp;&amp; gmail?.autoApplyActions === true</code></pre>
+
+    <p>That runs on every read, in core and again at the web API boundary, so <em>no</em> path can arm
+    unattended Gmail writes without the acknowledgement sitting alongside them. The CLI&rsquo;s
+    <code>config set</code> refuses both keys outright, with the reason recorded: that command cannot
+    show you the warnings, so it must not record consent you never gave. The Settings page is the only
+    surface that shows the cautions &mdash; and the honest framing in the code is that the invariant is
+    <em>consent-recorded</em>, not <em>UI-only</em>: hand-editing both booleans into the settings file
+    is still honoured.</p>
+
+    <p>Note what does <em>not</em> change: the queue is still written first, so the audit trail is
+    identical. Turning this on changes <em>when</em> changes are applied, not whether they are written
+    down. And one manual path stays immediate &mdash; per-email actions you click yourself in the mail
+    UI apply straight away, because the click <em>is</em> the approval.</p>
+  </div>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 08 ══════════════════════════════════════ -->
+<section id="browser">
+  <div class="col">
+    <span class="secnum">§ 08</span>
+    <h2>How the browser is kept out</h2>
+
+    <p>Because the web UI is a real HTTP server on your machine, two browser-level attacks apply.
+    <strong>CSRF</strong> &mdash; cross-site request forgery &mdash; is a hostile page making your
+    browser send a request to <code>localhost:3847</code>, riding your session. <strong>DNS
+    rebinding</strong> is a page on <code>evil.com</code> re-pointing its own hostname at
+    <code>127.0.0.1</code> so its requests are technically same-origin. The guards check the
+    <code>Host</code> header against a local allowlist (which is what stops rebinding, since the
+    browser still sends <code>Host: evil.com</code>) and require an <code>Origin</code> or
+    <code>Sec-Fetch-Site</code> header that browsers always attach cross-origin.</p>
+
+    <p>The comment above them is refreshingly blunt about what that is worth: every one of those
+    inputs is a header, and a non-browser client controls all of them. <em>&ldquo;This is a speed
+    bump, not the boundary.&rdquo;</em> The boundary is that <code>email-agent serve</code> binds the
+    <strong>loopback</strong> interface &mdash; <code>127.0.0.1</code>, reachable only from this
+    machine &mdash; so an off-box process cannot open the socket at all.</p>
+
+    <div class="refuses">
+      <span class="tag">One more measured trap in the same code</span>
+      <p>The <code>Host</code> header has to be read <em>straight off the request</em>. An earlier
+      version derived it from the request URL, and Next composes that URL from the server&rsquo;s own
+      configured hostname &mdash; so every request arrived claiming <code>localhost</code> whatever
+      <code>Host</code> was actually sent. It broke in both directions at once: the browser that
+      opened the <code>127.0.0.1</code> URL the server itself prints got 403 on every mutation, and a
+      DNS-rebound <code>Host: evil.example</code> was never seen at all, so the anti-rebinding
+      property did not exist.</p>
+    </div>
+
+    <h3>The hole the headers leave</h3>
+
+    <p>Until August 2026 there was no secret at all. Anything that could reach the port and set two
+    headers had the whole UI: your mail, your settings, your approval queue. The read routes were as
+    open as the write routes, so a mutation-only requirement would have left confidentiality exactly
+    where it was.</p>
+
+    <p>What shipped is a one-time <strong>unlock token</strong>. <code>email-agent serve</code> mints
+    one and prints a link before spawning the web server; <code>email-agent unlock</code> prints a
+    fresh one on demand, against a server that is already running &mdash; which is precisely why the
+    token lives in a file rather than an environment variable, since no process can inject an
+    environment variable into a running child. Ten-minute lifetime, burns on first use, and only
+    sha256 digests are ever persisted.</p>
+
+    <h3>Why the token is after a <code>#</code>, and why that is a defect fixed</h3>
+
+    <p>The printed link is <code>http://&lt;host&gt;:&lt;port&gt;/unlock?exchange=1#token=…</code>.
+    The part after the <code>#</code> is a <strong>URL fragment</strong>, and no browser ever sends it
+    to a server: not to this one, not to a proxy, not in a <code>Referer</code>.</p>
+
+    <p>That is not a flourish. While the token rode in the query string, <code>serve</code> spawned a
+    dev server whose request logger printed the complete request URL &mdash; so <strong>every unlock
+    echoed the live token back into the same terminal a second time</strong>, while the code&rsquo;s
+    own comment claimed the plaintext existed on its stdout and nowhere else.</p>
+
+    <p>And state what it does <em>not</em> fix, without letting the claim grow. The token still
+    reaches the browser. After the page clears the fragment it remains in the terminal scrollback that
+    printed it, in the clipboard if it was copied, and possibly in the browser&rsquo;s own history
+    database &mdash; a navigation commits, fragment included, before any script runs. What the
+    fragment removes is the copy that reached a <em>server</em>.</p>
+
+    <h3>The sharpest fact on this page: cookies do not know about ports</h3>
+
+    <p>The exchange could have ended with a session cookie and stopped there. It does not, because of
+    a property of HTTP that no cookie attribute can repair.</p>
+
+    <div class="refuses">
+      <span class="tag">Cookies are scoped by host and path, and never by TCP port</span>
+      <p>RFC 6265 §8.5 says so outright. <code>127.0.0.1:3847</code> and <code>127.0.0.1:9999</code>
+      share <em>one cookie jar</em>. Another local process binds a sibling port, a cross-site
+      top-level GET carries the <code>Lax</code> cookie to it, and that server is now holding a
+      replayable bearer credential. <code>httpOnly</code> is no defence at all here &mdash; it stops
+      page <em>script</em> from reading the value, and the party holding it is an HTTP server. The
+      <code>__Host-</code> prefix needs <code>Secure</code>, which plain HTTP on loopback cannot set,
+      and would not add port scoping even if it could.</p>
+    </div>
+
+    <p>What closes it is that <strong>web storage <em>is</em> scoped by origin, and an origin includes
+    the port.</strong> So the exchange mints a second 256-bit value beside the session token, returns
+    it in the response <em>body</em> &mdash; never as a cookie, which would hand it straight to the
+    attacker &mdash; and the browser writes it into <code>localStorage</code> on the origin it actually
+    opened. Every API call echoes it in a custom header, and the guard requires both halves.</p>
+
+    <p>A consequence follows that is worth stating because it looks like a weakness and is not. The
+    <em>page</em> gate stays cookie-only and cannot do otherwise: a top-level navigation carries no
+    custom header, so requiring the second factor there would mean nobody could ever load the app.
+    That split is safe for a property of <em>this</em> app rather than a general one &mdash; every page
+    behind the gate is a client component with zero server-side data fetching, so the most a
+    cookie-only pass yields is the static app shell. <strong>The API guard is the enforcement; the page
+    gate is UX.</strong> If a page ever fetches on the server, that page is a hole.</p>
+
+    <div class="refuses">
+      <span class="tag">Scope it honestly, and do not let the claim grow</span>
+      <p>The gate closes exactly one hole: a bearer cookie replayed from a different loopback port. The
+      cookie jar is still shared with every other port; what changed is that the leaked value is no
+      longer sufficient. It raises the bar from <em>another process on this machine</em> to
+      <em>another process running as <strong>this user</strong></em>, and no further, on purpose
+      &mdash; because a process already running as you reads
+      <code>~/.email-agent/accounts/{email}/token.json</code> and calls Gmail directly, and was never
+      going to be stopped by a browser cookie.</p>
+    </div>
+
+    <h3>The foot-gun, named</h3>
+
+    <p>A single environment variable, <code>EMAIL_AGENT_ALLOW_REMOTE_MUTATIONS=1</code>, disarms
+    <em>both</em> halves &mdash; the header checks and the whole unlock gate. That is deliberate: an
+    open bind whose guards still demand a local <code>Host</code> would answer 403 to the very browser
+    the open bind exists for.</p>
+
+    <p>It does not have to be typed on a command line. The web config loads a repo-root
+    <code>.env</code> before the framework boots, and the example env file ships a commented line for
+    exactly that variable, so a stray <code>.env</code> disarms the gate for the ordinary
+    <code>npm run dev</code> path. Measured against a real dev server with exactly that file and no
+    shell variable: an unauthenticated settings read returned 200 with the settings body, an
+    unauthenticated page load returned 200, and <code>Host: evil.example</code> with no
+    <code>Origin</code> reached the handler. As of August 2026 the process announces this at startup
+    from two independent points, and the CLI prints the same sentences. <strong>The silence is fixed;
+    the disarm itself is unchanged and still complete.</strong></p>
+  </div>
+
+  <figure>
+    <div class="figscroll">
+      <svg viewBox="0 0 900 400" role="img" aria-label="The unlock handshake. A printed link carries the token after a hash the server can never see. The exchange returns a cookie and a body value; the browser stores one in the shared cookie jar and the other in origin-scoped storage. A later request carrying both succeeds; one carrying only the cookie is refused.">
+        <defs>
+          <marker id="a15" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" class="f-ink"/>
+          </marker>
+        </defs>
+
+        <text x="20" y="30" class="lbl-cap s-muted">THE PRINTED LINK</text>
+        <rect x="20" y="42" width="500" height="44" rx="3" class="f-surface st-ink" stroke-width="1.3"/>
+        <text x="38" y="70" class="lbl-b">http://127.0.0.1:3847/unlock?exchange=1</text>
+        <g class="s-hold">
+          <text x="352" y="70" class="lbl-b">#token=…</text>
+          <line x1="345" y1="30" x2="345" y2="106" stroke="currentColor" stroke-width="2"/>
+          <text x="356" y="102" class="lbl-sm">never sent to any server</text>
+          <text x="356" y="24" class="lbl-cap">A WALL THE SERVER CANNOT SEE PAST</text>
+        </g>
+
+        <line x1="270" y1="118" x2="270" y2="150" class="st-ink" stroke-width="1.4" marker-end="url(#a15)"/>
+        <text x="262" y="142" class="lbl-sm s-muted" text-anchor="end">the page&rsquo;s script POSTs the token</text>
+
+        <rect x="20" y="154" width="250" height="52" rx="3" class="f-surface st-ink" stroke-width="1.4"/>
+        <text x="145" y="176" class="lbl-b" text-anchor="middle">the exchange</text>
+        <text x="145" y="194" class="lbl-sm s-muted" text-anchor="middle">one shot — the token burns</text>
+
+        <line x1="272" y1="168" x2="352" y2="150" class="st-ink" stroke-width="1.4" marker-end="url(#a15)"/>
+        <line x1="272" y1="192" x2="352" y2="228" class="st-ink" stroke-width="1.4" marker-end="url(#a15)"/>
+
+        <g class="s-refused">
+          <rect x="358" y="124" width="300" height="52" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.3"/>
+          <text x="376" y="146" class="lbl-b">Set-Cookie: session</text>
+          <text x="376" y="164" class="lbl-sm">shared with every port on this host</text>
+        </g>
+        <g class="s-applied">
+          <rect x="358" y="204" width="300" height="52" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.3"/>
+          <text x="376" y="226" class="lbl-b">in the response BODY: binding token</text>
+          <text x="376" y="244" class="lbl-sm">localStorage — scoped to origin, port included</text>
+        </g>
+
+        <g class="s-refused">
+          <rect x="666" y="104" width="214" height="96" rx="3" class="f-refused" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 3"/>
+          <text x="682" y="128" class="lbl-cap">THE SIBLING-PORT ATTACKER</text>
+          <text x="682" y="150" class="lbl-sm">binds 127.0.0.1:9999, receives the</text>
+          <text x="682" y="167" class="lbl-sm">cookie on a top-level GET — and</text>
+          <text x="682" y="184" class="lbl-sm">cannot reach the second factor</text>
+        </g>
+
+        <line x1="20" y1="284" x2="880" y2="284" class="st-rule" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="20" y="312" class="lbl-cap s-muted">EVERY LATER API CALL</text>
+
+        <g class="s-applied">
+          <rect x="20" y="324" width="410" height="46" rx="3" class="f-applied" stroke="currentColor" stroke-width="1.3"/>
+          <text x="40" y="344" class="lbl-b">cookie + binding header</text>
+          <text x="40" y="362" class="lbl-sm">200 — and the session is renewed</text>
+        </g>
+        <g class="s-hold">
+          <rect x="450" y="324" width="430" height="46" rx="3" class="f-hold" stroke="currentColor" stroke-width="1.3"/>
+          <text x="470" y="344" class="lbl-b">cookie alone</text>
+          <text x="470" y="362" class="lbl-sm">401 binding-required — a distinct code, not &ldquo;no session&rdquo;</text>
+        </g>
+        <text x="20" y="392" class="lbl s-muted">None of this stops code running as you. It was never meant to.</text>
+      </svg>
+    </div>
+    <figcaption><span class="fignum">Fig. 15</span> &nbsp; The credential is deliberately split across
+    two stores with different scoping rules, because one of those rules has a hole nothing in HTTP can
+    patch. The refusal on the right is a <em>separate</em> 401 code, so a browser that can see the app
+    shell is not told it has no session &mdash; telling a user that reads as a broken app.</figcaption>
+  </figure>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 09 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 09</span>
+    <h2>Six stories, each with a lesson</h2>
+
+    <p>Not a changelog. These are the ones that teach something.</p>
+
+    <h3>1. The queue knew the truth. Every screen lied.</h3>
+    <p>The database was correctly recording that an auto-apply had failed <em>after</em> Gmail was
+    already called. No surface read those fields. So the web reported &ldquo;3 changes await your
+    approval&rdquo; for rows that were mid-apply, and the CLI printed &ldquo;nothing was
+    applied&rdquo; &mdash; for mail that really had been trashed. Recording the truth and displaying
+    it are two separate pieces of work, and only the second one is visible to a user.</p>
+
+    <h3>2. A false sentence in the documentation cost 950 lines of code.</h3>
+    <p>The project&rsquo;s own notes said the database could not add a column to an existing table.
+    Believing that, someone built a durable-snapshot, cross-process-lock and crash-replay subsystem
+    to survive dropping and rebuilding tables. It was reviewed adversarially twice. Then somebody
+    checked the claim against the installed version: the database <em>can</em> add columns in place.
+    The subsystem was deleted. <strong>A wrong sentence in the file everyone reads first outlives,
+    and outcosts, a wrong line of code.</strong></p>
+
+    <h3>3. Ten rows.</h3>
+    <p>Covered in <a href="#database">§&thinsp;04</a>, and worth repeating as a lesson about testing:
+    it survived because every existing test used fewer than ten rows. <strong>Scale is a test
+    condition,</strong> not a detail.</p>
+
+    <h3>4. &ldquo;The tests pass&rdquo; was repeatedly false comfort.</h3>
+    <p>Several tests asserted the <em>message a function printed</em> rather than the <em>state of
+    the system</em>, or constructed a request shape the real framework never produces. They were
+    green and they proved nothing. The habit that fixed it: deliberately break the code and confirm
+    the test goes red.</p>
+
+    <h3>5. And the sequel, which is sharper.</h3>
+    <p>Once the project had component tests, an adversarial re-check went back over five of them with
+    mutations the original authors had not tried: nine mutations, seven went red, <strong>two
+    survived</strong>. Both survivors were live safety behaviours &mdash; the approval panel&rsquo;s
+    default-deny selection (a row arriving on a background refresh must arrive unticked, or a bulk
+    Apply reaches a change nobody looked at) and the settings banner that reports auto-apply as
+    <em>currently on</em> from the saved value rather than the unsaved switch. Both were documented
+    only in a code comment. The lesson generalises: <strong>a test written by the person who wrote the
+    component covers the branches its author was thinking about, so the invariant stated only in a
+    comment is the one left unheld.</strong></p>
+
+    <h3>6. Two instruction files drifted apart.</h3>
+    <p>The project kept two overlapping documents that had to be edited in parallel by hand. One had
+    been mechanically find-and-replaced into describing files and settings that do not exist, and it
+    still recommended a database call that provably does not work &mdash; advice to reintroduce a bug
+    that had stopped mail being stored at all. They are now one file with a check that fails if they
+    are ever separated again.</p>
+  </div>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 10 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 10</span>
+    <h2>Actually using it</h2>
+
+    <div class="tablescroll">
+      <table>
+        <thead><tr><th style="width:38%">Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>npx email-agent setup</code></td><td>Sign in to Google, choose a model, create the database</td></tr>
+          <tr><td><code>npx email-agent accounts add &lt;email&gt;</code></td><td>Add another Gmail account; <code>list</code>, <code>remove</code> and <code>default</code> alongside it</td></tr>
+          <tr><td><code>npx email-agent fetch</code></td><td>Pull unread mail into the local database and embed it &mdash; and run the stranded check on the way past</td></tr>
+          <tr><td><code>npx email-agent list-actions</code></td><td>Show the actions available to run</td></tr>
+          <tr><td><code>npx email-agent run-action junk</code></td><td>Run one action; proposals go to the queue, nothing is applied</td></tr>
+          <tr><td><code>npx email-agent approvals</code></td><td>List what is waiting for your decision</td></tr>
+          <tr><td><code>npx email-agent approvals review</code></td><td>Walk the queue one change at a time</td></tr>
+          <tr><td><code>npx email-agent approvals stranded</code></td><td>Check Gmail first and resolve what it can; <code>--review</code> adjudicates what is left</td></tr>
+          <tr><td><code>npx email-agent approvals prune</code></td><td>Delete resolved rows past the retention window; <code>--dry-run</code> shows what would go</td></tr>
+          <tr><td><code>npx email-agent serve</code></td><td>Start the web UI on <code>127.0.0.1:3847</code> &mdash; and print the one-time link that unlocks it</td></tr>
+          <tr><td><code>npx email-agent unlock</code></td><td>Print a fresh unlock link. Works against a server already running, and needs no server at all to mint one</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Only <code>applied</code> and <code>rejected</code> rows are ever eligible for pruning.
+    <code>failed</code> is kept deliberately &mdash; it is the diagnostic record of an attempted
+    mutation &mdash; and <code>pending</code> and <code>applying</code> are unresolved. A retention
+    of zero days means <em>keep forever</em>, and the sweep exists as an inspectable command because a
+    retention policy nothing can inspect is indistinguishable from data loss.</p>
+  </div>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 11 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 11</span>
+    <h2>The honest part</h2>
+
+    <p>A page like this is easy to write as if everything were verified. It is not, and the project
+    treats overclaiming as a defect in its own right, so here is the state plainly &mdash; sorted by
+    <em>kind</em>, because &ldquo;never tested&rdquo; and &ldquo;deliberately limited&rdquo; are not
+    the same admission.</p>
+
+    <h3>Never observed end to end</h3>
+
+    <div class="refuses">
+      <span class="tag">There is no linked Gmail account on any machine this has run on</span>
+      <p><strong>No real mailbox change has ever been observed</strong> travelling the whole path.
+      Every apply path in every test ends in a per-operation failure. The claim, the resolution, the
+      reporting and the exit codes are covered; <em>&ldquo;the trash really reached Gmail&rdquo;</em>
+      is not, and cannot be from here.</p>
+      <p>The same limit now applies symmetrically on the <em>read</em> side. <strong>No real message
+      read has ever reached Gmail either.</strong> In both test harnesses the client throws before any
+      request leaves, so every verification call lands on the <code>credentials</code> residual, and
+      the two verdict branches &mdash; a genuine label match or mismatch &mdash; are reachable only
+      through core&rsquo;s own tests with an injected reader.</p>
+    </div>
+
+    <ul class="plain">
+      <li>The 404&rsquo;s three-way meaning, and Gmail&rsquo;s behaviour when a trashed message is
+      purged, are <strong>documented, not observed</strong>.</li>
+      <li>The OAuth state guard has never run against Google. The handler half is covered by
+      route-level tests; the consent screen, Google&rsquo;s echo of the state value, and the
+      browser&rsquo;s cookie handling across the redirect are verified <em>by reading only</em>.</li>
+      <li><strong>No live gemini invocation.</strong> The CLI is installed here and unauthenticated;
+      its output fixtures are derived from source, not observed.</li>
+      <li><strong>No live hosted-model call.</strong> Both API executors are driven against a local
+      HTTP stub, so our plumbing is covered but the providers&rsquo; acceptance of our request shape,
+      and their error and usage envelopes, are assumed.</li>
+      <li>The 24-hour session lifetime is proven only against an injected clock. Nothing here has sat
+      for a day.</li>
+      <li>The real-browser leg drives exactly one engine, Chromium. The cookie-policy argument for the
+      OAuth redirect is reasoned from spec, not observed in Safari or Firefox.</li>
+    </ul>
+
+    <h3>Rendered by a test, but never seen by a person</h3>
+
+    <p>These are two different claims and the project keeps them apart on purpose, in this order.
+    <strong>Rendered populated under jsdom by an automated test: now true.</strong> The approval panel
+    and the stranded panel are driven through the populated queue, the per-email checkboxes, the review
+    dialog, the destructive-change confirmation both ways, the outcome toasts, all six residual reasons
+    and both adjudication buttons &mdash; each mutation-checked.
+    <strong>Observed populated in a real browser: still false</strong>, unchanged, because there is
+    still no Gmail account to populate them with.</p>
+
+    <p>And jsdom is not a browser, which should be said once plainly: it has no layout, so a
+    dialog&rsquo;s focus trap cannot be tested there at all, and its <code>window.confirm</code> is a
+    no-op returning <code>undefined</code> &mdash; an unstubbed confirm-gated path silently
+    early-returns and proves nothing. One component, the piece that redeems the unlock token, is not
+    rendered at all: every branch that matters walks into the same navigation API jsdom refuses to let
+    be redefined.</p>
+
+    <h3>Not covered at all</h3>
+
+    <ul class="plain">
+      <li><strong>Next itself</strong> &mdash; routing, middleware, streaming responses, server-component
+      rendering. The harness drives handlers, not the framework.</li>
+      <li><strong>The action runner&rsquo;s agent half against a real model.</strong> The command is
+      driven end to end against a local stub, so the plumbing is covered; nothing in the suite says an
+      LLM would produce that shape.</li>
+      <li><strong><code>fetch</code></strong> &mdash; the sync needs the Gmail API; only its storage
+      half is covered.</li>
+      <li>Small named gaps: the top-level error card on each approval panel, the once-per-mount verify
+      guard&rsquo;s <em>remount</em> case, and per-card Run/Delete pending state under concurrency.</li>
+    </ul>
+
+    <h3>Deliberate limitation &mdash; chosen, not missing</h3>
+
+    <ul class="plain">
+      <li>The verifier reads the state now and <strong>cannot prove this app&rsquo;s call caused
+      it</strong>.</li>
+      <li>The dangerous mirror: an apply that landed and was then undone verifies as <em>not
+      applied</em> and is re-proposed. Idempotent, therefore it cannot destroy anything; it can still
+      undo something you did in between.</li>
+      <li>The read-before-write window is <strong>narrowed, never closed</strong>. An apply hung
+      <em>past</em> the threshold that then returns from Gmail still loses its outcome &mdash; exactly
+      as before this pass existed &mdash; and that adjudication can now come from a person <em>or</em>
+      from the automatic verifier. The losing direction is chosen.</li>
+      <li>The stranded count can undercount and never overcount.</li>
+      <li><code>approvedVia</code> is attribution only: it gates nothing and proves nothing.</li>
+      <li>The apply is serial and stays that way for now. A bounded pool would have to partition by
+      account and message, stay serial inside a partition, wait for retry and backoff, and live strictly
+      inside one chunk.</li>
+      <li>The queue&rsquo;s duplicate skip is check-then-insert, <strong>not a uniqueness
+      guarantee</strong>. Two concurrent runs can both insert, and with auto-apply on, Gmail receives
+      both calls.</li>
+      <li>The unlock gate closes exactly one hole and does nothing about code running as this user.
+      The page gate is UX, not enforcement. And one environment variable disarms the whole thing,
+      possibly from a file nobody remembers writing.</li>
+      <li><strong>This design is for one person and one laptop.</strong> If it is ever deployed for
+      several people it must be rewritten, not extended &mdash; and the ambient-credential sentinel
+      revisited at the same time, because a shared deployment makes it indefensible.</li>
+    </ul>
+
+    <h3>Measured facts with an expiry date</h3>
+
+    <p>This page trades on <em>measured, not read</em>, so the corollary has to be printed too: every
+    measurement is a fact about an installed version.</p>
+
+    <ul class="plain">
+      <li>Every database fact above &mdash; the ten-row limit, the pinned handle, in-place column
+      addition, the filter-replacement behaviour &mdash; is a fact about <strong>one version</strong> of
+      LanceDB and must be re-verified on upgrade.</li>
+      <li>The Gmail read timeout works only because the installed HTTP client hands its options
+      verbatim to an implementation that honours them. The next major version would keep the option
+      compiling and silently remove the bound.</li>
+      <li>Credential failures are classified on one specific error field, measured against the
+      installed client. Re-measure on any upgrade.</li>
+    </ul>
+  </div>
+
+  <details>
+    <summary>Where the documentation and the code disagreed</summary>
+    <div class="col" style="max-width:none">
+      <p style="max-width:68ch">Three disagreements were found while writing this page, by checking
+      prose against source. Two were fixed in the wave that followed; the third is still open, which is
+      the more useful ending.</p>
+      <ul class="plain" style="max-width:none">
+        <li><strong>Still open.</strong> The main instruction file describes credential selection as a
+        three-step fallback chain &mdash; explicit account, then default account, then ambient
+        credentials. Two hundred lines later the same file states the refusal correctly. Both sentences
+        are in the file, and a reader meets the wrong one first. The nuance is real: the first line
+        describes account <em>selection</em>, the second describes <em>failure</em> behaviour. That
+        does not help the reader who stops after the first.</li>
+        <li><strong>Fixed.</strong> A module card said a fragile text-scanning way of reading an
+        action&rsquo;s id had been eliminated. It had been, in core; the web package still did it. The
+        regular expression is now deleted and both callers share the one parser.</li>
+        <li><strong>Fixed.</strong> The web settings form accepted and stored Google client
+        credentials that nothing ever read for authentication &mdash; filling it in wrote a secret to
+        disk and left sign-in still failing. The field is gone, and its removal now announces itself
+        once per process when an old settings file still carries it.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<div class="interval"><span></span></div>
+
+<!-- ══════════════════════════════════════ 12 ══════════════════════════════════════ -->
+<section>
+  <div class="col">
+    <span class="secnum">§ 12</span>
+    <h2>Everything, in one place</h2>
+    <p>Including the five unrelated things called &ldquo;token&rdquo;.</p>
+  </div>
+
+  <div class="glossary">
+    <dl>
+      <dt>access token</dt><dd>Short-lived proof the app may act on your mailbox now. Expires in about an hour.</dd>
+      <dt>ADC</dt><dd>Application Default Credentials — whatever identity <code>gcloud</code> is signed in as. Ambient, and easy to change without noticing.</dd>
+      <dt>action</dt><dd>A named prompt run over your mail. Built-in ones ship with the app; you can ask the chat to write more.</dd>
+      <dt>AST</dt><dd>Abstract syntax tree — a program as structured data rather than text.</dd>
+      <dt>binding token</dt><dd>The second half of a browser session, kept in origin-scoped storage and echoed as a header. Exists because cookies ignore ports.</dd>
+      <dt>claim token</dt><dd>An identifier stamped on queue rows when a worker takes them, so it can prove which rows are its own.</dd>
+      <dt>commit conflict</dt><dd>The database refusing a write because someone else committed first. Being refused is the safe outcome.</dd>
+      <dt>CSRF</dt><dd>Cross-site request forgery — another site making your browser send an authenticated request on your behalf.</dd>
+      <dt>DNS rebinding</dt><dd>An attack where a hostile page re-points its own domain at <code>127.0.0.1</code> to reach a local service.</dd>
+    </dl>
+    <dl>
+      <dt>embedding</dt><dd>768 numbers representing a text's meaning, arranged so similar texts land near each other.</dd>
+      <dt>ESM</dt><dd>The JavaScript module system. Its <code>import</code> evaluates the file, it does not merely read it.</dd>
+      <dt>jsdom</dt><dd>A JavaScript implementation of a browser's document API, used to render components in tests. It has no layout and is not a browser.</dd>
+      <dt>LanceDB</dt><dd>The embedded vector database used here — a library over files on disk, not a server.</dd>
+      <dt>LLM token</dt><dd>A chunk of text as a model counts it, roughly ¾ of a word. Nothing to do with the other four tokens.</dd>
+      <dt>loopback</dt><dd><code>127.0.0.1</code> — reachable only from this machine. A real boundary, not a header check.</dd>
+      <dt>mutation testing</dt><dd>Deliberately breaking the code to confirm a test goes red. A test that cannot fail is not evidence.</dd>
+      <dt>MVCC</dt><dd>Multi-version concurrency control. Writers do not lock; a conflicting writer is refused.</dd>
+      <dt>monorepo</dt><dd>One repository holding several packages that are released together.</dd>
+    </dl>
+    <dl>
+      <dt>OAuth2</dt><dd>Granting an app narrow, revocable access without sharing your password.</dd>
+      <dt>P0–P4</dt><dd>The backlog's priority scale, P0 highest. Not an email priority — that is a separate built-in action.</dd>
+      <dt>refresh token</dt><dd>The long-lived credential used to mint access tokens without asking you again.</dd>
+      <dt>residual reason</dt><dd>Which of six named things stopped the verification pass from deciding a stranded row, shown so a person can act rather than guess.</dd>
+      <dt>scope</dt><dd>The specific permission a grant covers — here, modifying Gmail and nothing else.</dd>
+      <dt>session cookie</dt><dd>The half of a browser session the server sets. Shared with every other port on the same host, which is why it is not sufficient alone.</dd>
+      <dt>stranded</dt><dd>A queue row left mid-apply by a crash. Email Agent now checks most of them against Gmail itself; what reaches a person is the residual it could not answer.</dd>
+      <dt>unlock token</dt><dd>A one-time, ten-minute secret printed on your terminal that opens the web UI in a browser. Burns on first use.</dd>
+      <dt>URL fragment</dt><dd>The part of a URL after <code>#</code>. Browsers never send it to a server, which is why the unlock token rides there.</dd>
+      <dt>verification pass</dt><dd>The automatic check that reads a stranded row's current Gmail labels before any person is asked about it.</dd>
+      <dt>worktree</dt><dd>A second checkout of the same repository, so two branches can be open at once.</dd>
+    </dl>
+  </div>
+</section>
+
+</div>
+
+</body>
+</html>
