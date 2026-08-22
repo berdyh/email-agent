@@ -227,9 +227,32 @@ export const UNLOCK_REQUIRED_CODE = "unlock-required";
  * `oauth-state.ts`, which scopes its cookie to the callback path alone.
  *
  * No `Domain` attribute, so the cookie is host-only: `localhost:3847` and
- * `127.0.0.1:3847` hold separate sessions. That is correct — they are different
- * origins to the browser — and it costs one extra unlock if the user switches
- * spelling. Stick to the printed hostname.
+ * `127.0.0.1:3847` hold separate sessions, costing one extra unlock if the user
+ * switches spelling. Stick to the printed hostname.
+ *
+ * The REASON for that separation is the host, NOT the origin, and the difference
+ * matters. An earlier revision of this comment said "they are different origins
+ * to the browser", which reached the right conclusion by the wrong route and hid
+ * the consequence below. Cookie scope is (host, path) — RFC 6265 §8.5 states
+ * plainly that cookies do NOT provide isolation by PORT. So:
+ *   - `localhost` vs `127.0.0.1` — different HOSTS, separate cookie jars. ✓
+ *   - `127.0.0.1:3847` vs `127.0.0.1:8080` — SAME host, SAME cookie jar. Another
+ *     app listening on any other loopback port receives this cookie on a
+ *     top-level navigation the browser makes to it.
+ *
+ * That last line is a real weak-confidentiality property and it is written down
+ * rather than argued away. It is NOT closed by any cookie attribute: `__Host-`
+ * requires `Secure` (see above) and would not add port scoping anyway, because
+ * no cookie attribute can. What bounds it is that exploiting it takes TWO
+ * capabilities at once — binding a loopback port AND steering this user's
+ * browser to it — which is two adversaries, not one: the co-resident process in
+ * this threat model cannot drive the browser, and a hostile page cannot bind a
+ * port. It is also strictly better than what preceded the gate, when a
+ * co-resident process needed no lure at all and simply sent the right `Host` and
+ * `Origin` headers. Closing it properly means a second factor the cookie cannot
+ * carry — an opaque value in `sessionStorage`, which IS origin-scoped, echoed in
+ * a custom header and required alongside the cookie. Worth doing if this app
+ * ever shares a machine with untrusted local services; not done today.
  */
 export const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
