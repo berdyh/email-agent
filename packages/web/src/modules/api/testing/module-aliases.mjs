@@ -61,20 +61,40 @@ export function coreSubpathTarget(rest) {
   return explicit === undefined ? join(rest, "index.ts") : explicit;
 }
 
-export async function resolve(specifier, context, nextResolve) {
-  if (specifier.startsWith("@/")) {
-    const target = join(WEB_SRC, specifier.slice(2));
-    return nextResolve(pathToFileURL(target).href, context);
+/**
+ * THE ONE MAPPING. Both the `node --test` resolve hook below and the vitest
+ * plugin in `packages/web/vitest.config.ts` call this, so there is exactly one
+ * implementation of "what does this specifier mean in the web package" for a
+ * test runner to disagree with the app about.
+ *
+ * A SECOND COPY WOULD BE A SECOND CHANCE TO BE MORE PERMISSIVE, which is the
+ * defect this file's header describes: a resolver that accepts more than
+ * `packages/web/tsconfig.json` lets a test pass against a module graph webpack
+ * and tsc can never build. `vitest` is a Vite app whose default node resolution
+ * would happily follow the `@email-agent/core` workspace symlink to
+ * `core/dist` — a different, possibly stale set of files, resolved through the
+ * package `exports` map rather than through `paths`. So the plugin must claim
+ * EVERY `@email-agent/core` specifier and throw on one it cannot map, never
+ * fall through.
+ *
+ * Returns an absolute path with NO extension guessing for `@/…` (both hosts do
+ * their own: tsx via `nextResolve`, Vite via `this.resolve`), and a concrete
+ * `.ts` file for every core specifier. Returns `null` for anything that is not
+ * an alias. THROWS for a core subpath the tsconfig would also refuse.
+ */
+export function resolveWebSpecifier(specifier) {
+  if (specifier === "@/" || specifier.startsWith("@/")) {
+    return join(WEB_SRC, specifier.slice(2));
   }
   if (specifier === "@email-agent/core") {
-    return nextResolve(pathToFileURL(join(CORE_SRC, "index.ts")).href, context);
+    return join(CORE_SRC, "index.ts");
   }
   if (specifier.startsWith(CORE_PREFIX)) {
     const rest = specifier.slice(CORE_PREFIX.length);
     const target = join(CORE_SRC, coreSubpathTarget(rest));
     if (!existsSync(target)) {
       throw new Error(
-        `[module-aliases] "${specifier}" does not resolve. This hook maps ` +
+        `[module-aliases] "${specifier}" does not resolve. This maps ` +
           `@email-agent/core/<x> to core/src/<x>/index.ts, which is exactly what ` +
           `packages/web/tsconfig.json does — so a specifier that fails here would ` +
           `also be refused by tsc and by webpack. Import the barrel ` +
@@ -82,7 +102,13 @@ export async function resolve(specifier, context, nextResolve) {
           `the tsconfig paths and EXPLICIT_CORE_SUBPATHS in this file.`,
       );
     }
-    return nextResolve(pathToFileURL(target).href, context);
+    return target;
   }
-  return nextResolve(specifier, context);
+  return null;
+}
+
+export async function resolve(specifier, context, nextResolve) {
+  const target = resolveWebSpecifier(specifier);
+  if (target === null) return nextResolve(specifier, context);
+  return nextResolve(pathToFileURL(target).href, context);
 }
