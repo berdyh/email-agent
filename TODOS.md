@@ -262,11 +262,14 @@ stopped calling its formatter, or a route that stopped returning the field,
 fails a test.
 
 **What that closure does NOT include, stated because it is easy to lose:** React
-component rendering (there is no component testing library in this repo, so
-`ApprovalPanel` and `StrandedOperationsPanel` are still only type-checked), and
-a successful Gmail mutation (no linked account, so every apply path in the tests
-ends in a per-operation failure). The `app/actions/page.tsx` server component
-itself is also not rendered by a test — the route it calls is.
+component rendering — **narrowed, feature/todos-w11-bugfixes (2026-08-22):** a
+component testing library now exists and `ApprovalPanel`/`StrandedOperationsPanel`
+are rendered and mutation-checked by `approval-panel.test.tsx` /
+`stranded-operations-panel.test.tsx` (see the Testing section's harness entry
+for what they cover) — and a successful Gmail mutation (no linked account,
+unchanged, so every apply path in the tests ends in a per-operation failure).
+The `app/actions/page.tsx` server component itself is also not rendered by a
+test — the route it calls is.
 
 **4. The retention window has a surface. DONE** — see its own entry below.
 
@@ -644,10 +647,14 @@ the violations. The route answers **422 with
 `UnsafeActionSourceError.violations`** and the surface renders them, one per
 line, with "nothing was changed" and what to do instead.
 
-**Kept honest about coverage:** there is still no component testing library, so
-the dialog itself is verified by reading. The wording
-(`modules/api/snapshot-contract.ts`) and the request shaping
-(`hooks/use-action-snapshots.ts`) live outside it and are tested, and
+**Kept honest about coverage:** a component testing library exists now
+(**narrowed, feature/todos-w11-bugfixes, 2026-08-22**) and
+`snapshot-restore-dialog.test.tsx` renders the dialog and mutation-checks
+exactly the claim this entry makes — a source-guard refusal rendering as the
+rules it broke, one per line, computed via `describeSnapshotRestoreFailure`
+rather than pasted, with "nothing was changed" and what to do instead. The
+wording (`modules/api/snapshot-contract.ts`) and the request shaping
+(`hooks/use-action-snapshots.ts`) live outside it and are tested too, and
 `modules/api/snapshots.route.test.ts` drives both real handlers against a real
 temp `$HOME` with a pre-guard snapshot on disk.
 Found by: audit wave 2 (todos-w2-surfaces), 2026-08-07.
@@ -869,11 +876,23 @@ setup DELIBERATELY, noted here so nobody reads them as missed:
     fix instead.
 
 **WHAT IS STILL NOT COVERED, and must not be described as covered:**
-  - **React component rendering.** There is no component testing library in this
-    repo and this wave did not add one. `ApprovalPanel`, `StrandedOperationsPanel`,
-    the settings page and the action chat are never rendered by any test. What
-    was extracted out of them (`groupOperationsByBatch`) is tested; the
-    components themselves are not.
+  - **React component rendering — NARROWED, feature/todos-w11-bugfixes
+    (2026-08-22).** There is now a component testing library (vitest + React
+    Testing Library, `packages/web/src/testing/`), and `SnapshotRestoreDialog`,
+    `ApprovalPanel`, `StrandedOperationsPanel`, `UnlockScreen`, the settings page
+    and `ActionChatCard` are all rendered and mutation-checked. What remains
+    unrendered, and why: `UnlockExchange` — every branch that matters (its
+    success path, its own network/coded-failure branches) hits the same
+    `window.location.replace`/`.assign` wall jsdom refuses to let be redefined,
+    so only its no-token fallback into `UnlockScreen` is exercised, indirectly;
+    `Dialog`'s focus trap (jsdom has no layout, so `offsetParent` is always
+    null); the top-level `isError` card on each approval panel (a static early
+    return with nothing to branch on wrong); the once-per-mount verify
+    ref-guard's remount case; and the per-card action Run/Delete pending state
+    under concurrency. What was extracted out of the components
+    (`groupOperationsByBatch`, `describeUnlockScreenCopy`, and others) is
+    tested both as pure functions AND as the choice a rendered component makes
+    between them.
   - **Next itself.** The harness drives handlers, not the framework: routing,
     middleware, streaming responses and server-component rendering are outside
     it.
@@ -917,19 +936,44 @@ dirty-guard holds an unsaved edit across a focus refetch;
 for a bare POST and 400 for a bad body; and there is no horizontal document
 overflow at 375, 640, 800 or 1024 px.
 
-**Still NOT covered, exactly:**
-  - **The approval panel and the stranded panel were never seen POPULATED.**
-    There is no Gmail account on that machine and the queue was empty, so both
-    rendered their empty state. Every checkbox, the review dialog, the
-    destructive-change confirmation, the toasts and the stranded adjudication
-    buttons are unobserved in a browser.
-  - **No automated React test exists**, so nothing prevents a regression in any
-    of the above — the pass was manual and is not repeatable by CI.
+**Still NOT covered, exactly — and two different claims kept distinct on
+purpose: "rendered populated under jsdom by an automated test" is not the same
+claim as "observed populated in a real browser," and feature/todos-w11-bugfixes
+(2026-08-22) only did the first:**
+  - **The approval panel and the stranded panel have still never been seen
+    POPULATED IN A REAL BROWSER** — that gap is unchanged, there is still no
+    Gmail account on any machine this has run on. What DID change: both are now
+    rendered populated under jsdom by `approval-panel.test.tsx` and
+    `stranded-operations-panel.test.tsx`, mutation-checked — every checkbox, the
+    review dialog, the destructive-change confirmation (accepted and declined),
+    the apply/reject toasts, all six `VerificationResidualReason` values, and
+    the two stranded adjudication buttons are exercised there, just not by a
+    human looking at Chromium.
+  - **"No automated React test exists, so nothing prevents a regression" is
+    CLOSED, feature/todos-w11-bugfixes (2026-08-22).** A component test suite
+    now exists (`packages/web/src/testing/`, vitest + React Testing Library),
+    runs under the same `npm test` as everything else, and can fail the build.
+    It covers the components named above plus `SnapshotRestoreDialog`,
+    `UnlockScreen`, the settings page and `ActionChatCard`. This bullet is the
+    one this wave actually closes; the real-browser observation bullet above it
+    is a genuinely separate claim and stays open.
   - **The "Versions" snapshot-restore control** (added
-    feature/todos-w10-cleanup, 2026-08-07) has never been seen in a browser at
-    all. Its routes and its wording are tested; the dialog is not.
-  - Streaming chat generation and its abort-on-close behaviour, and the per-card
-    action Run/Delete pending state under concurrency, were not exercised.
+    feature/todos-w10-cleanup, 2026-08-07) is now rendered under jsdom
+    (`snapshot-restore-dialog.test.tsx`) — a source-guard refusal renders as the
+    specific rules it broke, one per line, computed rather than pinned — but has
+    STILL never been seen in an actual browser.
+  - **Streaming chat generation and its abort-on-close behaviour are now
+    covered, feature/todos-w11-bugfixes (2026-08-22)**
+    (`action-chat-card.test.tsx`): real SSE parsing over a genuine
+    `ReadableStream`/`Response`, the `done` event as the source of truth for the
+    final text, closing the chat mid-generation actually aborting the in-flight
+    request's `AbortSignal`, a second message aborting the first's, and the read
+    loop's `isCurrent()` guard against a superseded stream that keeps delivering
+    chunks anyway. **The per-card action Run/Delete pending state under
+    concurrency was NOT part of that work and remains uncovered** — it shares a
+    sentence with the streaming item above in the original note, but nobody has
+    covered it; keep it a separate bullet so it does not silently ride along on
+    the streaming item's completion.
 
 ### Extract remaining inline pure logic for unit tests
 **Priority:** CLOSED (2026-08-07)
@@ -1200,10 +1244,16 @@ reasoned from spec, not observed in Safari/Firefox); the real 24-hour session
 TTL (proven only against an injected clock — nothing here sits for a day);
 `/proc/<pid>/environ` visibility claims (asserted from kernel behavior, not
 tested — no second Unix user exists in this environment); React component
-rendering in isolation (there is still no component testing library — the
-unlock components are read, and exercised for real only by the one browser
-test above); and, unchanged by any of this, a successful Gmail mutation (no
-linked account anywhere in the suite).
+rendering in isolation — **narrowed, feature/todos-w11-bugfixes (2026-08-22):**
+`UnlockScreen` is now rendered and mutation-checked
+(`unlock-screen.test.tsx`), including `reason === "binding"` proven
+distinguishable from a plain lockout and not a dead end. `UnlockExchange` is
+still NOT rendered — every branch that matters (its success path, its own
+network/coded-failure branches) hits the `window.location.replace`/`.assign`
+wall jsdom refuses to let be redefined — so the one browser test above is
+still the only thing that exercises a REAL end-to-end flow (an actual server
+process, an actual browser, a real cookie); and, unchanged by any of this, a
+successful Gmail mutation (no linked account anywhere in the suite).
 Found by: repo owner, 2026-08-20 (decision to build). The cookie-port-confusion
 gap and the cross-process burn race were found by codex (gpt-5.x, high effort)
 adversarial review of this closed feature, 2026-08-22, and fixed the same
@@ -1493,8 +1543,15 @@ both lack credentials and every verify call there lands on the `credentials`
 residual first. A real `users.messages.get` response, the 404's three-way
 meaning, and Gmail's purge-from-Trash behaviour are documented, not observed.
 React component rendering (`StrandedOperationsPanel` firing the check once per
-mount, the toast, the per-row reason) remains untested — no component testing
-library exists in this repo.
+mount, the toast, the per-row reason) remained untested at the time this wave
+shipped — no component testing library existed in this repo yet. **Narrowed,
+feature/todos-w11-bugfixes (2026-08-22):** a component testing library now
+exists, and `StrandedOperationsPanel` is rendered and mutation-checked by
+`stranded-operations-panel.test.tsx`, including the once-per-mount verify fire,
+the two toast paths (automatic-verification vs on-your-word), and all six
+`VerificationResidualReason` values rendered distinguishably. What still is not
+covered: the once-per-mount ref-guard's REMOUNT case specifically, and a real
+Gmail read (unchanged — still no linked account on this machine).
 
 Found by: owner's decision of 2026-08-20 (build the check). LIMIT 4's
 read-before-write window was found and narrowed after a codex (gpt-5.x, medium
@@ -1625,9 +1682,11 @@ case.
 pressed mid-review, discarded every decision and exited 0 — see the entry below.
 That is what a surface test is for.
 
-**Still not covered:** React component rendering (no testing library in this
-repo) and a successful Gmail mutation (no linked account). Both are stated in
-the test files themselves and in the harness entry above.
+**Still not covered:** React component rendering (no testing library existed in
+this repo at the time — see the harness entry above for the narrowing that
+landed feature/todos-w11-bugfixes, 2026-08-22) and a successful Gmail mutation
+(no linked account, unchanged). Both are stated in the test files themselves
+and in the harness entry above.
 
 ### `email-agent fetch` could not store a single email
 **Completed:** feature/todos-w3-tests (2026-08-07)
