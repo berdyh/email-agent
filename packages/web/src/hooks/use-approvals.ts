@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import type {
   ApplyApprovalsResult,
   ApprovalsResponse,
@@ -49,7 +50,7 @@ export function useApprovals() {
   return useQuery<ApprovalsResponse>({
     queryKey: ["approvals"],
     queryFn: async (): Promise<ApprovalsResponse> => {
-      const res = await fetch("/api/approvals");
+      const res = await apiFetch("/api/approvals");
       if (!res.ok) throw await errorFromResponse(res, "Failed to fetch pending approvals");
       return res.json() as Promise<ApprovalsResponse>;
     },
@@ -68,7 +69,7 @@ export function useStrandedApprovals() {
   return useQuery<StrandedApprovalsResponse>({
     queryKey: ["approvals", "stranded"],
     queryFn: async (): Promise<StrandedApprovalsResponse> => {
-      const res = await fetch("/api/approvals/stranded");
+      const res = await apiFetch("/api/approvals/stranded");
       if (!res.ok) throw await errorFromResponse(res, "Failed to fetch stranded Gmail changes");
       return res.json() as Promise<StrandedApprovalsResponse>;
     },
@@ -84,7 +85,7 @@ export function useResolveStranded() {
     { ids: string[]; decision: StrandedDecision }
   >({
     mutationFn: async ({ ids, decision }) => {
-      const res = await fetch("/api/approvals/stranded", {
+      const res = await apiFetch("/api/approvals/stranded", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids, decision }),
@@ -118,7 +119,7 @@ export function useVerifyStranded() {
 
   return useMutation<VerifyStrandedResult, Error, void>({
     mutationFn: async () => {
-      const res = await fetch("/api/approvals/stranded/verify", { method: "POST" });
+      const res = await apiFetch("/api/approvals/stranded/verify", { method: "POST" });
       if (!res.ok) {
         throw await errorFromResponse(res, "Failed to check stranded Gmail changes");
       }
@@ -138,7 +139,7 @@ export function useApproveOperations() {
 
   return useMutation<ApplyApprovalsResult, Error, { ids: string[] }>({
     mutationFn: async ({ ids }) => {
-      const res = await fetch("/api/approvals/apply", {
+      const res = await apiFetch("/api/approvals/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
@@ -168,7 +169,7 @@ export function useRejectOperations() {
 
   return useMutation<RejectApprovalsResult, Error, { ids: string[] }>({
     mutationFn: async ({ ids }) => {
-      const res = await fetch("/api/approvals/reject", {
+      const res = await apiFetch("/api/approvals/reject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),

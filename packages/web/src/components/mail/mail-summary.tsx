@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,7 +29,7 @@ export function MailSummary({
 
   const mutation = useMutation<Summary, Error>({
     mutationFn: async (): Promise<Summary> => {
-      const res = await fetch("/api/analysis/summarize", {
+      const res = await apiFetch("/api/analysis/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ emailId, accountId }),

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 
 /** Shape of `GET /api/gmail/[id]` — the stored `EmailRecord` minus its vector. */
 export interface EmailDetail {
@@ -53,7 +54,7 @@ export function useEmailDetail(
     queryKey: emailDetailQueryKey(accountId, emailId),
     enabled: emailId !== null && accountId !== null,
     queryFn: async (): Promise<EmailDetail> => {
-      const res = await fetch(emailDetailPath(emailId, accountId));
+      const res = await apiFetch(emailDetailPath(emailId, accountId));
       if (!res.ok) throw new Error("Failed to fetch email");
       return res.json() as Promise<EmailDetail>;
     },

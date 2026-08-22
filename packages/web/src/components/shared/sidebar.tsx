@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Inbox, Zap, Network, Newspaper, Settings } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import { cn } from "@/lib/utils";
 import { useEmailStore } from "@/store/email-store";
 
@@ -25,7 +26,7 @@ export function Sidebar() {
       const url = accountEmail
         ? `/api/gmail/unread-count?accountId=${encodeURIComponent(accountEmail)}`
         : "/api/gmail/unread-count";
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) throw new Error("Failed to fetch unread count");
       return res.json() as Promise<{ count: number }>;
     },
@@ -39,7 +40,7 @@ export function Sidebar() {
     // invalidate this badge too.
     queryKey: ["approvals", "count"],
     queryFn: async () => {
-      const res = await fetch("/api/approvals/count");
+      const res = await apiFetch("/api/approvals/count");
       if (!res.ok) throw new Error("Failed to fetch pending approvals");
       return res.json() as Promise<{ pendingCount: number }>;
     },

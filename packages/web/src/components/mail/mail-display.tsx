@@ -1,6 +1,7 @@
 "use client";
 
 import { useEmailStore } from "@/store/email-store";
+import { apiFetch } from "@/lib/api-fetch";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +35,7 @@ export function MailDisplay() {
     boolean
   >({
     mutationFn: async (isUnread: boolean) => {
-      const res = await fetch(emailDetailPath(selectedEmailId, selectedEmailAccountId), {
+      const res = await apiFetch(emailDetailPath(selectedEmailId, selectedEmailAccountId), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isUnread }),

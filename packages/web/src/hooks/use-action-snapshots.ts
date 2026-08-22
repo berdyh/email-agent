@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import {
   describeSnapshotRestoreFailure,
   type SnapshotEntryDto,
@@ -35,7 +36,7 @@ export function useActionSnapshots(filename: string | undefined, enabled: boolea
     queryKey: actionSnapshotsKey(filename ?? ""),
     enabled: enabled && Boolean(filename),
     queryFn: async () => {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/actions/user/snapshots?filename=${encodeURIComponent(filename ?? "")}`,
       );
       if (!res.ok) throw new Error("Failed to load previous versions");
@@ -49,7 +50,7 @@ export function useRestoreSnapshot() {
 
   return useMutation({
     mutationFn: async (vars: { snapshotFilename: string; originalFilename: string }) => {
-      const res = await fetch("/api/actions/user/snapshots", {
+      const res = await apiFetch("/api/actions/user/snapshots", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(vars),

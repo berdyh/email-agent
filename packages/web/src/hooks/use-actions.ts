@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 
 export interface ActionItem {
   id: string;
@@ -66,7 +67,7 @@ export function useActions() {
   return useQuery<ActionItem[]>({
     queryKey: ["actions"],
     queryFn: async (): Promise<ActionItem[]> => {
-      const res = await fetch("/api/actions");
+      const res = await apiFetch("/api/actions");
       if (!res.ok) throw new Error("Failed to fetch actions");
       return res.json() as Promise<ActionItem[]>;
     },
@@ -78,7 +79,7 @@ export function useRunAction() {
 
   return useMutation<ActionResult, Error, { actionId: string; accountEmail?: string }>({
     mutationFn: async ({ actionId, accountEmail }): Promise<ActionResult> => {
-      const res = await fetch("/api/actions", {
+      const res = await apiFetch("/api/actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actionId, accountEmail }),
@@ -119,7 +120,7 @@ export function useDeleteAction() {
 
   return useMutation<{ success: boolean }, Error, { filename: string }>({
     mutationFn: async ({ filename }) => {
-      const res = await fetch("/api/actions/user", {
+      const res = await apiFetch("/api/actions/user", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename }),

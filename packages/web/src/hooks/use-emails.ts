@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 
 export interface EmailListItem {
   id: string;
@@ -28,7 +29,7 @@ export function useEmails(options?: {
       if (options?.accountId !== undefined) {
         params.set("accountId", options.accountId);
       }
-      const res = await fetch(`/api/gmail?${params}`);
+      const res = await apiFetch(`/api/gmail?${params}`);
       if (!res.ok) throw new Error("Failed to fetch emails");
       return res.json() as Promise<EmailListItem[]>;
     },

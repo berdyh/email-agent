@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import { useActionChatStore, type ChatMessage } from "@/store/action-chat-store";
 import { toast } from "sonner";
 
@@ -98,7 +99,7 @@ export function useSendMessage() {
 
         let currentCode: string | undefined;
         if (mode === "edit" && editingAction) {
-          const srcRes = await fetch(
+          const srcRes = await apiFetch(
             `/api/actions/user?filename=${encodeURIComponent(editingAction.filename)}`,
             { signal },
           );
@@ -111,7 +112,7 @@ export function useSendMessage() {
           currentCode = data.source;
         }
 
-        const res = await fetch("/api/actions/generate", {
+        const res = await apiFetch("/api/actions/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: newMessages, mode, currentCode }),
@@ -209,7 +210,7 @@ export function useSaveAction() {
 
   return useMutation<{ success: boolean; filename: string }, Error, SaveRequest>({
     mutationFn: async ({ filename, content }) => {
-      const res = await fetch("/api/actions/user", {
+      const res = await apiFetch("/api/actions/user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename, content }),

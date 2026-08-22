@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiFetch } from "@/lib/api-fetch";
 import { useEffect, useRef, useCallback } from "react";
 import { useSettings, useUpdateSettings } from "./use-settings";
 
@@ -33,7 +34,7 @@ export function useFetchEmails() {
   return useMutation<FetchResponse, Error, FetchParams>({
     mutationKey: ["fetchEmails"],
     mutationFn: async (params) => {
-      const res = await fetch("/api/gmail/fetch", {
+      const res = await apiFetch("/api/gmail/fetch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(params),
