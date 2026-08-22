@@ -21,9 +21,11 @@ import {
   describeRejectOutcome,
   describeResidualReason,
   describeStrandedAge,
+  describeStrandedPanelCopy,
   describeStrandedResolution,
   describeVerifyResolution,
   groupOperationsByBatch,
+  strandedPanelStatus,
 } from "@/modules/api/approvals-contract";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -234,26 +236,19 @@ export function StrandedOperationsPanel() {
     );
   }
 
-  const verifiedCount = verify.data?.checked;
-  const headline = verify.isSuccess
-    ? `${operations.length} Gmail ${operations.length === 1 ? "change" : "changes"} Email Agent checked and could not resolve automatically`
-    : `${operations.length} Gmail ${operations.length === 1 ? "change" : "changes"} stuck mid-apply`;
-  const description = verify.isSuccess ? (
-    <>
-      Email Agent checked Gmail’s current state for {verifiedCount ?? operations.length}{" "}
-      stuck {verifiedCount === 1 ? "change" : "changes"} and could not turn every one into an
-      answer — see the reason under each row below.{" "}
-      <span className="font-medium">Nothing below will be applied or undone for you.</span>
-    </>
-  ) : (
-    <>
-      A run was interrupted after these changes were sent to Gmail, or just before.
-      Email Agent is checking Gmail’s current state for these now
-      {verify.isPending ? "…" : "."} Anything left after that check will need you to{" "}
-      <span className="font-medium">open Gmail and look</span>. Nothing below will be
-      applied or undone for you.
-      {data ? ` Listed after ${data.thresholdMinutes} minutes with no result.` : ""}
-    </>
+  // `explainedCount` — not `operations.length` — is what the headline and
+  // description size themselves off. See `describeStrandedPanelCopy`'s doc
+  // comment for why a listed row can be un-explained by the check that just
+  // ran without that being a bug.
+  const explainedCount = operations.filter((op) => residualById.has(op.id)).length;
+  const { headline, description } = describeStrandedPanelCopy(
+    strandedPanelStatus(verify),
+    {
+      totalCount: operations.length,
+      explainedCount,
+      checked: verify.data?.checked,
+      thresholdMinutes: data?.thresholdMinutes,
+    },
   );
 
   return (

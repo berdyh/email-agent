@@ -6,8 +6,10 @@ import {
   describeRejectOutcome,
   describeResidualReason,
   describeStrandedAge,
+  describeStrandedPanelCopy,
   describeStrandedResolution,
   describeVerifyResolution,
+  strandedPanelStatus,
   summarizeApplyResult,
   unclaimedApplyMessage,
   type VerifyStrandedResult,
@@ -272,5 +274,128 @@ describe("describeVerifyResolution", () => {
     )!;
     assert.equal(tone, "warning");
     assert.ok(message.includes("2 still need you"));
+  });
+});
+
+describe("strandedPanelStatus", () => {
+  it("is 'checked' only on isSuccess, whatever else is also true", () => {
+    assert.equal(
+      strandedPanelStatus({ isSuccess: true, isPending: false, isError: false }),
+      "checked",
+    );
+  });
+
+  it("is 'check-failed' when the POST itself errored — never folded into 'checking'", () => {
+    // THE BUG: the old code branched on `verify.isSuccess ? ... : ...`, so an
+    // errored mutation (isSuccess: false, isError: true) fell into the same
+    // branch as "still checking" and kept claiming a check was in progress
+    // that had already failed and, because of the panel's once-per-mount
+    // guard, would never run again this session.
+    assert.equal(
+      strandedPanelStatus({ isSuccess: false, isPending: false, isError: true }),
+      "check-failed",
+    );
+  });
+
+  it("is 'checking' for both idle and in-flight — neither success nor error yet", () => {
+    assert.equal(
+      strandedPanelStatus({ isSuccess: false, isPending: true, isError: false }),
+      "checking",
+    );
+    assert.equal(
+      strandedPanelStatus({ isSuccess: false, isPending: false, isError: false }),
+      "checking",
+    );
+  });
+});
+
+describe("describeStrandedPanelCopy", () => {
+  it("checking: present tense, and never claims a check failed", () => {
+    const { headline, description } = describeStrandedPanelCopy("checking", {
+      totalCount: 2,
+      explainedCount: 0,
+      thresholdMinutes: 15,
+    });
+    assert.match(headline, /^2 Gmail changes stuck mid-apply$/);
+    assert.match(description, /is checking Gmail.s current state/);
+    assert.match(description, /Listed after 15 minutes/);
+    assert.equal(description.includes("failed"), false, description);
+  });
+
+  it("check-failed: never claims present-tense 'is checking... now' — the honesty defect finding 4 names", () => {
+    const { headline, description } = describeStrandedPanelCopy("check-failed", {
+      totalCount: 1,
+      explainedCount: 0,
+    });
+    assert.match(headline, /^1 Gmail change stuck mid-apply$/);
+    assert.equal(
+      description.includes("is checking Gmail’s current state for it now"),
+      false,
+      description,
+    );
+    assert.match(description, /the check itself failed/);
+    assert.match(description, /reload to try again/i);
+  });
+
+  it("checked, fully explained: headline and lead both size off explainedCount", () => {
+    const { headline, description } = describeStrandedPanelCopy("checked", {
+      totalCount: 3,
+      explainedCount: 3,
+      checked: 3,
+    });
+    assert.match(headline, /^3 Gmail changes Email Agent checked/);
+    assert.match(description, /checked Gmail’s current state for 3 stuck changes/);
+    assert.equal(description.includes("more"), false, description);
+  });
+
+  it("checked, with rows the check did not explain: headline sizes off explainedCount, not totalCount — finding 5", () => {
+    // The exact scenario finding 5 names: a fresh crash appears in the live
+    // list after the verify pass ran, or a row lost its write to the same
+    // race `strandedRowsRemaining` catches on the CLI side. Either way the
+    // headline must not claim Email Agent checked all 3 of these.
+    const { headline, description } = describeStrandedPanelCopy("checked", {
+      totalCount: 3,
+      explainedCount: 2,
+      checked: 2,
+    });
+    assert.match(headline, /^2 Gmail changes Email Agent checked/);
+    assert.equal(headline.includes("3 Gmail"), false, headline);
+    assert.match(description, /1 more is listed below without an explanation/);
+  });
+
+  it("checked, with NOTHING explained and the pass made zero Gmail calls: does not claim a read happened", () => {
+    // `checked: 0` from a successful verify pass means the cheap DB gate
+    // found nothing stale — zero Gmail calls were made. Rows shown here
+    // arrived after that. Claiming "Email Agent checked Gmail just now" would
+    // be exactly the defect this function exists to close.
+    const { headline, description } = describeStrandedPanelCopy("checked", {
+      totalCount: 1,
+      explainedCount: 0,
+      checked: 0,
+    });
+    assert.equal(headline.includes("checked"), false, headline);
+    assert.match(headline, /^1 Gmail change stuck mid-apply$/);
+    assert.equal(description.includes("checked Gmail just now"), false, description);
+    assert.match(description, /made no Gmail calls/);
+  });
+
+  it("checked, with nothing explained but the pass DID call Gmail: honest about the check having run, just not over these rows", () => {
+    const { description } = describeStrandedPanelCopy("checked", {
+      totalCount: 1,
+      explainedCount: 0,
+      checked: 4,
+    });
+    assert.match(description, /checked Gmail just now, but that check did not cover/);
+  });
+
+  it("every branch carries the 'nothing applied for you' promise", () => {
+    for (const status of ["checking", "checked", "check-failed"] as const) {
+      const { description } = describeStrandedPanelCopy(status, {
+        totalCount: 1,
+        explainedCount: status === "checked" ? 1 : 0,
+        checked: 1,
+      });
+      assert.match(description, /Nothing below will be applied or undone for you\./);
+    }
   });
 });

@@ -252,6 +252,136 @@ export function describeVerifyResolution(result: VerifyStrandedResult): {
   };
 }
 
+/**
+ * The stranded panel's own status, collapsed from the three booleans
+ * TanStack Query's `useMutation` hands back for the one-shot verify call.
+ *
+ * THREE STATES, not two. The panel used to fold a failed POST into the same
+ * branch as "still checking" — both are simply "not `isSuccess`" — so a
+ * request that had already errored, and (because of the panel's
+ * once-per-mount `verifiedOnce` ref) would never be retried this session,
+ * kept rendering present-tense copy claiming the check was still running. The
+ * panel's per-row fallback text was always honest about a failed check being
+ * possible; the header must say the same thing rather than contradict it.
+ */
+export type StrandedPanelStatus = "checking" | "checked" | "check-failed";
+
+export function strandedPanelStatus(verify: {
+  isSuccess: boolean;
+  isPending: boolean;
+  isError: boolean;
+}): StrandedPanelStatus {
+  if (verify.isSuccess) return "checked";
+  if (verify.isError) return "check-failed";
+  return "checking";
+}
+
+export interface StrandedPanelCopy {
+  headline: string;
+  description: string;
+}
+
+const NOTHING_APPLIED_SENTENCE =
+  "Nothing below will be applied or undone for you.";
+
+/**
+ * Headline + description for the stranded-operations panel header.
+ *
+ * `explainedCount` is deliberately NOT `totalCount`. `totalCount` is the live
+ * re-read (`GET /api/approvals/stranded`, refetched in the background);
+ * `explainedCount` is how many of those rows carry a residual entry from the
+ * verify pass that just ran (`residualById.size`). A row can be listed
+ * without ever having been explained by that pass — it can have gone stuck
+ * mid-apply AFTER the pass's own read (a fresh crash while this page sits
+ * open), or a row can be decided by the read half of the pass and then lose
+ * its WRITE to a race (see core's `strandedRowsRemaining`), leaving it
+ * neither a residual nor actually resolved. Sizing the "checked" headline off
+ * `totalCount` would assert Email Agent checked every row shown, which is
+ * false for that one; the per-row fallback already tells the honest story,
+ * and the headline must not contradict it.
+ *
+ * `checked` (from `verify.data?.checked`, only meaningful once `status` is
+ * `"checked"`) distinguishes the `explainedCount === 0` case further: if the
+ * pass itself found nothing stale (`checked === 0`, the cheap DB gate — zero
+ * Gmail calls were made), the copy must not claim Gmail was read just now.
+ */
+export function describeStrandedPanelCopy(
+  status: StrandedPanelStatus,
+  opts: {
+    totalCount: number;
+    explainedCount: number;
+    checked?: number;
+    thresholdMinutes?: number;
+  },
+): StrandedPanelCopy {
+  const { totalCount, explainedCount, thresholdMinutes } = opts;
+  const totalOne = totalCount === 1;
+  const extraCount = Math.max(0, totalCount - explainedCount);
+  const thresholdNote =
+    thresholdMinutes !== undefined
+      ? ` Listed after ${thresholdMinutes} minutes with no result.`
+      : "";
+
+  if (status === "checked" && explainedCount > 0) {
+    const one = explainedCount === 1;
+    const extraNote =
+      extraCount > 0
+        ? ` ${extraCount} more ${extraCount === 1 ? "is" : "are"} listed below without an ` +
+          `explanation from that check — ${extraCount === 1 ? "it" : "they"} may have gone ` +
+          `stuck since, or ${extraCount === 1 ? "its" : "their"} answer may not have been ` +
+          `written yet.`
+        : "";
+    return {
+      headline: `${explainedCount} Gmail ${one ? "change" : "changes"} Email Agent checked and could not resolve automatically`,
+      description:
+        `Email Agent checked Gmail’s current state for ${explainedCount} stuck ${one ? "change" : "changes"} ` +
+        `and could not turn every one into an answer — see the reason under each row below.` +
+        `${extraNote} ${NOTHING_APPLIED_SENTENCE}`,
+    };
+  }
+
+  const headline = `${totalCount} Gmail ${totalOne ? "change" : "changes"} stuck mid-apply`;
+
+  if (status === "checked") {
+    // explainedCount === 0: the pass ran and explained NONE of what is
+    // currently listed. `checked` tells us whether it made a Gmail call at
+    // all — if it found nothing stale (the cheap gate), claiming "Email
+    // Agent checked Gmail just now" for these rows would be the exact
+    // honesty defect this function exists to close.
+    const checkedAnything = (opts.checked ?? 0) > 0;
+    const openedWith = checkedAnything
+      ? `Email Agent checked Gmail just now, but that check did not cover ${totalOne ? "this one" : "any of these"}`
+      : `Email Agent’s last check found nothing stale, so it made no Gmail calls — ${totalOne ? "this must" : "these must"} have shown up since`;
+    return {
+      headline,
+      description:
+        `${openedWith} — ${totalOne ? "it" : "they"} may have gone stuck since the check ran, ` +
+        `or ${totalOne ? "its" : "their"} answer may not have been written yet. You will need ` +
+        `to open Gmail and look. ${NOTHING_APPLIED_SENTENCE}${thresholdNote}`,
+    };
+  }
+
+  if (status === "check-failed") {
+    return {
+      headline,
+      description:
+        `A run was interrupted after ${totalOne ? "this change was" : "these changes were"} sent to Gmail, or just before. ` +
+        `Email Agent tried to check Gmail’s current state for ${totalOne ? "it" : "them"}, but the check itself ` +
+        `failed, so nothing here was resolved automatically — reload to try again. Until then you will need to ` +
+        `open Gmail and look. ${NOTHING_APPLIED_SENTENCE}${thresholdNote}`,
+    };
+  }
+
+  // "checking"
+  return {
+    headline,
+    description:
+      `A run was interrupted after ${totalOne ? "this change was" : "these changes were"} sent to Gmail, or just before. ` +
+      `Email Agent is checking Gmail’s current state for ${totalOne ? "it" : "them"} now… Anything left after that ` +
+      `check will need you to open Gmail and look. ${NOTHING_APPLIED_SENTENCE}${thresholdNote}`,
+  };
+}
+
 export interface ResolveStrandedResult {
   decision: StrandedDecision;
   /** How many ids the client submitted. */
