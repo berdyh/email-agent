@@ -548,15 +548,23 @@
     it.</p>
 
     <div class="refuses">
-      <span class="tag">The database is the exception, and the project&rsquo;s own notes overstate this</span>
-      <p>&ldquo;Everything under <code>~/.email-agent/</code>&rdquo; is how the instruction file puts
-      it, and that is not quite true. Only those three files go through the hardened writer. The mail
-      itself is written by LanceDB, which is handed a directory created with no mode at all &mdash;
-      measured here, on a throwaway home: <code>data/lancedb</code> and every table inside it land
-      <code>0755</code>, and each manifest lands <code>0644</code>. What protects your mail is the
-      <code>0700</code> on the directory <em>above</em> it, so another local user cannot traverse in;
-      it is not a mode on the mail. Those are different guarantees, and only one of them is
-      written down.</p>
+      <span class="tag">The database was the exception, and this page&rsquo;s own fact-check is what
+      found it</span>
+      <p>Fact-checking this page against the instruction file&rsquo;s old &ldquo;everything under
+      <code>~/.email-agent/</code> is <code>0600</code> inside <code>0700</code>&rdquo; turned up a
+      real gap, not a documentation nit: the mail itself is written by LanceDB into a directory that
+      was created with no mode at all, so <code>data/lancedb</code> landed <code>0755</code> &mdash;
+      and on a fresh install, where nothing had yet written settings, the app&rsquo;s own root
+      directory landed <code>0755</code> too, leaving no shield anywhere in the chain. That is fixed
+      now: every directory this app creates, root to leaf, is forced back to <code>0700</code> on
+      every write, which also repairs a tree an older version left loose. What is <em>still</em>
+      true, and always will be, is narrower: LanceDB creates the <code>*.lance</code> table
+      directories and their manifests itself, at its own modes &mdash; <code>0755</code> and
+      <code>0644</code> &mdash; and nothing here touches those. What protects the mail inside them is
+      the <code>0700</code> on every directory <em>above</em>, not a mode on the mail files
+      themselves; POSIX requires execute permission on each directory in a path to traverse it, so an
+      unreadable ancestor makes the readable leaf unreachable. Those are different guarantees, and
+      the instruction file now says so instead of overstating the first one.</p>
     </div>
 
     <p>The code is a <strong>monorepo</strong> of three packages, and the split matters because it
@@ -621,8 +629,8 @@
         <rect x="448" y="100" width="112" height="110" rx="3" class="f-surface st-rule" stroke-width="1.2"/>
         <text x="504" y="132" class="lbl-b" text-anchor="middle">~/.email-agent</text>
         <text x="504" y="152" class="lbl-sm s-muted" text-anchor="middle">tokens · 0600</text>
-        <text x="504" y="169" class="lbl-sm s-muted" text-anchor="middle">database · 0755</text>
-        <text x="504" y="186" class="lbl-sm s-muted" text-anchor="middle">dir 0700</text>
+        <text x="504" y="169" class="lbl-sm s-muted" text-anchor="middle">.lance tables · 0755</text>
+        <text x="504" y="186" class="lbl-sm s-muted" text-anchor="middle">every dir · 0700</text>
 
         <line x1="198" y1="105" x2="250" y2="130" class="st-ink" stroke-width="1.3" marker-end="url(#a2)"/>
         <line x1="198" y1="182" x2="250" y2="170" class="st-ink" stroke-width="1.3" marker-end="url(#a2)"/>
@@ -1083,7 +1091,7 @@
     and the CLI blocked on an interactive browser consent screen until a 120-second timeout &mdash;
     one dead run per attempt, reported as a timeout. The question a subprocess executor has to answer
     is <em>can this run a prompt?</em>, so it now also requires credential material to exist and
-    spawns with browser-opening disabled, failing in about four seconds with a message that names the
+    spawns with browser-opening disabled, failing in about two seconds with a message that names the
     fix. Neither check proves the credentials <em>work</em>. Only a real call can, and no successful
     gemini run has ever been observed from this project.</p>
 
@@ -2380,26 +2388,41 @@
     <div class="col" style="max-width:none">
       <p style="max-width:68ch">Five disagreements were found by checking prose against source
       &mdash; three while writing this page, two more when it was afterwards fact-checked by someone
-      who had not written it. Two were fixed in the wave that followed; three are still open, which
-      is the more useful ending. Note the shape of the last two: the page had faithfully reproduced
-      the instruction file, and the instruction file was wrong. Copying an authoritative document
-      accurately is not the same as checking it.</p>
+      who had not written it. All five are now fixed. Note the shape of two of the last three: the
+      file-modes and gemini-timing items had been faithfully reproduced from the instruction file,
+      and the instruction file was wrong. Copying an authoritative document accurately is not the
+      same as checking it &mdash; the third, credential routing, this page had already gotten right
+      by checking source directly; only the instruction file was self-contradicting.</p>
       <ul class="plain" style="max-width:none">
-        <li><strong>Still open &mdash; and it was on this page until the fact-check.</strong> The
-        instruction file says every file under <code>~/.email-agent/</code> is written
-        <code>0600</code> inside <code>0700</code>. Measured: only the three credential files are.
-        The mail database is created with no mode and lands <code>0755</code>/<code>0644</code>,
-        protected by the directory above it rather than by its own permissions. <a href="#machine">&sect;&thinsp;02</a>
-        now says so.</li>
-        <li><strong>Still open, and small.</strong> The instruction file says an unauthenticated
-        gemini run fails in about four seconds; the executor&rsquo;s own comment says two. Both are
-        described as measured. This page quotes the four.</li>
-        <li><strong>Still open.</strong> The main instruction file describes credential selection as a
+        <li><strong>Fixed &mdash; and it was on this page until the fact-check found it.</strong> The
+        instruction file said every file under <code>~/.email-agent/</code> was written
+        <code>0600</code> inside <code>0700</code>. Measured, at the time: only the three credential
+        files were. The mail database was created with no mode and landed
+        <code>0755</code>/<code>0644</code>, and on a fresh install even the app&rsquo;s own root
+        directory could land <code>0755</code>, leaving nothing in the chain shielded. Finding this
+        by fact-checking the prose is what triggered fixing the code, not just the sentence: every
+        directory this app creates is now forced back to <code>0700</code> on every write, root to
+        leaf, self-healing a tree an older version left loose. The <code>*.lance</code> table
+        directories LanceDB creates itself stay <code>0755</code>/<code>0644</code> &mdash; that part
+        of the old claim was never going to become false &mdash; and both this page
+        (<a href="#machine">&sect;&thinsp;02</a>) and the instruction file now say so instead of
+        overstating the first part.</li>
+        <li><strong>Fixed &mdash; and it was on this page too, until now.</strong> The instruction
+        file said an unauthenticated gemini run fails in about four seconds; the executor&rsquo;s own
+        comment said two, dated and specific (exit code 41, 2026-08-07). This page had faithfully
+        quoted the four, in &sect;&thinsp;05&rsquo;s account of the same check. Re-measured
+        2026-08-22 against the installed CLI directly: 1.17s, same exit code &mdash;
+        close enough to corroborate &ldquo;two&rdquo; and rule out &ldquo;four.&rdquo; Both the
+        instruction file and this page now say two, and both cite the measurement.</li>
+        <li><strong>Fixed.</strong> The main instruction file described credential selection as a
         three-step fallback chain &mdash; explicit account, then default account, then ambient
-        credentials. Two hundred lines later the same file states the refusal correctly. Both sentences
-        are in the file, and a reader meets the wrong one first. The nuance is real: the first line
-        describes account <em>selection</em>, the second describes <em>failure</em> behaviour. That
-        does not help the reader who stops after the first.</li>
+        credentials. That is not what the code does: an explicit account or a configured default
+        account both resolve through the same function, which throws on missing credentials rather
+        than falling back to anything, and ambient (gcloud ADC) credentials are used only for one
+        explicit sentinel value and one legacy no-accounts-configured case &mdash; never as a
+        catch-all after the other two fail. Two hundred lines later the same file already stated the
+        refusal correctly; the summary line now matches it instead of asserting a fallback chain that
+        does not exist.</li>
         <li><strong>Fixed.</strong> A module card said a fragile text-scanning way of reading an
         action&rsquo;s id had been eliminated. It had been, in core; the web package still did it. The
         regular expression is now deleted and both callers share the one parser.</li>
