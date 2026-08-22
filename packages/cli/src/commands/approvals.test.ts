@@ -12,11 +12,13 @@ import {
   commitReviewDecisions,
   describeAbortedReview,
   describeApplyOutcome,
+  describeNothingLeftAfterRecheck,
   describeOperation,
   describeRejectOutcome,
   describeReviewCommit,
   describeStrandedAge,
   describeStrandedHeader,
+  describeStrandedListHeader,
   describeStrandedNotifyLines,
   describeStrandedReason,
   describeStrandedResolution,
@@ -664,6 +666,66 @@ describe("describeStrandedNotifyLines (`fetch`/`serve`'s notify line)", () => {
     );
     assert.ok(residual.some((line) => line.includes("1 still needs you to look")));
     assert.ok(residual.some((line) => line.includes("approvals stranded --review")));
+  });
+
+  it("points at --review even when a write lost its race and unresolved stayed empty", () => {
+    // THE ACCOUNTING GAP `strandedRowsRemaining` exists for: a row an
+    // in-flight apply re-claims between the read and the write is never
+    // pushed to `unresolved` (the read succeeded and produced a verdict), but
+    // the write can still lose that race. Before this fix, gating on
+    // `unresolved.length` alone printed "None could be resolved
+    // automatically" with no pointer to `--review`, for a row still sitting
+    // in `applying`.
+    const gap = describeStrandedNotifyLines(
+      result({ checked: 1, appliedRecorded: 0, requeuedRecorded: 0, unresolved: [] }),
+    );
+    assert.ok(gap.some((line) => line.includes("1 still needs you to look")));
+    assert.ok(gap.some((line) => line.includes("approvals stranded --review")));
+  });
+});
+
+describe("describeStrandedListHeader (`approvals stranded`'s list headline)", () => {
+  it("sizes the plain headline off the explained count when there is no gap", () => {
+    const [headline, ...rest] = describeStrandedListHeader(3, 0);
+    assert.match(headline ?? "", /^3 Gmail changes Email Agent checked and could not resolve automatically:$/);
+    assert.deepEqual(rest, []);
+  });
+
+  it("reads correctly for a single explained change", () => {
+    const [headline] = describeStrandedListHeader(1, 0);
+    assert.match(headline ?? "", /^1 Gmail change Email Agent checked/);
+  });
+
+  it("never sizes the headline off the raw list count when some rows were not explained", () => {
+    // A row can be listed without ever having been explained by the pass that
+    // just ran — it went stuck after the check's own read, or it is exactly
+    // the write-lost-its-race gap `strandedRowsRemaining` catches. Sizing the
+    // headline off the total would claim Email Agent checked every row shown,
+    // which is false for the unexplained ones.
+    const lines = describeStrandedListHeader(2, 1);
+    assert.match(lines[0] ?? "", /^2 Gmail changes Email Agent checked/);
+    assert.equal(
+      lines.some((line) => /^3 Gmail/.test(line)),
+      false,
+    );
+    assert.match(lines[1] ?? "", /1 more is listed below without an explanation/);
+  });
+
+  it("does not claim any check happened when nothing was explained", () => {
+    // explainedCount === 0 must not read as "0 Gmail changes Email Agent
+    // checked and could not resolve automatically" — that headline still
+    // asserts a check ran over these rows. Nothing here was explained by it.
+    const [headline] = describeStrandedListHeader(0, 2);
+    assert.equal(headline?.includes("checked"), false, headline);
+    assert.match(headline ?? "", /2 Gmail changes are still stuck mid-apply, without an explanation/);
+  });
+});
+
+describe("describeNothingLeftAfterRecheck", () => {
+  it("says the count claimed something was left, and points back at the command", () => {
+    const message = describeNothingLeftAfterRecheck();
+    assert.match(message, /count said/i);
+    assert.match(message, /approvals stranded/);
   });
 });
 

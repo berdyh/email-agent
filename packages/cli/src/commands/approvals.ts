@@ -16,6 +16,7 @@ import {
   prunePendingOperations,
   resolveRetentionCutoff,
   STALE_APPLYING_THRESHOLD_MS,
+  strandedRowsRemaining,
   verifyStrandedApplyingOperations,
 } from "@email-agent/core";
 import type {
@@ -626,6 +627,16 @@ function strandedSkipReasons(one: boolean): string {
  * reached, never `checked` or the id-array lengths — core mutation-tested this
  * distinction (a shortfall between the read and the write is real information,
  * not a rounding error to hide).
+ *
+ * The `--review` pointer is gated on `strandedRowsRemaining`, NOT
+ * `result.unresolved.length`. A row an in-flight apply re-claims between the
+ * read and `adjudicate`'s write is never pushed to `unresolved` — the read
+ * succeeded and produced a verdict — but its write can still lose that race,
+ * leaving it exactly as stuck as before this pass ran. Gating on
+ * `unresolved.length` alone told a user "None could be resolved
+ * automatically" with no pointer to `--review`, for a row still sitting in
+ * `applying` and unlisted anywhere else. See `strandedRowsRemaining`'s own
+ * doc comment for the full accounting.
  */
 export function describeStrandedNotifyLines(
   result: StrandedVerificationResult,
@@ -650,9 +661,10 @@ export function describeStrandedNotifyLines(
         : "",
   ].filter((line) => line !== "");
 
-  if (result.unresolved.length > 0) {
+  const remaining = strandedRowsRemaining(result);
+  if (remaining > 0) {
     lines.push(
-      `  ${result.unresolved.length} still ${result.unresolved.length === 1 ? "needs" : "need"} you to look — ` +
+      `  ${remaining} still ${remaining === 1 ? "needs" : "need"} you to look — ` +
         "run `email-agent approvals stranded --review`.",
     );
   }
@@ -692,10 +704,76 @@ export function describeStrandedResolution(
 }
 
 /**
+ * Wording for the honest fallback when `strandedRowsRemaining` said something
+ * was still left, but the fresh re-read taken to display it finds nothing.
+ *
+ * `strandedRowsRemaining` and this command's own re-read of the queue are two
+ * separate reads, moments apart, of a table other surfaces write to. A row
+ * can leave `applying` in that gap too — the write that raced the verify
+ * pass's own `adjudicate` call finally landing, another surface (the web UI,
+ * another shell) answering it, or a fresh apply re-claiming and then
+ * finishing it. None of that is a defect in this command; it means there is
+ * nothing left to show right now.
+ */
+export function describeNothingLeftAfterRecheck(): string {
+  return (
+    "Email Agent's count said a change was still stuck mid-apply, but a fresh " +
+    "look just now found nothing. It likely resolved in the last moment — a " +
+    "write landing, another surface answering it, or a fresh apply picking it " +
+    "up. Run `email-agent approvals stranded` again if you want to be sure."
+  );
+}
+
+/**
+ * The headline above the stranded list, and the note it needs when it is not
+ * telling the whole truth.
+ *
+ * `explainedCount` is deliberately NOT the number of rows being listed. It is
+ * how many of them carry a residual explanation from the verify pass that
+ * JUST ran (`reasonById`, built from `verified.unresolved`) — a row can be
+ * re-read and listed here without ever having been explained by that pass: it
+ * can have gone stuck AFTER the pass's own read (a fresh crash while this
+ * command was running), or it can be exactly the gap `strandedRowsRemaining`
+ * exists to catch — decided by the read half of the pass but never written,
+ * because an in-flight apply re-claimed it in between. Sizing the headline
+ * off the raw re-read count would assert "Email Agent checked every one of
+ * these", which is false for that row; `printStrandedList`'s own per-row
+ * fallback already tells the honest story, and the headline must not
+ * contradict it.
+ */
+export function describeStrandedListHeader(
+  explainedCount: number,
+  extraCount: number,
+): string[] {
+  if (explainedCount === 0) {
+    const one = extraCount === 1;
+    return [
+      `${extraCount} Gmail ${one ? "change is" : "changes are"} still stuck mid-apply, without an ` +
+        `explanation from the check that just ran — ${one ? "it" : "they"} may have gone stuck ` +
+        `since, or ${one ? "its" : "their"} answer may not have been written yet.`,
+    ];
+  }
+
+  const one = explainedCount === 1;
+  const lines = [
+    `${explainedCount} Gmail ${one ? "change" : "changes"} Email Agent checked and could not resolve automatically:`,
+  ];
+  if (extraCount > 0) {
+    const extraOne = extraCount === 1;
+    lines.push(
+      `${extraCount} more ${extraOne ? "is" : "are"} listed below without an explanation from ` +
+        `that check — ${extraOne ? "it" : "they"} may have gone stuck since, or ` +
+        `${extraOne ? "its" : "their"} answer may not have been written yet.`,
+    );
+  }
+  return lines;
+}
+
+/**
  * `reasonById` is keyed by queue row id, from the verify pass that ran
- * immediately before this — every row here SHOULD have an entry, since verify
- * resolves everything else. A missing entry (a fresh crash racing the check
- * itself) prints the honest fallback rather than inventing a reason.
+ * immediately before this — a row can be missing an entry for reasons that
+ * are not a bug (see `describeStrandedListHeader`), and this prints the
+ * honest fallback rather than inventing a reason.
  */
 function printStrandedList(
   displays: OperationDisplay[],
@@ -973,28 +1051,47 @@ export function registerApprovals(program: Command) {
         console.log(chalk.dim(line));
       }
 
-      if (verified.unresolved.length === 0) {
+      // GATED ON THE FULL ACCOUNTING, NOT ON `verified.unresolved.length`
+      // ALONE. A row an in-flight apply re-claims between the verify pass's
+      // read and its `adjudicate` write is never pushed to `unresolved` — the
+      // read succeeded and produced a verdict — but the write can still lose
+      // that race, leaving the row exactly as stuck as before this pass ran.
+      // `strandedRowsRemaining` is zero only when every decided row's write
+      // actually landed; see its doc comment for the accounting this closes.
+      if (strandedRowsRemaining(verified) === 0) {
         if (verified.checked === 0) {
           console.log(chalk.dim("No Gmail changes are stuck mid-apply."));
         }
-        // checked > 0 && unresolved === 0: describeStrandedNotifyLines already
-        // said what happened — nothing further to print, and nothing left
-        // stuck, so this run succeeds.
+        // checked > 0 && nothing remaining: describeStrandedNotifyLines
+        // already said what happened — nothing further to print, and nothing
+        // left stuck, so this run succeeds.
         return;
       }
 
-      // Only the RESIDUAL — what the check above could not resolve — ever
-      // reaches a human. Re-reading rather than trusting `verified.unresolved`
-      // for the row DATA (subject, batch, labels): that array carries only
-      // enough to explain WHY, not enough to display or adjudicate a row.
+      // Re-read rather than trust `verified.unresolved`/the id arrays for row
+      // DATA (subject, batch, labels) — those carry only enough to explain
+      // WHY a row is residual, not enough to display or adjudicate one. This
+      // is also a SEPARATE read from the accounting above, moments apart, of
+      // a table other surfaces write to — a row `strandedRowsRemaining` still
+      // counted can have resolved in that gap too.
       const ops = await getStaleApplyingOperations();
       const reasonById = new Map(verified.unresolved.map((row) => [row.id, row]));
 
-      console.log(
-        chalk.red(
-          `\n${ops.length} Gmail ${ops.length === 1 ? "change" : "changes"} Email Agent checked and could not resolve automatically:`,
-        ),
-      );
+      if (ops.length === 0) {
+        console.log(chalk.dim(describeNothingLeftAfterRecheck()));
+        return;
+      }
+
+      // Sized off how many of `ops` the verify pass actually explained, never
+      // off `ops.length` — see `describeStrandedListHeader`.
+      const explainedCount = ops.filter((op) => reasonById.has(op.id)).length;
+      const extraCount = ops.length - explainedCount;
+      for (const [index, line] of describeStrandedListHeader(
+        explainedCount,
+        extraCount,
+      ).entries()) {
+        console.log(index === 0 ? chalk.red(`\n${line}`) : chalk.yellow(line));
+      }
       console.log("");
 
       const displays = await loadOperationDisplays(ops);
